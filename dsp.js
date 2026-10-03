@@ -1,0 +1,908 @@
+/* VARE — Rechenkern v3
+   Reines JavaScript, keine Abhängigkeiten. Läuft im Browser (window.VAREDSP) und unter Node (module.exports).
+   Alle Frequenzen in Hz, alle Pegel in dB. Jede Zahl, die hier herauskommt, ist ein Messwert oder NaN —
+   nie ein geglätteter Ersatz. Die Darstellung entscheidet, wie sie NaN zeigt (Sentinel −99,00 = „Pause“).
+
+   Verbindliche Entscheidungen (siehe docs/spec_v16.md und docs/physik.md):
+   - Formanten als Gipfel auf der LPC-Hüllkurve, keine Wurzelsuche.
+   - Analysefrequenz 12000 Hz, Preemphase 0,97, Hann, Burg-LPC, Ordnungssweep 12/14/16.
+   - Fensterlängensweep 0,06/0,08/0,10/0,14 s; gültig nur, wenn beide Sweeps unter 130 Hz streuen.
+   - F0 über YIN (Schwelle 0,15, 60–500 Hz), Oktavkontrolle über das Spektrum.
+   - SFR = 2400–3200 Hz minus 0–2000 Hz. SHR halbzahlige gegen ganzzahlige Teiltöne, k = 1..8. */
+(function (root) {
+  'use strict';
+
+  var VERSION = '3.0.0';
+  var TARGET_SR = 12000;          // Nyquist 6000 Hz, F5 bleibt im Durchlassband
+  var ORDERS = [12, 14, 16];      // Ordnungssweep
+  var WINDOWS = [0.06, 0.08, 0.10, 0.14]; // Fensterlängensweep in s
+  var MAIN_WINDOW = 0.10;         // Fenster für F0, Pegel, Bandbreiten und Ordnungsstreuung
+  var SPREAD_MAX_HZ = 130;        // Gültigkeitsgrenze beider Sweeps
+  var SLOT_TOL_HZ = 400;          // Zuordnung Gipfel → Slot über Ordnungen hinweg
+  var MERGED_BW_HZ = 250;
+  var BW_ARTIFACT_HZ = 40;        // physik.md 2.4: LPC-Bandbreiten darunter sind Artefakt, keine Messung         // ab hier gilt ein Gipfel als verschmolzen (zwei Formanten in einem)
+  var SENTINEL = -99;             // Darstellung für „keine Messung“
+  var SPEED_OF_SOUND_CM_S = 35000;
+  var NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+  function hzToMidi(f) { return 69 + 12 * Math.log2(f / 440); }
+  function hzToNote(f) {
+    if (!isFinite(f) || f <= 0) return '--';
+    var m = Math.round(hzToMidi(f));
+    return NOTES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+  }
+  function cents(f, fref) { return 1200 * Math.log2(f / fref); }
+
+  /* ---------- Statistik ---------- */
+
+  function finite(v) {
+    var out = [];
+    for (var i = 0; i < v.length; i++) if (isFinite(v[i])) out.push(v[i]);
+    return out;
+  }
+  function median(v) {
+    var s = finite(v);
+    if (!s.length) return NaN;
+    s.sort(function (a, b) { return a - b; });
+    var m = s.length >> 1;
+    return s.length % 2 ? s[m] : 0.5 * (s[m - 1] + s[m]);
+  }
+  function spread(v) {                       // Standardabweichung (Population), NaN unter 2 Werten
+    var s = finite(v);
+    if (s.length < 2) return NaN;
+    var m = 0, i;
+    for (i = 0; i < s.length; i++) m += s[i];
+    m /= s.length;
+    var q = 0;
+    for (i = 0; i < s.length; i++) q += (s[i] - m) * (s[i] - m);
+    return Math.sqrt(q / s.length);
+  }
+  function quantile(v, p) {                  // Typ 7 (linear), wie pandas.Series.quantile
+    var s = finite(v);
+    if (!s.length) return NaN;
+    s.sort(function (a, b) { return a - b; });
+    var h = (s.length - 1) * p, lo = Math.floor(h), hi = Math.ceil(h);
+    return s[lo] + (s[hi] - s[lo]) * (h - lo);
+  }
+  function mad(v) {                          // robuste Streuung: 1,4826 · Median der Absolutabweichungen
+    var s = finite(v);
+    if (s.length < 2) return NaN;
+    var m = median(s), a = new Array(s.length);
+    for (var i = 0; i < s.length; i++) a[i] = Math.abs(s[i] - m);
+    return 1.4826 * median(a);
+  }
+  function sentinel(v) { return isFinite(v) ? v : SENTINEL; }
+
+  /* ---------- FFT (Radix 2, in place) ---------- */
+
+  var twCache = {};
+  function twiddles(n) {
+    var t = twCache[n];
+    if (t) return t;
+    var c = new Float64Array(n >> 1), s = new Float64Array(n >> 1);
+    for (var k = 0; k < (n >> 1); k++) { var a = -2 * Math.PI * k / n; c[k] = Math.cos(a); s[k] = Math.sin(a); }
+    return (twCache[n] = { c: c, s: s });
+  }
+  function isPow2(n) { return n > 0 && (n & (n - 1)) === 0; }
+  function nextPow2(n) { var p = 1; while (p < n) p <<= 1; return p; }
+
+  function fft(re, im) {
+    var n = re.length;
+    if (n < 2) return;
+    if (!isPow2(n)) throw new Error('fft: Länge muss Zweierpotenz sein, ist ' + n);
+    for (var i = 1, j = 0; i < n; i++) {
+      var bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        var tr = re[i]; re[i] = re[j]; re[j] = tr;
+        var ti = im[i]; im[i] = im[j]; im[j] = ti;
+      }
+    }
+    var tw = twiddles(n);
+    for (var len = 2; len <= n; len <<= 1) {
+      var half = len >> 1, step = n / len;
+      for (var i0 = 0; i0 < n; i0 += len) {
+        for (var k = 0; k < half; k++) {
+          var wr = tw.c[k * step], wi = tw.s[k * step];
+          var a = i0 + k, b = a + half;
+          var xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi;
+          re[a] += xr; im[a] += xi;
+        }
+      }
+    }
+  }
+
+  /* ---------- Vorverarbeitung ---------- */
+
+  var hannCache = {};
+  function hannWindow(n) {
+    var w = hannCache[n];
+    if (w) return w;
+    w = new Float64Array(n);
+    for (var i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1));
+    return (hannCache[n] = w);
+  }
+  function hann(x) {
+    var n = x.length, w = hannWindow(n), y = new Float64Array(n);
+    for (var i = 0; i < n; i++) y[i] = x[i] * w[i];
+    return y;
+  }
+  function preemph(x, a) {
+    var y = new Float64Array(x.length);
+    y[0] = x[0];
+    for (var i = 1; i < x.length; i++) y[i] = x[i] - a * x[i - 1];
+    return y;
+  }
+  function rmsDb(x) {
+    var s = 0;
+    for (var i = 0; i < x.length; i++) s += x[i] * x[i];
+    return 20 * Math.log10(Math.sqrt(s / Math.max(1, x.length)) + 1e-12);
+  }
+
+  // Linearphasiger FIR-Tiefpass (Fenstermethode, Hamming), gebaut je Eingangsrate.
+  function makeLowpass(cutoffNorm, taps) {
+    var h = new Float64Array(taps), mid = (taps - 1) / 2, sum = 0;
+    for (var i = 0; i < taps; i++) {
+      var n = i - mid;
+      var s = (n === 0) ? 2 * cutoffNorm : Math.sin(2 * Math.PI * cutoffNorm * n) / (Math.PI * n);
+      var w = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (taps - 1));
+      h[i] = s * w; sum += h[i];
+    }
+    for (var j = 0; j < taps; j++) h[j] /= sum;
+    return h;
+  }
+  function tapsFor(srIn) { var taps = Math.round(81 * srIn / 48000); if (taps % 2 === 0) taps++; return Math.max(21, taps); }
+  var lpCache = {};
+  function lowpassFor(srIn, srOut) {
+    var key = srIn + '>' + srOut;
+    if (lpCache[key]) return lpCache[key];
+    return (lpCache[key] = makeLowpass(0.46 * srOut / srIn, tapsFor(srIn)));
+  }
+
+  /* Polyphasenbank für Bruchverhältnisse: dieselbe gefensterte Sinc-Funktion, um fr = ph/PHASES
+     Abtastwerte verschoben ausgewertet. Phase 0 ist bitidentisch mit lowpassFor(). Ohne diese Bank
+     erzeugt lineare Interpolation bei 44,1 kHz → 12 kHz einen Fehler nur ~24 dB unter dem Signal
+     bei 5 kHz, der die Täler zwischen F4 und F5 zuschüttet und F5 unter die Prominenzschwelle drückt. */
+  var PHASES = 64, bankCache = {};
+  function lowpassBank(srIn, srOut) {
+    var key = srIn + '>' + srOut;
+    if (bankCache[key]) return bankCache[key];
+    var taps = tapsFor(srIn), fc = 0.46 * srOut / srIn, mid = (taps - 1) / 2, bank = new Float64Array((PHASES + 1) * taps);
+    for (var ph = 0; ph <= PHASES; ph++) {
+      var fr = ph / PHASES, sum = 0, base = ph * taps, i;
+      for (i = 0; i < taps; i++) {
+        var n = i - mid - fr;
+        var s = (Math.abs(n) < 1e-12) ? 2 * fc : Math.sin(2 * Math.PI * fc * n) / (Math.PI * n);
+        var w = Math.max(0, 0.54 + 0.46 * Math.cos(2 * Math.PI * n / (taps - 1)));
+        bank[base + i] = s * w; sum += s * w;
+      }
+      for (i = 0; i < taps; i++) bank[base + i] /= sum;
+    }
+    return (bankCache[key] = { taps: taps, mid: (taps - 1) >> 1, bank: bank });
+  }
+
+  /* Abtastratenwandlung: gefensterte Sinc-Interpolation (Grenze 0,46·srOut) an genau den Stellen,
+     die die Ausgabe braucht. Ganzzahlige Verhältnisse (48 k → 12 k) nutzen nur Phase 0 und liefern
+     exakt das Ergebnis des FIR-Tiefpasses. */
+  function resample(x, srIn, srOut) {
+    if (srIn === srOut) return Float64Array.from(x);
+    var ratio = srIn / srOut, n = Math.floor(x.length / ratio), out = new Float64Array(n), N = x.length;
+    if (srIn < srOut) {                       // Hochtasten: kein Tiefpass nötig, lineare Interpolation
+      for (var u = 0; u < n; u++) {
+        var pu = u * ratio, iu = Math.floor(pu), fu = pu - iu;
+        out[u] = (iu + 1 < N) ? x[iu] * (1 - fu) + x[iu + 1] * fu : x[iu];
+      }
+      return out;
+    }
+    var B = lowpassBank(srIn, srOut), taps = B.taps, mid = B.mid, bank = B.bank;
+    for (var j = 0; j < n; j++) {
+      var p = j * ratio, i0 = Math.floor(p), fr = p - i0, phf = fr * PHASES, ph0 = Math.floor(phf), a = phf - ph0;
+      if (ph0 >= PHASES) { ph0 = PHASES - 1; a = 1; }
+      var b0 = ph0 * taps, b1 = b0 + taps, k0 = Math.max(0, mid - i0), k1 = Math.min(taps, N + mid - i0), acc = 0;
+      if (a < 1e-12) { for (var k = k0; k < k1; k++) acc += x[i0 + k - mid] * bank[b0 + k]; }
+      else { for (var q = k0; q < k1; q++) acc += x[i0 + q - mid] * ((1 - a) * bank[b0 + q] + a * bank[b1 + q]); }
+      out[j] = acc;
+    }
+    return out;
+  }
+
+  /* ---------- Burg-LPC ---------- */
+
+  function burg(x, order) {
+    var N = x.length, a = new Float64Array(order + 1);
+    a[0] = 1;
+    var f = Float64Array.from(x), b = Float64Array.from(x);
+    for (var m = 1; m <= order; m++) {
+      var num = 0, den = 0;
+      for (var i = m; i < N; i++) {
+        num += b[i - 1] * f[i];
+        den += f[i] * f[i] + b[i - 1] * b[i - 1];
+      }
+      var k = (den > 1e-20) ? (-2 * num / den) : 0;
+      var an = Float64Array.from(a);
+      for (var j = 1; j <= m; j++) an[j] = a[j] + k * a[m - j];
+      a = an;
+      for (var t = N - 1; t >= m; t--) {
+        var fv = f[t] + k * b[t - 1];
+        b[t] = b[t - 1] + k * f[t];
+        f[t] = fv;
+      }
+    }
+    return a;
+  }
+
+  /* ---------- LPC-Hüllkurve und Gipfel ---------- */
+
+  /* |1/A(e^{jw})| in dB auf dem Raster w_i = pi·i/(nBins−1). Ist 2·(nBins−1) eine Zweierpotenz,
+     liefert die FFT exakt dieselben Werte wie die direkte Summe — nur ~20× schneller. */
+  function lpcEnvelope(a, sr, nBins) {
+    var env = new Float64Array(nBins), M = 2 * (nBins - 1), i;
+    if (isPow2(M) && M >= a.length) {
+      var re = new Float64Array(M), im = new Float64Array(M);
+      for (i = 0; i < a.length; i++) re[i] = a[i];
+      fft(re, im);
+      for (i = 0; i < nBins; i++) env[i] = -20 * Math.log10(Math.hypot(re[i], im[i]) + 1e-15);
+      return env;
+    }
+    var df = (sr / 2) / (nBins - 1);
+    for (i = 0; i < nBins; i++) {
+      var w = 2 * Math.PI * (i * df) / sr, r = 0, q = 0;
+      for (var k = 0; k < a.length; k++) { r += a[k] * Math.cos(-w * k); q += a[k] * Math.sin(-w * k); }
+      env[i] = -20 * Math.log10(Math.hypot(r, q) + 1e-15);
+    }
+    return env;
+  }
+
+  /* Gipfel mit Prominenz, parabolisch verfeinert. Bandbreite aus der −3-dB-Breite. */
+  function peaksFromEnvelope(env, sr, nMax, minProm) {
+    var nBins = env.length, df = (sr / 2) / (nBins - 1), cand = [];
+    for (var i = 2; i < nBins - 2; i++) {
+      if (env[i] <= env[i - 1] || env[i] < env[i + 1]) continue;
+      var l = i, r = i;
+      while (l > 0 && env[l - 1] < env[l]) l--;
+      while (r < nBins - 1 && env[r + 1] < env[r]) r++;
+      var prom = env[i] - Math.max(env[l], env[r]);
+      if (prom < minProm) continue;
+      var A = env[i - 1], B = env[i], C = env[i + 1], den = A - 2 * B + C;
+      var sh = (Math.abs(den) > 1e-12) ? Math.max(-1, Math.min(1, 0.5 * (A - C) / den)) : 0;
+      var f = (i + sh) * df;
+      /* −3-dB-Breite mit interpolierten Kreuzungen. Ohne Interpolation ist die Breite immer um
+         0 bis 2 Bins (bis 11,7 Hz) zu groß — bei einer F1-Bandbreite von 30 Hz sind das +37 %,
+         und die Zahl geht in die Bandbreitenkorrektur von H1*−H2* ein. */
+      var half = B - 3, lo = i, hi = i;
+      while (lo > 0 && env[lo] > half) lo--;
+      while (hi < nBins - 1 && env[hi] > half) hi++;
+      var loX = lo, hiX = hi;
+      if (lo < i && env[lo + 1] !== env[lo]) loX = lo + (half - env[lo]) / (env[lo + 1] - env[lo]);
+      if (hi > i && env[hi - 1] !== env[hi]) hiX = hi - (half - env[hi]) / (env[hi - 1] - env[hi]);
+      var bw = (hiX - loX) * df;
+      if (f > 120 && f < sr / 2 - 250) cand.push({ f: f, bw: bw, amp: env[i], prom: prom, bwArtifact: bw < BW_ARTIFACT_HZ });
+    }
+    cand.sort(function (p, q) { return q.prom - p.prom; });
+    var keep = cand.slice(0, nMax);
+    keep.sort(function (p, q) { return p.f - q.f; });
+    return keep;
+  }
+
+  function formantsFromLPC(a, sr, nMax) {
+    return peaksFromEnvelope(lpcEnvelope(a, sr, 1025), sr, nMax, 1.5);
+  }
+
+  /* Ein Fenster (bereits auf TARGET_SR): Ordnungssweep mit Zuordnung nach Nähe.
+     Referenz ist die Ordnung mit den meisten Gipfeln (Gleichstand: 14, dann 12, dann 16).
+     Gipfel der anderen Ordnungen werden dem nächsten Referenz-Slot zugeordnet (Toleranz 400 Hz),
+     jeder Slot je Ordnung höchstens einmal. So kann ein verschmolzener Gipfel bei Ordnung 16
+     die Slots nicht mehr verschieben. */
+  function analyseWindow(seg, sr, opts) {
+    opts = opts || {};
+    var orders = opts.orders || ORDERS;
+    var win = hann(preemph(seg, 0.97));
+    var per = [], o;
+    for (o = 0; o < orders.length; o++) per.push(formantsFromLPC(burg(win, orders[o]), sr, 5));
+    var prefer = [orders.indexOf(14), orders.indexOf(12), orders.indexOf(16)];
+    var refIdx = -1, best = -1;
+    for (var pi = 0; pi < prefer.length; pi++) { var c = prefer[pi]; if (c >= 0 && per[c].length > best) { best = per[c].length; refIdx = c; } }
+    for (o = 0; o < orders.length; o++) if (per[o].length > best) { best = per[o].length; refIdx = o; }
+    var slots = [[], [], [], [], []], bwSlot = [NaN, NaN, NaN, NaN, NaN], bwArt = [false, false, false, false, false];
+    var bwOrder = orders.indexOf(14) >= 0 ? orders.indexOf(14) : refIdx;
+    if (refIdx >= 0) {
+      var ref = per[refIdx], nSlots = Math.min(5, ref.length);
+      for (o = 0; o < orders.length; o++) {
+        var assign = new Array(nSlots);
+        if (o === refIdx) {
+          for (var s0 = 0; s0 < nSlots; s0++) assign[s0] = ref[s0];
+        } else {
+          var pairs = [];
+          for (var s = 0; s < nSlots; s++) for (var p = 0; p < per[o].length; p++) {
+            var d = Math.abs(per[o][p].f - ref[s].f);
+            if (d <= SLOT_TOL_HZ) pairs.push({ d: d, s: s, p: p });
+          }
+          pairs.sort(function (u, v) { return u.d - v.d; });
+          var usedP = {};
+          for (var q = 0; q < pairs.length; q++) {
+            var pr = pairs[q];
+            if (assign[pr.s] || usedP[pr.p]) continue;
+            assign[pr.s] = per[o][pr.p]; usedP[pr.p] = true;
+          }
+        }
+        for (var s1 = 0; s1 < nSlots; s1++) {
+          if (!assign[s1]) continue;
+          slots[s1].push(assign[s1].f);
+          if (o === bwOrder) { bwSlot[s1] = assign[s1].bw; bwArt[s1] = !!assign[s1].bwArtifact; }
+        }
+      }
+    }
+    var F = [], sdOrder = [], nOrders = [], merged = [];
+    for (var k = 0; k < 5; k++) {
+      F.push(median(slots[k])); sdOrder.push(spread(slots[k])); nOrders.push(slots[k].length);
+      merged.push(isFinite(bwSlot[k]) && bwSlot[k] > MERGED_BW_HZ);
+    }
+    return { F: F, sdOrder: sdOrder, nOrders: nOrders, BW: bwSlot, bwArtifact: bwArt, merged: merged,
+      nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN };
+  }
+
+  /* Zuordnung Gipfel → Slot ist eine Annahme, keine Messung: der k-te gefundene Gipfel gilt als Fk.
+     Findet die Referenzordnung weniger als fünf Resonanzen, fehlt eine — dann stimmt die Nummerierung
+     oberhalb der Lücke nicht mehr, und ΔF3–4 wäre der Abstand zwischen zwei falsch benannten Formanten.
+     Die Lücke liegt beim größten Abstand zwischen benachbarten gefundenen Gipfeln; alles darüber gilt
+     als unsicher. Ohne diese Prüfung meldet der Kern einen verschmolzenen F3/F4-Buckel als ΔF3–4 von
+     1614 Hz statt 150 Hz — und zwar „gültig“, weil alle Sweeps denselben Fehler wiederholen.
+     Wiederholbarkeit ist nicht Richtigkeit. */
+  function slotGapUnsure(F, nPeaksRef) {
+    var unsure = [false, false, false, false, false];
+    if (nPeaksRef >= 5) return unsure;
+    var idx = [];
+    for (var k = 0; k < 5; k++) if (isFinite(F[k])) idx.push(k);
+    if (idx.length < 2) {
+      for (var j = 0; j < 5; j++) unsure[j] = !isFinite(F[j]) ? false : (j > (idx.length ? idx[0] : -1));
+      return unsure;
+    }
+    var worst = 0, worstAt = idx[0];
+    for (var i = 0; i + 1 < idx.length; i++) {
+      var gap = F[idx[i + 1]] - F[idx[i]];
+      if (gap > worst) { worst = gap; worstAt = idx[i]; }
+    }
+    for (var s = worstAt + 1; s < 5; s++) unsure[s] = true;
+    return unsure;
+  }
+
+  /* ---------- F0: YIN mit kumulativer mittlerer Normierung ---------- */
+
+  /* dn(τ) = d(τ)·τ / Σ_{1..τ} d — die Normierung beginnt bei τ = 1, nicht bei tauMin.
+     Danach das reine YIN-Kriterium: der erste Dip unter der Schwelle, parabolisch verfeinert.
+     Eine frühere Zusatzregel („liegt ein späterer Dip tiefer, gilt der spätere“) ist entfernt:
+     sie sollte den Fall „enger F1 auf dem 5. Teilton“ retten, halbierte aber bei 11 % sauberer
+     synthetischer Vokale den Grundton — ein echter Ton ist auch bei der doppelten Periode
+     periodisch, und die Differenzfunktion kann beides nicht trennen. Ob der gefundene Wert ein
+     Vielfaches des echten Grundtons ist, entscheidet die Teiltonreihe im Spektrum
+     (subMultipleInfo), wie es die Spezifikation für die Oktavkontrolle vorschreibt. */
+  function detectF0(x, sr, fmin, fmax, thresh) {
+    fmin = fmin || 60; fmax = fmax || 500; thresh = (thresh == null) ? 0.15 : thresh;
+    var N = x.length, tauMax = Math.min(Math.floor(sr / fmin), N >> 1), tauMin = Math.max(2, Math.floor(sr / fmax));
+    if (tauMax <= tauMin + 2) return { f0: NaN, ap: 1, tau: NaN, dips: [], fminEff: NaN };
+    var W = N - tauMax, d = new Float64Array(tauMax + 1), dn = new Float64Array(tauMax + 1);
+    for (var tau = 1; tau <= tauMax; tau++) {
+      var s = 0;
+      for (var i = 0; i < W; i++) { var dd = x[i] - x[i + tau]; s += dd * dd; }
+      d[tau] = s;
+    }
+    dn[0] = 1;
+    var run = 0;
+    for (var t = 1; t <= tauMax; t++) { run += d[t]; dn[t] = (run > 1e-20) ? d[t] * t / run : 1; }
+    var dips = [];
+    for (var u = tauMin; u < tauMax; u++) if (dn[u] < dn[u - 1] && dn[u] <= dn[u + 1]) dips.push({ tau: u, dn: dn[u] });
+    var best = -1, first = -1;
+    for (var q = 0; q < dips.length; q++) if (dips[q].dn < thresh) { first = q; break; }
+    if (first >= 0) {
+      best = dips[first].tau;
+    } else {
+      var mn = Infinity;
+      for (var v2 = tauMin; v2 < tauMax; v2++) if (dn[v2] < mn) { mn = dn[v2]; best = v2; }
+    }
+    var ti = best;
+    if (best > 1 && best < tauMax) {
+      var A = dn[best - 1], B = dn[best], C = dn[best + 1], den = A - 2 * B + C;
+      if (Math.abs(den) > 1e-12) ti = best + Math.max(-1, Math.min(1, 0.5 * (A - C) / den));
+    }
+    /* subFactor: Hat die Dip-Regel eine Vielfache der ersten Kandidatenperiode gewählt, ist der
+       gemeldete Grundton ein Unterton — die eigentliche Teiltonreihe liegt bei subFactor·f0.
+       SHR braucht diese Auskunft, um die Subharmonischen vom Raster zu unterscheiden, statt sie
+       aus dem Spektrum zu raten (ein Formant auf H2 macht die geraden Teiltöne sonst verdächtig). */
+    return { f0: sr / ti, ap: dn[best], tau: ti, dips: dips, fminEff: sr / tauMax };
+  }
+
+  /* ---------- Spektrum und Spektralmaße ---------- */
+
+  /* Hann-gefenstertes Spektrum, Nullauffüllung auf N (Zweierpotenz). db[k] ist der Pegel einer
+     Sinuskomponente in dBFS (Vollaussteuerung = 0 dB), pow[k] die zugehörige Amplitude². */
+  function spectrum(x, sr, N) {
+    N = N || nextPow2(Math.max(x.length, 2048));
+    var re = new Float64Array(N), im = new Float64Array(N), w = hannWindow(x.length), wsum = 0, i;
+    for (i = 0; i < x.length; i++) { re[i] = x[i] * w[i]; wsum += w[i]; }
+    fft(re, im);
+    var nb = (N >> 1) + 1, pow = new Float64Array(nb), db = new Float64Array(nb), g = 2 / wsum;
+    for (i = 0; i < nb; i++) {
+      var a = Math.hypot(re[i], im[i]) * g;
+      pow[i] = a * a;
+      db[i] = 10 * Math.log10(pow[i] + 1e-20);
+    }
+    return { db: db, pow: pow, df: sr / N, N: N, sr: sr, len: x.length };
+  }
+
+  // Pegel einer Linie bei f: Maximum in ±max(1 Bin, 1 % f), parabolisch über die Nachbarbins
+  // verfeinert (sonst bis 0,5 dB Scalloping-Verlust, wenn die Linie zwischen zwei Bins liegt).
+  function lineLevelDb(spec, f) {
+    if (!(f > 0) || f >= spec.sr / 2) return NaN;
+    var tol = Math.max(spec.df, 0.01 * f);
+    var lo = Math.max(1, Math.round((f - tol) / spec.df)), hi = Math.min(spec.db.length - 1, Math.round((f + tol) / spec.df));
+    var m = -Infinity, mi = -1;
+    for (var k = lo; k <= hi; k++) if (spec.db[k] > m) { m = spec.db[k]; mi = k; }
+    if (mi > 0 && mi < spec.db.length - 1) {
+      var A = spec.db[mi - 1], B = spec.db[mi], C = spec.db[mi + 1], den = A - 2 * B + C;
+      if (den < -1e-9 && A < B && C <= B) m = B - 0.125 * (A - C) * (A - C) / den;
+    }
+    return m;
+  }
+  function linePow(spec, f) { var L = lineLevelDb(spec, f); return isFinite(L) ? Math.pow(10, L / 10) : 0; }
+
+  // Rauschreferenz zwischen den Linien des Rasters g: Median aller Bins in [(m+0,3)g, (m+0,7)g], m = 1..8.
+  function noiseRefDb(spec, g) {
+    var vals = [];
+    for (var m = 1; m <= 8; m++) {
+      var lo = Math.round((m + 0.3) * g / spec.df), hi = Math.round((m + 0.7) * g / spec.df);
+      if (hi >= spec.db.length) break;
+      for (var k = lo; k <= hi; k++) vals.push(spec.db[k]);
+    }
+    return median(vals);
+  }
+
+  /* Teilerkontrolle (verallgemeinerte Oktavkontrolle). Die Spezifikation verlangt für den Faktor 2:
+     existiert bei f/2 eine ungerade Teiltonreihe (1·, 3·, 5·, 7· f/2) mehr als 8 dB über dem
+     Zwischenrauschen, ist f/2 der echte Grundton. Dieselbe Frage stellt sich für jeden Teiler m:
+     die Periodenmessung liefert ein Vielfaches des Grundtons, wenn bei f/m zusätzliche Linien
+     stehen, die keine Vielfachen von f sind. Geprüft werden m = 2..5 — der Fall „enger F1 auf dem
+     5. Teilton“ ist ein Teiler 5, kein Oktavfehler.
+
+     Zwei Kriterien, beide nötig:
+     (a) Die zusätzlichen Linien müssen über dem Zwischenrauschen liegen (Spezifikation, 8 dB).
+     (b) Sie müssen auch gegenüber den schon bekannten Linien bei f und 2f stark sein (Grenze
+         −20 dB, zwischen den beiden SHR-Schwellen der Spezifikation). Ohne (b) hängt das Ergebnis
+         am Rauschboden: bei sauberem Signal ist die Referenz nur der Leckageboden des Hann-Fensters,
+         und schon eine Subharmonische 38 dB unter den Teiltönen (Amplitudenwechsel 0,97, hörbar
+         nichts) würde die angezeigte Note halbieren — dasselbe Signal mit Mikrofonrauschen nicht.
+     Dazwischen wird nicht stillschweigend geteilt, sondern ambiguous gemeldet. */
+  var OCTAVE_ODD_EVEN_DB = -20;
+  var SUB_MULTIPLE_MAX = 5;
+
+  function subMultipleTest(spec, f, m, marginDb, oddEvenDb) {
+    var out = { m: m, pass: false, ambiguous: false, newMinusNoise: NaN, newMinusOld: NaN };
+    var g = f / m;
+    if (!(g >= 30)) return out;
+    var ref = noiseRefDb(spec, g);
+    if (!isFinite(ref)) return out;
+    /* Vier bekannte Linien (m·g, 2m·g, 3m·g, 4m·g = f, 2f, 3f, 4f) gegen die neuen Linien dazwischen.
+       Für m = 2 sind das genau die 1·, 3·, 5·, 7· f/2 der Spezifikation. */
+    var sumNew = 0, nNew = 0, above = 0, sumOld = 0, nOld = 0, k, L;
+    for (k = 1; k <= 4 * m; k++) {
+      L = lineLevelDb(spec, k * g);
+      if (!isFinite(L)) continue;
+      if (k % m === 0) { sumOld += L; nOld++; }
+      else { sumNew += L; nNew++; if (L > ref + marginDb) above++; }
+    }
+    if (nNew < 3 || nOld < 2) return out;
+    out.newMinusNoise = sumNew / nNew - ref;
+    out.newMinusOld = sumNew / nNew - sumOld / nOld;
+    if (!(out.newMinusNoise > marginDb && above >= Math.max(3, Math.ceil(0.6 * nNew)))) return out;
+    /* Unsicher ist nur das schmale Band, in dem die Spezifikation die Subharmonische überhaupt für
+       nennenswert hält (SHR über −25 dB), sie aber noch nicht zum Teilen reicht. Darunter ist das
+       Signal sauber — ein Dauerhinweis „Oktave unsicher“ bei jedem gesunden Ton wäre kein ehrlicher
+       Messwert, sondern Lärm. */
+    if (out.newMinusOld <= oddEvenDb) { out.ambiguous = out.newMinusOld > oddEvenDb - 5; return out; }
+    out.pass = true;
+    return out;
+  }
+
+  /* Liefert den größten Teiler m (2..5), für den die Teiltonreihe bei f/m belegt ist. */
+  function subMultipleInfo(spec, f, marginDb, oddEvenDb, maxM) {
+    marginDb = (marginDb == null) ? 8 : marginDb;
+    oddEvenDb = (oddEvenDb == null) ? OCTAVE_ODD_EVEN_DB : oddEvenDb;
+    maxM = maxM || SUB_MULTIPLE_MAX;
+    var best = { m: 1, halve: false, ambiguous: false, newMinusNoise: NaN, newMinusOld: NaN };
+    for (var m = maxM; m >= 2; m--) {
+      var t = subMultipleTest(spec, f, m, marginDb, oddEvenDb);
+      if (t.pass) return { m: m, halve: true, ambiguous: false, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
+      if (t.ambiguous && !best.ambiguous) best = { m: 1, halve: false, ambiguous: true, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
+    }
+    return best;
+  }
+  function octaveInfo(spec, f, marginDb, oddEvenDb) {
+    var t = subMultipleTest(spec, f, 2, (marginDb == null) ? 8 : marginDb, (oddEvenDb == null) ? OCTAVE_ODD_EVEN_DB : oddEvenDb);
+    return { halve: t.pass, ambiguous: t.ambiguous, oddMinusNoise: t.newMinusNoise, oddMinusEven: t.newMinusOld };
+  }
+  function octaveCheck(spec, f, marginDb) { return octaveInfo(spec, f, marginDb).halve; }
+
+  // SHR gegen ein Raster g: 10·log10(ΣP((k−½)g) / ΣP(k·g)), k = 1..8.
+  function shrAgainst(spec, g) {
+    var ps = 0, ph = 0;
+    for (var k = 1; k <= 8; k++) { ps += linePow(spec, (k - 0.5) * g); ph += linePow(spec, k * g); }
+    return 10 * Math.log10((ps + 1e-20) / (ph + 1e-20));
+  }
+  /* SHR mit Regime-Erkennung. Liefert die Periodenmessung bereits einen Unterton (Oktavkontrolle
+     oder Dip-Regel haben eine Vielfache der ersten Kandidatenperiode gewählt), sind die ungeraden
+     Vielfachen von f0 die Subharmonischen — dann ist das Raster subFactor·f0.
+     Diese Auskunft kommt aus der Periodenmessung, NICHT aus dem Spektrum: die frühere Regel
+     „gerade Teiltöne mehr als 6 dB stärker ⇒ Subharmonik“ hielt einen Formanten auf H2 für
+     Ventrikularfaltenschwingung und warnte ausgerechnet an der Registergrenze (f4 modal:
+     gemeldet −10,5 dB statt der tatsächlichen −36,8 dB). */
+  function shr(spec, f0, subMultiple) {
+    var k = (subMultiple === true) ? 2 : (subMultiple >= 2 ? Math.round(subMultiple) : 1);
+    if (k >= 2) return { shr: shrAgainst(spec, k * f0), grid: k * f0 };
+    return { shr: shrAgainst(spec, f0), grid: f0 };
+  }
+
+  function bandPow(spec, fLo, fHi) {
+    var lo = Math.max(1, Math.ceil(fLo / spec.df)), hi = Math.min(spec.pow.length - 1, Math.ceil(fHi / spec.df) - 1), s = 0;
+    for (var k = lo; k <= hi; k++) s += spec.pow[k];
+    return s;
+  }
+  function bandDb(spec, fLo, fHi) { return 10 * Math.log10(bandPow(spec, fLo, fHi) + 1e-20); }
+  // SFR = Bandpegel 2400–3200 minus 0–2000 Hz (ohne Gleichanteil).
+  function sfr(spec) { return bandDb(spec, 2400, 3200) - bandDb(spec, 0, 2000); }
+
+  /* CPP: Cepstrum des dB-Spektrums; Gipfel in der Quefrenz 1/fmax..1/fmin (2–16,7 ms) über der
+     Regressionsgeraden desselben Bereichs. Eigene Skala (15–34 dB), nicht Praat-CPPS. */
+  function cpp(spec, fmin, fmax) {
+    fmin = fmin || 60; fmax = fmax || 500;
+    var N = spec.N, re = new Float64Array(N), im = new Float64Array(N), k;
+    for (k = 0; k <= (N >> 1); k++) re[k] = spec.db[k];
+    for (k = 1; k < (N >> 1); k++) re[N - k] = spec.db[k];
+    fft(re, im);
+    var qmin = Math.round(spec.sr / fmax), qmax = Math.min(N >> 1, Math.round(spec.sr / fmin));
+    var n = qmax - qmin + 1, sx = 0, sy = 0, sxx = 0, sxy = 0, cdb = new Float64Array(n), peak = -Infinity, qp = qmin;
+    for (k = 0; k < n; k++) {
+      var q = qmin + k, c = 20 * Math.log10(Math.abs(re[q]) / N + 1e-20);
+      cdb[k] = c; sx += q; sy += c; sxx += q * q; sxy += q * c;
+      if (c > peak) { peak = c; qp = q; }
+    }
+    var b = (n * sxy - sx * sy) / (n * sxx - sx * sx), a = (sy - b * sx) / n;
+    return { cpp: peak - (a + b * qp), f0: spec.sr / qp };
+  }
+
+  function h1h2(spec, f0) { return lineLevelDb(spec, f0) - lineLevelDb(spec, 2 * f0); }
+
+  /* Betragsgang eines Polpaars (F, B) bei f, auf 0 dB bei f = 0 normiert (Iseli/Alwan). */
+  function polePairGainDb(f, F, B, fs) {
+    fs = fs || TARGET_SR;
+    B = Math.max(40, Math.min(400, B));
+    var r = Math.exp(-Math.PI * B / fs), th = 2 * Math.PI * F / fs, w = 2 * Math.PI * f / fs;
+    var num = 1 - 2 * r * Math.cos(th) + r * r;
+    var d1 = 1 - 2 * r * Math.cos(w - th) + r * r, d2 = 1 - 2 * r * Math.cos(w + th) + r * r;
+    return 20 * Math.log10(num / Math.sqrt(d1 * d2));
+  }
+  /* H1*−H2*: Filterbeitrag der Polpaare F1–F3 bei F0 und 2·F0 herausgerechnet. */
+  function h1h2Corrected(h1, h2, f0, F, BW, fs) {
+    var g1 = 0, g2 = 0;
+    for (var i = 0; i < 3; i++) {
+      if (!isFinite(F[i])) return NaN;
+      var b = isFinite(BW[i]) ? BW[i] : 100;
+      g1 += polePairGainDb(f0, F[i], b, fs); g2 += polePairGainDb(2 * f0, F[i], b, fs);
+    }
+    return (h1 - g1) - (h2 - g2);
+  }
+
+  // Formantgewinn (Lorentz-Näherung) für die Simulation: 10·log10(1/(1+r²)), r = (f−F)/(B/2).
+  function formantGain(f, F, B) { var r = (f - F) / (B / 2); return 10 * Math.log10(1 / (1 + r * r)); }
+
+  /* Rohrlängenschätzung aus dem mittleren Abstand benachbarter gültiger Formanten F1..F4.
+     Modellgröße (gleichförmiges Rohr), keine Messung — so beschriften. */
+  function tubeLength(F, valid) {
+    var diffs = [];
+    for (var k = 0; k < 3; k++) {
+      var ok = (!valid || (valid[k] && valid[k + 1])) && isFinite(F[k]) && isFinite(F[k + 1]);
+      if (ok) diffs.push(F[k + 1] - F[k]);
+    }
+    if (diffs.length < 2) return { cm: NaN, dF: NaN, n: diffs.length };
+    var m = 0; for (var i = 0; i < diffs.length; i++) m += diffs[i];
+    m /= diffs.length;
+    return { cm: SPEED_OF_SOUND_CM_S / (2 * m), dF: m, n: diffs.length };
+  }
+
+  /* Ausklang nach Phrasenende: (L_{+60 ms} − L_{+160 ms}) / 0,1 s in dB/s. track = RMS-Verlauf in dB. */
+  function decayRate(track, hopS, endIdx) {
+    var i60 = endIdx + Math.round(0.06 / hopS), i160 = endIdx + Math.round(0.16 / hopS);
+    if (i160 >= track.length || i60 < 0) return NaN;
+    return (track[i60] - track[i160]) / 0.1;
+  }
+
+  /* Alternation der Zyklusdauern: mean|T_{i+2} − T_i| / mean|T_{i+1} − T_i| < 0,5 → Periodenverdopplung. */
+  function alternation(periods) {
+    if (!periods || periods.length < 4) return NaN;
+    var a = 0, b = 0, na = 0, nb = 0;
+    for (var i = 0; i + 1 < periods.length; i++) { b += Math.abs(periods[i + 1] - periods[i]); nb++; }
+    for (var j = 0; j + 2 < periods.length; j++) { a += Math.abs(periods[j + 2] - periods[j]); na++; }
+    if (nb === 0 || b / nb < 1e-9) return NaN;
+    return (a / na) / (b / nb);
+  }
+
+  /* ---------- Vollständige Analyse an einer Stelle: Fenstersweep + Spektralmaße ---------- */
+
+  function emptyFrame() {
+    var nan5 = [NaN, NaN, NaN, NaN, NaN];
+    return {
+      voiced: false, f0: NaN, note: '--', ap: 1, rmsDb: NaN,
+      F: nan5.slice(), sdOrder: nan5.slice(), sdWin: nan5.slice(), BW: nan5.slice(),
+      nOrders: [0, 0, 0, 0, 0], nWin: [0, 0, 0, 0, 0], valid: [false, false, false, false, false], merged: [false, false, false, false, false],
+      slotUnsure: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
+      audible: false, tonalButAperiodic: false,
+      d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
+      sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      octaveCorrected: false, octaveAmbiguous: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
+      harmonicPullHz: NaN, sparseHarmonics: false,
+      dips: [], fminEff: NaN, nWindows: 0, spectrumDb: null
+    };
+  }
+
+  /* ds: Signal bereits auf TARGET_SR. idx: Mittelpunkt (align 'centre') oder letzter Index (align 'end').
+     opts: { align, floorDb, windows, orders, spreadMaxHz, yinThresh, fmin, fmax, wantSpectrum } */
+  function analyseAt(ds, sr, idx, opts) {
+    opts = opts || {};
+    var windows = opts.windows || WINDOWS, smax = opts.spreadMaxHz || SPREAD_MAX_HZ;
+    var floorDb = (opts.floorDb != null) ? opts.floorDb : -67;
+    var out = emptyFrame(), segs = [], w, n, start, k;
+    for (w = 0; w < windows.length; w++) {
+      n = Math.round(windows[w] * sr);
+      start = (opts.align === 'end') ? idx + 1 - n : idx - (n >> 1);
+      if (start < 0 || start + n > ds.length) continue;
+      segs.push({ L: windows[w], seg: ds.subarray(start, start + n) });
+    }
+    out.nWindows = segs.length;
+    if (!segs.length) return out;
+    var main = segs[0], longest = segs[0], shortest = segs[0], i;
+    for (i = 1; i < segs.length; i++) {
+      if (Math.abs(segs[i].L - MAIN_WINDOW) < Math.abs(main.L - MAIN_WINDOW)) main = segs[i];
+      if (segs[i].L > longest.L) longest = segs[i];
+      if (segs[i].L < shortest.L) shortest = segs[i];
+    }
+    /* Erst Pegel und Periodizität, dann erst der Formantsweep. Vorher lief der Sweep immer und
+       lieferte auch für Pausenrahmen Formantzahlen, die in Rahmen-CSV und Chronik landeten —
+       entgegen dem Clean-Silence-Protokoll der Spezifikation (in Pausen Sentinel −99,00).
+       Nebenbei kostet eine Pause jetzt einen Bruchteil der Rechenzeit. */
+    out.rmsDb = rmsDb(main.seg);
+    var audible = out.rmsDb > floorDb + 12;
+    /* YIN-Fenster an die Tonhöhe anpassen: Mit festen 0,10 s wandert der Grundton bei normalem
+       Vibrato (±4 %, 5,5 Hz) innerhalb des Fensters so weit, dass der Dip verflacht — bei 98 Hz
+       galten 54 % der Rahmen als unvoiced, obwohl der Pegel 50 dB über dem Rauschboden lag.
+       Erst grob messen, dann mit rund vier Perioden nachmessen. */
+    var p = detectF0(main.seg, sr, opts.fmin || 60, opts.fmax || 500, opts.yinThresh);
+    if (isFinite(p.f0) && p.f0 > 0) {
+      var wantS = Math.max(shortest.L, Math.min(main.L, 4.2 / p.f0));
+      if (wantS < main.L - 1e-6) {
+        var nAdapt = Math.round(wantS * sr), startA = (opts.align === 'end') ? idx + 1 - nAdapt : idx - (nAdapt >> 1);
+        if (startA >= 0 && startA + nAdapt <= ds.length) {
+          var pA = detectF0(ds.subarray(startA, startA + nAdapt), sr, opts.fmin || 60, opts.fmax || 500, opts.yinThresh);
+          if (isFinite(pA.f0) && pA.ap < p.ap) p = pA;
+        }
+      }
+    }
+    out.ap = p.ap; out.dips = p.dips; out.fminEff = p.fminEff;
+    out.audible = audible;
+    out.voiced = isFinite(p.f0) && p.ap < 0.45 && audible;
+    out.tonalButAperiodic = audible && !out.voiced;
+    var spec = spectrum(longest.seg, sr);
+    if (opts.wantSpectrum) out.spectrumDb = spec.db;
+    if (!out.voiced) return out;
+
+    var perWin = [];
+    for (i = 0; i < segs.length; i++) perWin.push(analyseWindow(segs[i].seg, sr, opts));
+    var mainRes = perWin[segs.indexOf(main)];
+    out.nPeaksRef = mainRes.nPeaksRef;
+    for (k = 0; k < 5; k++) {
+      var vals = [];
+      for (i = 0; i < perWin.length; i++) if (isFinite(perWin[i].F[k])) vals.push(perWin[i].F[k]);
+      out.F[k] = median(vals); out.sdWin[k] = spread(vals); out.nWin[k] = vals.length;
+      out.sdOrder[k] = mainRes.sdOrder[k]; out.BW[k] = mainRes.BW[k]; out.nOrders[k] = mainRes.nOrders[k]; out.merged[k] = mainRes.merged[k];
+      out.bwArtifact[k] = !!mainRes.bwArtifact[k];
+    }
+    // Slot-Nummerierung prüfen, bevor Gültigkeit vergeben wird: fehlt eine Resonanz, ist alles
+    // oberhalb der Lücke falsch benannt — auch wenn alle Sweeps denselben Wert wiederholen.
+    var minPeaks = Infinity;
+    for (i = 0; i < perWin.length; i++) minPeaks = Math.min(minPeaks, perWin[i].nPeaksRef);
+    out.slotUnsure = slotGapUnsure(out.F, Math.min(mainRes.nPeaksRef, minPeaks));
+    for (k = 0; k < 5; k++) {
+      out.valid[k] = isFinite(out.F[k]) && out.nWin[k] >= 3 && out.sdWin[k] < smax && out.nOrders[k] >= 2 && out.sdOrder[k] < smax && !out.slotUnsure[k];
+    }
+    out.d34 = out.F[3] - out.F[2]; out.d45 = out.F[4] - out.F[3];
+    out.d34valid = out.valid[2] && out.valid[3]; out.d45valid = out.valid[3] && out.valid[4];
+
+    var f0 = p.f0;
+    var sub = subMultipleInfo(spec, f0);
+    out.octaveCorrected = sub.halve; out.octaveAmbiguous = sub.ambiguous; out.octaveOddEvenDb = sub.newMinusOld;
+    out.subFactor = sub.halve ? sub.m : 1;
+    if (sub.halve) f0 = f0 / sub.m;
+    out.f0 = f0; out.note = hzToNote(f0);
+    // Bei hohem Grundton rastet ein LPC-Gipfel auf dem nächsten Teilton ein: die Lage eines
+    // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
+    out.harmonicPullHz = f0 / 2;
+    out.sparseHarmonics = f0 > 250;
+    var sh = shr(spec, f0, out.subFactor);
+    out.shr = sh.shr; out.shrGrid = sh.grid;
+    out.sfr = sfr(spec);
+    out.cpp = cpp(spec, opts.fmin || 60, opts.fmax || 500).cpp;
+    out.h1h2 = h1h2(spec, f0);
+    if (isFinite(out.F[0])) {
+      out.f1f0 = out.F[0] / f0; out.nearestHarmonic = Math.max(1, Math.round(out.f1f0));
+      // Eine Bandbreite unter 40 Hz ist ein Artefakt (physik.md 2.4) — dann lieber den
+      // physiologischen Richtwert als eine Zahl, die das Fenster künstlich eng macht.
+      var b1 = (isFinite(out.BW[0]) && !out.bwArtifact[0]) ? out.BW[0] : 80;
+      out.h1h2unsure = Math.abs(out.F[0] - f0) < 1.5 * b1 || Math.abs(out.F[0] - 2 * f0) < 1.5 * b1;
+      if (out.valid[0] && out.valid[1] && out.valid[2]) {
+        // h1h2Corrected begrenzt die Bandbreiten bereits auf 40–400 Hz (Iseli/Alwan); hier also
+        // die gemessenen Werte durchreichen und nur vermerken, dass eine davon ein Artefakt war.
+        out.h1h2c = h1h2Corrected(lineLevelDb(spec, f0), lineLevelDb(spec, 2 * f0), f0, out.F, out.BW, sr);
+        out.h1h2cArtifact = out.bwArtifact[0] || out.bwArtifact[1] || out.bwArtifact[2];
+      }
+    }
+    /* Eine spektrale Erkennung der Periodenverdopplung wurde geprüft und verworfen: das Verhältnis
+       gerader zu ungeraden Teiltönen erreicht bei sauberen Vokalen bis +87 dB (ungerade Teiltöne
+       fallen in Spektraltäler) und bei echter Alternation nur +0,8 dB — die Verteilungen überlappen
+       vollständig. Das Physik-Skript sagt es (§7.5): spektral allein gibt es Fehlalarme, sicher ist
+       nur die Zyklusalternation. Die wird hier nicht gemessen; der Kern verspricht sie auch nicht. */
+    return out;
+  }
+
+  /* Kompatibler Einzelrahmen-Aufruf (v16-Prüflauf): ein Fenster, kein Fenstersweep.
+     frame: beliebige Rate sr (typisch 2048 Werte bei 48 kHz). */
+  function analyse(frame, sr, opts) {
+    opts = opts || {};
+    var level = rmsDb(frame);
+    var ds = resample(frame, sr, TARGET_SR);
+    var p = detectF0(ds, TARGET_SR, opts.fmin || 60, opts.fmax || 500, opts.yinThresh);
+    var floorDb = (opts.floorDb != null) ? opts.floorDb : -67;
+    var voiced = isFinite(p.f0) && p.ap < 0.45 && level > floorDb + 12;
+    var w = analyseWindow(ds, TARGET_SR, opts);
+    var ratio = NaN, nearest = NaN;
+    if (voiced && isFinite(w.F[0]) && p.f0 > 0) { ratio = w.F[0] / p.f0; nearest = Math.max(1, Math.round(ratio)); }
+    return {
+      voiced: voiced, f0: voiced ? p.f0 : NaN, note: voiced ? hzToNote(p.f0) : '--',
+      ap: p.ap, rmsDb: level, F: w.F, SD: w.sdOrder, BW: w.BW, nOrders: w.nOrders, merged: w.merged, refOrder: w.refOrder,
+      nPeaksRef: w.nPeaksRef, slotUnsure: slotGapUnsure(w.F, w.nPeaksRef),
+      f1f0: ratio, nearestHarmonic: nearest, windowSweep: false
+    };
+  }
+
+  /* ---------- Zweite Tonhöhenspur: kurze Ereignisse ---------- */
+
+  /* Die Hauptspur misst F0 auf einem Fenster von mindestens 60 ms. Ein Kiekser von 50 ms füllt
+     ein solches Fenster nie und verschwindet dadurch vollständig — gemessen: ein Oktavsprung von
+     50 ms ergibt null auffällige Rahmen, ab 90 ms ist er sauber zu sehen. Praat hat denselben
+     blinden Fleck aus einem anderen Grund (Glättung des Tonhöhenverlaufs).
+     Deshalb eine zweite Spur mit kurzem Fenster. Sie misst nur grob, taugt nicht für Formanten
+     und nicht für feine Tonhöhenarbeit — sie beantwortet eine einzige Frage: war da ein Sprung?
+     Der Mindestgrundton ist höher angesetzt (120 Hz), damit das Fenster überhaupt kurz sein kann:
+     tauMax = sr/fmin bestimmt, wie viel Signal für den Vergleich übrig bleibt. */
+  var FINE_WINDOW_S = 0.030, FINE_HOP_S = 0.005, FINE_FMIN = 120;
+
+  function pitchTrackFine(ds, sr, opts) {
+    opts = opts || {};
+    var winS = opts.windowS || FINE_WINDOW_S, hopS = opts.hopS || FINE_HOP_S;
+    var fmin = opts.fmin || FINE_FMIN, fmax = opts.fmax || 900;
+    var n = Math.round(winS * sr), hop = Math.max(1, Math.round(hopS * sr));
+    var m = 0, c;
+    for (c = n >> 1; c + (n >> 1) <= ds.length; c += hop) m++;
+    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), i = 0;
+    for (c = n >> 1; c + (n >> 1) <= ds.length && i < m; c += hop, i++) {
+      var p = detectF0(ds.subarray(c - (n >> 1), c - (n >> 1) + n), sr, fmin, fmax, opts.yinThresh);
+      t[i] = c / sr; f0[i] = p.f0; ap[i] = p.ap;
+    }
+    return { t: t, f0: f0, ap: ap, hopS: hopS, windowS: winS, fmin: fmin };
+  }
+
+  /* Sprünge in der kurzen Spur: Läufe, die mindestens minSemitones von der ruhigen Umgebung
+     abweichen. Unterschieden wird nach Dauer — eine Kante (unter 90 ms) ist eine Silbengrenze
+     oder ein Staccato-Ansatz, ein gehaltener Wechsel (ab 90 ms) ist ein Registerwechsel.
+     Die Grenze 90 ms ist übernommen, nicht gemessen; sie ist über opts.holdMs änderbar. */
+  function detectJumps(track, opts) {
+    opts = opts || {};
+    var minSt = (opts.minSemitones == null) ? 5 : opts.minSemitones;
+    var holdS = (opts.holdMs == null ? 90 : opts.holdMs) / 1000;
+    var apMax = (opts.apMax == null) ? 0.45 : opts.apMax;
+    var backS = (opts.referenceS == null) ? 0.20 : opts.referenceS;
+    var ruheSt = (opts.quietSemitones == null) ? 2 : opts.quietSemitones;
+    var maxOnset = (opts.maxOnsetFrames == null) ? 4 : opts.maxOnsetFrames;
+    var n = track.t.length, back = Math.max(3, Math.round(backS / track.hopS));
+    var ruhe = [], events = [], run = null, seitRuhe = 0, i, j;
+
+    for (i = 0; i < n; i++) {
+      var ok = isFinite(track.f0[i]) && track.ap[i] < apMax;
+      if (!ok) {
+        if (run) { if (run.dauerFrames >= 2) events.push(run); run = null; }
+        continue;
+      }
+      /* Bezug sind die ruhigen Rahmen VOR dem Ereignis. Während eines Laufs wird er eingefroren —
+         wandert er mit, endet ein gehaltener Sprung nach rund 80 ms von selbst und wird als Kante
+         gemeldet. Das ist derselbe Fehler, der gehaltene Registerwechsel unsichtbar macht. */
+      var ref = run ? run.ref : median(ruhe);
+      var st = (isFinite(ref) && ref > 0) ? 12 * Math.log2(track.f0[i] / ref) : NaN;
+      var drueber = isFinite(st) && Math.abs(st) >= minSt;
+
+      if (run) {
+        if (drueber) {
+          run.bis = track.t[i]; run.dauerFrames++;
+          if (Math.abs(st) > Math.abs(run.st)) { run.st = st; run.f0 = track.f0[i]; }
+        } else {
+          if (run.dauerFrames >= 2) events.push(run);
+          run = null; ruhe = []; seitRuhe = 0;
+        }
+      } else if (drueber) {
+        /* Ein Sprung muss schnell einsetzen. Ein Portamento erreicht dieselbe Weite, aber über
+           Hunderte Millisekunden — das ist Tonbewegung, kein Wechsel. */
+        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], st: st, ref: ref, f0: track.f0[i], dauerFrames: 1 };
+      }
+      if (!run) {
+        if (isFinite(st) && Math.abs(st) < ruheSt) { ruhe.push(track.f0[i]); seitRuhe = 0; }
+        else { ruhe.push(track.f0[i]); seitRuhe++; }
+        if (ruhe.length > back) ruhe.shift();
+      }
+    }
+    if (run && run.dauerFrames >= 2) events.push(run);
+
+    return events.map(function (e) {
+      var dauer = e.bis - e.von + track.hopS;
+      return { startS: e.von, dauerS: dauer, halbtoene: e.st, richtung: e.st > 0 ? 'auf' : 'ab',
+        vonHz: e.ref, nachHz: e.f0, art: dauer >= holdS ? 'gehalten' : 'kante' };
+    });
+  }
+
+  /* ---------- Synthese für Prüfsignale (Glottisimpulse durch Zweipol-Resonatoren) ---------- */
+
+  function resonate(x, f, bw, sr) {
+    var r = Math.exp(-Math.PI * bw / sr), th = 2 * Math.PI * f / sr;
+    var a1 = 2 * r * Math.cos(th), a2 = -r * r, b0 = 1 - a1 - a2;
+    var y = new Float64Array(x.length), y1 = 0, y2 = 0;
+    for (var i = 0; i < x.length; i++) { var v = b0 * x[i] + a1 * y1 + a2 * y2; y2 = y1; y1 = v; y[i] = v; }
+    return y;
+  }
+  /* opts.altRatio < 1: jeder zweite Impuls schwächer (Periodenverdopplung). opts.gain: Spitzenwert (0,7).
+     Die Impulse werden auf Bruchteile von Abtastwerten gesetzt (lineare Verteilung auf die beiden
+     Nachbarstellen). Auf ganze Abtastwerte gerundet wäre das Prüfsignal selbst nicht periodisch:
+     die Rundung erzeugt einen Zittereffekt, der sich alle zwei Perioden wiederholt — also genau die
+     Subharmonische, die der Kern finden soll. Prüfsignale müssen sauber sein, sonst prüfen sie nichts. */
+  function synthVowel(f0, forms, bws, dur, sr, opts) {
+    opts = opts || {};
+    var n = Math.round(dur * sr), src = new Float64Array(n), T = sr / f0, alt = (opts.altRatio == null) ? 1 : opts.altRatio;
+    for (var k = 0; k * T < n; k++) {
+      var pos = k * T, i0 = Math.floor(pos), fr = pos - i0, g = (k % 2) ? alt : 1;
+      for (var j = 0; j < 6; j++) {
+        var v = g * Math.cos(Math.PI * j / 12);
+        if (i0 + j < n) src[i0 + j] += v * (1 - fr);
+        if (i0 + j + 1 < n) src[i0 + j + 1] += v * fr;
+      }
+    }
+    var y = src;
+    for (var m = 0; m < forms.length; m++) y = resonate(y, forms[m], bws[m], sr);
+    var mx = 0;
+    for (var q = 0; q < n; q++) mx = Math.max(mx, Math.abs(y[q]));
+    var gain = (opts.gain == null) ? 0.7 : opts.gain;
+    for (var p = 0; p < n; p++) y[p] = gain * y[p] / mx;
+    return y;
+  }
+
+  var api = {
+    VERSION: VERSION, TARGET_SR: TARGET_SR, ORDERS: ORDERS, WINDOWS: WINDOWS, MAIN_WINDOW: MAIN_WINDOW,
+    SPREAD_MAX_HZ: SPREAD_MAX_HZ, SLOT_TOL_HZ: SLOT_TOL_HZ, MERGED_BW_HZ: MERGED_BW_HZ, BW_ARTIFACT_HZ: BW_ARTIFACT_HZ, SENTINEL: SENTINEL, OCTAVE_ODD_EVEN_DB: OCTAVE_ODD_EVEN_DB,
+    analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
+    detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
+    formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
+    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
+    decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
+    median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,
+    nextPow2: nextPow2, pitchTrackFine: pitchTrackFine, detectJumps: detectJumps,
+    FINE_WINDOW_S: FINE_WINDOW_S, FINE_HOP_S: FINE_HOP_S, FINE_FMIN: FINE_FMIN, synthVowel: synthVowel, resonate: resonate, lowpassFor: lowpassFor, lowpassBank: lowpassBank,
+    _burg: burg, _formantsFromLPC: formantsFromLPC, _detectF0: detectF0, _resample: resample
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.VAREDSP = api;
+})(typeof self !== 'undefined' ? self : this);

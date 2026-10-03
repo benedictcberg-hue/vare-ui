@@ -1,0 +1,686 @@
+/* VARE — Verdrahtung: Routen, Mikrofon, Live-Schleife, Kalibrierung, Take, Chronik, Export/Import.
+   Reines Browser-Skript. Rechnet im requestAnimationFrame (25 Hz), Offline-Analyse in Häppchen. */
+(function () {
+  'use strict';
+  var D = window.VAREDSP, KO = window.VAREKORPUS, V = window.VAREVOWEL, A = window.VAREANALYSIS, C = window.VARECSV, W = window.VAREWAV, S = window.VARESTORE, K = window.VARECAL, R = window.VARERECORDER, CH = window.VARECHRONIK;
+  var $ = function (id) { return document.getElementById(id); };
+  var TSR = D.TARGET_SR, COL = CH.COL, MONO = CH.MONO;
+
+  function hintText() {
+    return 'Gestrichelt in Rost = Messwert unsicher: Streuung über Ordnungen oder Fensterlängen ≥ '
+      + (st.settings ? st.settings.spreadMaxHz : 130) + ' Hz, oder Zuordnung unsicher. Gold ohne Strich = sicher gemessen, aber Befund. '
+      + 'H1−H2 ist bei F1 ≈ F0 filtergetrieben und erlaubt keine Quellaussage.';
+  }
+  var SETTINGS_DEFAULT = { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500, smooth: 0.35, spreadMaxHz: 130, hopS: 0.010, storeAudio: true, audioFormat: 'i16', csvDialect: 'standard', requireCal: true, minTakeS: 1.0 };
+  var SETTING_DEFS = [
+    { key: 'windowS', label: 'Gatter-Fenster (s) — Vorgabe 0,30', min: 0.15, max: 0.60, step: 0.05, dec: 2 },
+    { key: 'sdF1Max', label: 'F1 darf sich im Fenster bewegen (Hz, q90−q10) — Vorgabe 50', min: 20, max: 150, step: 5 },
+    { key: 'sdF2Max', label: 'F2 darf sich im Fenster bewegen (Hz) — Vorgabe 100', min: 40, max: 300, step: 10 },
+    { key: 'minValidShare', label: 'Mindestanteil gültiger F1/F2 im Fenster — Vorgabe 0,80', min: 0.5, max: 1, step: 0.05, dec: 2 },
+    { key: 'f3MinHz', label: 'F3 mindestens (Hz), sonst keine ΔF3–4-Wertung — Vorgabe 2500', min: 2000, max: 3000, step: 50 },
+    { key: 'smooth', label: 'Glättung der Formantanzeige (Faktor, 1 = keine) — Vorgabe 0,35', min: 0.1, max: 1, step: 0.05, dec: 2 },
+    { key: 'spreadMaxHz', label: 'Gültigkeitsgrenze Streuung (Hz) — Vorgabe 130, bitte nicht anheben', min: 60, max: 250, step: 10 },
+    { key: 'hopS', label: 'Rahmenabstand Offline-Analyse (s) — Vorgabe 0,010', min: 0.005, max: 0.05, step: 0.005, dec: 3 },
+    { key: 'storeAudio', type: 'check', label: 'Audio (WAV) mit speichern — nötig für Neu-Analyse nach Kernänderungen' },
+    { key: 'audioFormat', type: 'select', options: [['i16', '16 Bit (5,8 MB/min bei 48 kHz)'], ['f32', 'Float32 (11,5 MB/min)']], label: 'WAV-Format' },
+    { key: 'csvDialect', type: 'select', options: [['standard', 'Standard: Komma, Punkt (pandas)'], ['excelde', 'Excel DE: Semikolon, Dezimalkomma']], label: 'CSV-Dialekt' },
+    { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
+  ];
+
+  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, cal: null, calSession: false, takes: [], audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null };
+
+  /* ---------- Hilfen ---------- */
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function uuid() { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); var s = ''; for (var i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16); return s; }
+  function codeFromIndex(n) { var s = ''; n = n + 1; while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; }
+  function defaultLabel(code, d) { return code + ' ' + d.getDate() + '.' + (d.getMonth() + 1) + '. ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function stamp(d) { return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()); }
+  function fmt(v, dec) { return CH.fmt(v, dec); }
+  function download(name, blob) {
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+  function status(msg, warn) {
+    if (!st.statusEl) { st.statusEl = document.createElement('div'); st.statusEl.className = 'notice'; st.statusEl.setAttribute('role', 'status'); document.querySelector('main').insertBefore(st.statusEl, document.querySelector('main').firstChild); }
+    st.statusEl.hidden = !msg; st.statusEl.textContent = msg || ''; st.statusEl.className = 'notice' + (warn ? ' warn' : '');
+  }
+  function bytesText(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' kB'; }
+  function gateOpts() { var s = st.settings; return { windowS: s.windowS, sdF1Max: s.sdF1Max, sdF2Max: s.sdF2Max, minValidShare: s.minValidShare, f3MinHz: s.f3MinHz }; }
+  function b64FromBuffer(buf) { var u = new Uint8Array(buf), s = ''; for (var i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); }
+  function blobFromB64(b64, type) { var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Blob([u], { type: type || 'audio/wav' }); }
+
+  /* ---------- Einstellungen ---------- */
+  function loadSettings() {
+    return S.getMeta('settings', {}).then(function (saved) {
+      st.settings = {}; for (var k in SETTINGS_DEFAULT) st.settings[k] = (saved && saved[k] != null) ? saved[k] : SETTINGS_DEFAULT[k];
+      st.touched = (saved && saved.__touched) || {};
+      st.gate = V.createGate(gateOpts());
+    }).catch(function () { st.settings = Object.assign({}, SETTINGS_DEFAULT); st.gate = V.createGate(gateOpts()); });
+  }
+  var saveTimer = 0;
+  function saveSettings() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      var o = {}; for (var k in st.settings) o[k] = st.settings[k];
+      o.__touched = st.touched;
+      S.setMeta('settings', o).catch(function () { });
+    }, 300);
+  }
+  function renderSettings() {
+    var el = $('settings'); el.innerHTML = '';
+    SETTING_DEFS.forEach(function (d) {
+      var wrap = document.createElement('div'), v = st.settings[d.key];
+      if (d.type === 'check') {
+        wrap.innerHTML = '<label class="inline"><input type="checkbox" id="s-' + d.key + '"' + (v ? ' checked' : '') + '> ' + d.label + '</label>';
+        wrap.querySelector('input').addEventListener('change', function (e) { st.settings[d.key] = e.target.checked; st.touched[d.key] = true; saveSettings(); updateTakeButton(); });
+      } else if (d.type === 'select') {
+        wrap.innerHTML = '<label>' + d.label + ' <select id="s-' + d.key + '">' + d.options.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === v ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>';
+        wrap.querySelector('select').addEventListener('change', function (e) { st.settings[d.key] = e.target.value; st.touched[d.key] = true; saveSettings(); });
+      } else {
+        wrap.className = 'setting';
+        wrap.innerHTML = '<label for="s-' + d.key + '">' + d.label + '</label><output id="o-' + d.key + '">' + Number(v).toFixed(d.dec || 0) + '</output><input type="range" id="s-' + d.key + '" min="' + d.min + '" max="' + d.max + '" step="' + d.step + '" value="' + v + '" class="voll">';
+        wrap.querySelector('input').addEventListener('input', function (e) {
+          st.settings[d.key] = parseFloat(e.target.value); st.touched[d.key] = true; wrap.querySelector('output').textContent = Number(st.settings[d.key]).toFixed(d.dec || 0);
+          st.gate = V.createGate(gateOpts()); saveSettings(); $('live-hints').textContent = hintText();
+        });
+      }
+      el.appendChild(wrap);
+    });
+  }
+
+  /* ---------- Routen ---------- */
+  function route() {
+    var h = location.hash || '#/aufnahme', m = /^#\/take\/(.+)$/.exec(h);
+    $('view-aufnahme').hidden = !(h === '#/aufnahme' || h === '#/');
+    $('view-chronik').hidden = h !== '#/chronik';
+    $('view-take').hidden = !m;
+    $('nav-aufnahme').setAttribute('aria-current', $('view-aufnahme').hidden ? 'false' : 'page');
+    $('nav-chronik').setAttribute('aria-current', $('view-chronik').hidden ? 'false' : 'page');
+    if (h === '#/chronik') refreshChronik();
+    if (m) openDetail(decodeURIComponent(m[1]));
+  }
+
+  /* ---------- Mikrofon ---------- */
+  function fillDevices() {
+    R.listDevices().then(function (ds) {
+      var sel = $('mic-device'), cur = sel.value; sel.innerHTML = '<option value="">Standard</option>';
+      ds.forEach(function (d, i) { var o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || ('Mikrofon ' + (i + 1)); sel.appendChild(o); });
+      sel.value = cur;
+    }).catch(function () { });
+  }
+  function micToggle() {
+    if (st.rec && st.rec.active) {
+      if (st.taking) { status('Erst den Take beenden.', true); return; }
+      if (st.calRunning) { status('Erst die Kalibrierung abwarten.', true); return; }
+      st.rec.stop().then(function () { $('btn-mic').textContent = 'Mikrofon starten'; $('mic-info').textContent = 'kein Mikrofon aktiv'; cancelAnimationFrame(st.raf); updateTakeButton(); $('btn-cal').disabled = true; st.hist = []; drawHist(); freezeLive('Mikrofon aus'); });
+      return;
+    }
+    var rec = R.createRecorder();
+    $('btn-mic').disabled = true;
+    rec.start($('mic-device').value || null).then(function (info) {
+      st.rec = rec; $('btn-mic').disabled = false; $('btn-mic').textContent = 'Mikrofon stoppen';
+      var rateTxt = (info.trackSampleRate && info.trackSampleRate !== info.sampleRate)
+        ? ('Gerät ' + info.trackSampleRate + ' Hz → Kontext ' + info.sampleRate + ' Hz') : (info.sampleRate + ' Hz');
+      $('mic-info').textContent = info.deviceLabel + ' · ' + rateTxt + ' · ' + info.capture;
+      if (info.trackSampleRate && info.trackSampleRate < 16000) status('Das Gerät liefert nur ' + info.trackSampleRate + ' Hz (Freisprechprofil eines Bluetooth-Headsets?). Oberhalb von ' + Math.round(info.trackSampleRate / 2) + ' Hz ist dann nichts mehr messbar — F3 bis F5 sind damit wertlos.', true);
+      var on = [];
+      if (info.echoCancellation === true) on.push('Echo-Unterdrückung'); if (info.noiseSuppression === true) on.push('Rauschunterdrückung'); if (info.autoGainControl === true) on.push('automatische Verstärkung');
+      $('notice-flags').hidden = !on.length;
+      $('notice-flags').textContent = on.length ? 'Der Browser bearbeitet das Signal (' + on.join(', ') + ' aktiv). Diese Messungen sind dann nicht belastbar — anderes Gerät oder Browsereinstellung prüfen.' : '';
+      $('btn-cal').disabled = false; updateTakeButton(); fillDevices();
+      st.rmsRing = []; st.hist = []; st.lastTick = 0; st.gate.reset();
+      st.raf = requestAnimationFrame(tick);
+    }).catch(function (e) { $('btn-mic').disabled = false; status('Mikrofon: ' + (e && e.message || e), true); });
+  }
+
+  /* ---------- Live-Schleife ---------- */
+  function floorNow() {
+    if (st.cal) return { db: st.cal.floorDb, src: 'kalibriert' };
+    if (st.rmsRing.length < 25) return { db: -67, src: 'Vorgabe' };
+    var q05 = D.quantile(st.rmsRing, 0.05), q50 = D.quantile(st.rmsRing, 0.5);
+    return { db: Math.max(-90, Math.min(q05, q50 - 20)), src: 'geschätzt' };
+  }
+  function tick(now) {
+    st.raf = requestAnimationFrame(tick);
+    if (!st.rec || !st.rec.active || st.calRunning) return;
+    if (now - st.lastTick < 40) return;
+    st.lastTick = now;
+    /* Nachweis, dass überhaupt noch Abtastwerte ankommen. „active“ heißt nur, dass ein AudioContext
+       existiert — wechselt Windows das Ausgabegerät oder schläft der Kontext ein, friert der
+       Ringpuffer ein und die letzte Messung stünde unverändert als Live-Wert auf dem Schirm. */
+    var seen = st.rec.samplesSeen;
+    if (seen !== st.lastSeen) { st.lastSeen = seen; st.lastSeenAt = now; }
+    else if (now - (st.lastSeenAt || now) > 300) {
+      freezeLive('kein Signal vom Mikrofon — Gerät oder Ausgabegerät gewechselt?');
+      if (st.taking && !st.noSignalWarned) { st.noSignalWarned = true; status('Kein Signal vom Mikrofon — der laufende Take ist nicht verwertbar.', true); }
+      return;
+    }
+    st.noSignalWarned = false;
+    var sr = st.rec.sampleRate, slice = st.rec.latest(0.2);
+    if (slice.length < Math.round(0.19 * sr)) return;
+    var ds = D.resample(slice, sr, TSR), fl = floorNow();
+    var fr = D.analyseAt(ds, TSR, ds.length - 1, { align: 'end', floorDb: fl.db, spreadMaxHz: st.settings.spreadMaxHz, wantSpectrum: true });
+    st.rmsRing.push(fr.rmsDb); if (st.rmsRing.length > 250) st.rmsRing.shift();
+    var t = now / 1000;
+    var gs = st.gate.update({ t: t, voiced: fr.voiced, F1: fr.F[0], F2: fr.F[1], F3: fr.F[2], valid1: fr.valid[0], valid2: fr.valid[1], d34: fr.d34, d34valid: fr.d34valid });
+    // Nur stimmhafte Rahmen in den Verlauf: dsp.js füllt F und valid auch in Pausen, und ein
+    // Formantpunkt aus Raumgeräusch sah in der 20-s-Spur genauso aus wie ein Messwert.
+    st.hist.push({ t: t, f2: fr.voiced ? fr.F[1] : NaN, f3: fr.voiced ? fr.F[2] : NaN,
+      f0x2: fr.voiced ? 2 * fr.f0 : NaN, v2: fr.voiced && fr.valid[1], v3: fr.voiced && fr.valid[2] });
+    while (st.hist.length && st.hist[0].t < t - 20) st.hist.shift();
+    renderLive(fr, gs, fl);
+  }
+  var STAT_KEYS = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'd34', 'd45', 'sfr', 'shr', 'cpp', 'h1h2', 'tube', 'floor'];
+  /* Alles, was eine Messung zeigt, sichtbar einfrieren — in einem Zug, damit es nicht wieder
+     auseinanderläuft. Nach „Mikrofon stoppen“ und während der Kalibrierung blieben sonst die
+     letzten Zahlen in Gold stehen, als würden sie weiter gemessen. */
+  function freezeLive(reason) {
+    STAT_KEYS.forEach(function (k) { setStat(k, 'Pause', false, true); });
+    st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false]; st.lastCls = null;
+    setGateWord('pause', null, reason);
+    drawLevel(NaN, st.cal ? st.cal.floorDb : -67);
+    drawD34({ state: 'pause', score: NaN, reason: reason }, null);
+    drawSpec({ voiced: false, F: [], valid: [], BW: [], spectrumDb: null }, null);
+    $('live-ref').textContent = '';
+    $('live-hints').textContent = hintText();
+  }
+
+  function setGateWord(state, cls, reason) {
+    var el = $('gate-state'); el.className = state;
+    el.textContent = state === 'pause' ? 'Pause' : state === 'uebergang' ? 'Übergang' : 'stabil /' + cls + '/';
+    $('gate-reason').textContent = reason || '';
+  }
+  /* Drei Zustände, nicht zwei: Rost und gestrichelt heißt „Messwert trägt nicht“. Ein Befund, der
+     sicher gemessen ist und trotzdem Aufmerksamkeit braucht — F3 unter dem Zielwert, SHR über der
+     Warnschwelle —, bekommt Gold ohne Strich. Sonst heißt dieselbe Markierung zweierlei. */
+  function setStat(id, text, unsure, frozen, note) {
+    var el = $('st-' + id); el.className = 'stat' + (unsure ? ' unsure' : (note ? ' note' : '')) + (frozen ? ' frozen' : '');
+    $('v-' + id).textContent = text;
+  }
+  function renderLive(fr, gs, fl) {
+    drawLevel(fr.rmsDb, fl.db);
+    setStat('floor', fmt(fl.db, 1) + ' dBFS (' + fl.src + ')', fl.src !== 'kalibriert');
+    var cls = gs.state === 'stabil' ? gs.cls : null;
+    if (cls !== st.lastCls || gs.state === 'pause') { st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false]; }
+    st.lastCls = cls;
+    setGateWord(gs.state, gs.cls, gs.reason);
+    if (fr.tonalButAperiodic) {
+      // Lauter Ton, aber kein Periodenbezug — das ist etwas anderes als Stille und darf nicht
+      // „Pause“ heißen. Alle abgeleiteten Werte bleiben leer, der Pegel wird weiter gezeigt.
+      STAT_KEYS.forEach(function (k) { if (k !== 'floor') setStat(k, '–', true); });
+      setGateWord('uebergang', null, 'Ton, aber kein Periodenbezug (' + fmt(fr.rmsDb, 1) + ' dBFS) — Vibrato, Knarren oder Geräusch?');
+      drawD34({ state: 'uebergang', score: NaN, reason: 'kein Periodenbezug' }, null); drawSpec(fr, null); drawHist(); $('live-ref').textContent = '';
+      return;
+    }
+    if (!fr.voiced) {
+      STAT_KEYS.forEach(function (k) { if (k !== 'floor') setStat(k, 'Pause', false, true); });
+      st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false];
+      drawD34(gs, null); drawSpec(fr, null); drawHist(); $('live-ref').textContent = '';
+      return;
+    }
+    /* Die Glättung darf keine Lücke überbrücken: war ein Formant zwischendurch ungültig, ist der
+       alte Wert kein Nachbar mehr, und ein Mischwert aus beiden stünde ungestrichelt in Gold da.
+       Nach einer Lücke oder einem Sprung über die Streuungsgrenze beginnt sie neu. */
+    var a = st.settings.smooth, disp = [];
+    for (var k = 0; k < 5; k++) {
+      if (fr.valid[k]) {
+        if (!st.lastValid[k] || !isFinite(st.smooth[k]) || Math.abs(fr.F[k] - st.smooth[k]) > st.settings.spreadMaxHz) st.smooth[k] = fr.F[k];
+        else st.smooth[k] = a * fr.F[k] + (1 - a) * st.smooth[k];
+      }
+      st.lastValid[k] = !!fr.valid[k];
+      disp.push(fr.valid[k] ? st.smooth[k] : fr.F[k]);
+    }
+    var f0Note = fr.octaveCorrected ? ' (Teiler ' + fr.subFactor + ' aus Teiltonreihe)' : (fr.octaveAmbiguous ? ' (Subharmonische nahe der Schwelle — Oktave unsicher)' : '');
+    setStat('f0', fmt(fr.f0, 1) + ' Hz ' + fr.note + f0Note, fr.octaveCorrected || fr.octaveAmbiguous);
+    // Warum ein Formant unsicher ist, gehört neben die Zahl — „Zuordnung unsicher“ heißt etwas
+    // anderes als „Streuung zu groß“: im ersten Fall ist womöglich der falsche Formant gemeint.
+    function why(k) { return fr.slotUnsure[k] ? ' — Zuordnung unsicher, nur ' + fr.nPeaksRef + ' Resonanzen' : (fr.valid[k] ? '' : ' — Streuung'); }
+    setStat('f1', fmt(fr.F[0]) + ' Hz · ' + fmt(fr.f1f0, 2) + ' (H' + fmt(fr.nearestHarmonic) + ')' + why(0), !fr.valid[0]);
+    setStat('f2', fmt(disp[1]) + ' Hz' + why(1), !fr.valid[1]);
+    // Rost heißt „Messwert trägt nicht“. „F3 unter dem Zielwert“ ist eine sichere Messung und
+    // gehört in den Text, nicht in die Warnfarbe.
+    var f3Low = isFinite(fr.F[2]) && fr.F[2] < st.settings.f3MinHz;
+    setStat('f3', fmt(disp[2]) + ' Hz' + why(2) + (f3Low ? ' · unter ' + st.settings.f3MinHz + ', nicht gewertet' : ''), !fr.valid[2], false, fr.valid[2] && f3Low);
+    setStat('f4', fmt(disp[3]) + ' Hz' + why(3), !fr.valid[3]);
+    setStat('f5', fmt(disp[4]) + ' Hz' + why(4), !fr.valid[4]);
+    setStat('d34', fmt(fr.d34) + ' Hz' + (isFinite(gs.score) ? ' gewertet' : ' — nicht gewertet' + (gs.reason ? ': ' + gs.reason : '')), !fr.d34valid, false, fr.d34valid && !isFinite(gs.score));
+    setStat('d45', fmt(fr.d45) + ' Hz', !fr.d45valid);
+    setStat('sfr', fmt(fr.sfr, 1) + ' dB', false);
+    // SHR über der Warnschwelle ist ein Befund (Ventrikularfalten), keine Messunsicherheit.
+    setStat('shr', fmt(fr.shr, 1) + ' dB' + (fr.shrGrid > fr.f0 * 1.5 ? ' (Raster ' + fmt(fr.shrGrid) + ' Hz = ' + D.hzToNote(fr.shrGrid) + ')' : ''), false, false, fr.shr > -15);
+    setStat('cpp', fmt(fr.cpp, 1) + ' dB', false);
+    setStat('h1h2', fmt(fr.h1h2, 1) + ' · ' + fmt(fr.h1h2c, 1) + ' dB' + (fr.h1h2unsure ? ' (filtergetrieben)' : ''), fr.h1h2unsure);
+    var hint = $('live-hints');
+    if (fr.sparseHarmonics) hint.innerHTML = 'Grundton über 250 Hz: zwischen den Teiltönen liegt kein Messpunkt, ein Formant kann bis zu ±' + fmt(fr.harmonicPullHz) + ' Hz auf dem nächsten Teilton einrasten. Die Streuung der Sweeps zeigt das nicht an.';
+    else hint.textContent = hintText();
+    var tl = D.tubeLength(fr.F, fr.valid);
+    setStat('tube', isFinite(tl.cm) ? fmt(tl.cm, 1) + ' cm (ΔF ' + fmt(tl.dF) + ')' : '– (zu wenig stabile Formanten)', !isFinite(tl.cm));
+    var ref = cls ? st.refs[cls] : null;
+    if (cls) $('live-ref').textContent = ref ? 'Referenz /' + cls + '/: ' + fmt(ref.d34) + ' Hz (' + ref.code + ', ' + CH.dateShort(ref.date) + ')' + (isFinite(gs.score) ? ' — live ' + fmt(gs.score) + ' (' + (gs.score - ref.d34 >= 0 ? '+' : '') + fmt(gs.score - ref.d34) + ')' : '') : 'keine Referenz für /' + cls + '/ — die erste stabile Aufnahme setzt sie';
+    else $('live-ref').textContent = '';
+    drawD34(gs, ref); drawSpec(fr, disp); drawHist();
+  }
+  function drawLevel(rms, floor) {
+    var c = CH.setupCanvas($('level-canvas'), 40), ctx = c.ctx, w = c.w, x = function (db) { return (Math.max(-80, Math.min(0, db)) + 80) / 80 * w; };
+    ctx.fillStyle = COL.line; ctx.fillRect(0, 12, w, 16);
+    if (isFinite(rms)) { ctx.fillStyle = rms > -3 ? COL.rust : COL.ink; ctx.fillRect(0, 12, x(rms), 16); }
+    ctx.strokeStyle = COL.muted; ctx.beginPath(); ctx.moveTo(x(floor), 6); ctx.lineTo(x(floor), 34); ctx.stroke();
+    ctx.strokeStyle = COL.rust; ctx.beginPath(); ctx.moveTo(x(floor + 12), 6); ctx.lineTo(x(floor + 12), 34); ctx.stroke();
+    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'right'; ctx.fillText(fmt(rms, 1) + ' dBFS', w - 4, 10); ctx.textAlign = 'left'; ctx.fillText('Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB', 4, 10);
+  }
+  function drawD34(gs, ref) {
+    var c = CH.setupCanvas($('d34-canvas'), 56), ctx = c.ctx, w = c.w, x = function (v) { return Math.max(0, Math.min(w, v / 1600 * w)); };
+    ctx.fillStyle = COL.line; ctx.fillRect(0, 26, w, 6);
+    ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'center';
+    (st.korpus && st.korpus.marken || []).forEach(function (m) { ctx.fillRect(x(m.hz) - 1, 20, 2, 18); ctx.fillText(String(m.hz), x(m.hz), 52); });
+    if (ref && isFinite(ref.d34)) { ctx.fillStyle = COL.gold; ctx.beginPath(); ctx.moveTo(x(ref.d34), 18); ctx.lineTo(x(ref.d34) - 6, 8); ctx.lineTo(x(ref.d34) + 6, 8); ctx.closePath(); ctx.fill(); ctx.textAlign = x(ref.d34) < 60 ? 'left' : 'right'; ctx.fillText('Ref ' + fmt(ref.d34) + ' ', x(ref.d34) + (x(ref.d34) < 60 ? 8 : -8), 12); }
+    if (isFinite(gs.score)) { ctx.fillStyle = COL.gold; ctx.fillRect(x(gs.score) - 2, 14, 4, 30); ctx.textAlign = x(gs.score) > w - 70 ? 'right' : 'left'; ctx.fillText(fmt(gs.score) + ' Hz', x(gs.score) + (x(gs.score) > w - 70 ? -8 : 8), 12); }
+    else { ctx.fillStyle = gs.state === 'pause' ? COL.muted : COL.rust; ctx.textAlign = 'left'; ctx.fillText(gs.state === 'pause' ? 'Pause' : (gs.state === 'uebergang' ? 'Übergang — keine Wertung' : 'stabil, aber ' + gs.reason), 4, 14); }
+  }
+  function drawSpec(fr, disp) {
+    var c = CH.setupCanvas($('spec-canvas'), 170), ctx = c.ctx, w = c.w, h = c.h, x = function (f) { return f / 5000 * w; };
+    ctx.fillStyle = 'rgba(201,162,39,0.10)'; ctx.fillRect(x(2400), 0, x(3200) - x(2400), h);
+    ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'center';
+    for (var f = 1000; f <= 4000; f += 1000) { ctx.fillRect(x(f), h - 14, 1, 4); ctx.fillText(f + '', x(f), h - 2); }
+    if (fr.spectrumDb) {
+      ctx.strokeStyle = COL.line; ctx.beginPath();
+      var df = TSR / 2048, nb = Math.min(fr.spectrumDb.length, Math.floor(5000 / df));
+      for (var k = 1; k < nb; k++) { var y = h - 18 - (Math.max(-100, Math.min(0, fr.spectrumDb[k])) + 100) / 100 * (h - 40); if (k === 1) ctx.moveTo(x(k * df), y); else ctx.lineTo(x(k * df), y); }
+      ctx.stroke();
+    }
+    if (!fr.voiced) { ctx.fillStyle = COL.muted; ctx.textAlign = 'left'; ctx.fillText('Pause', 6, 14); return; }
+    for (var m = 1; m * fr.f0 < 5000; m++) { ctx.fillStyle = (m === fr.nearestHarmonic) ? COL.gold : COL.muted; ctx.fillRect(x(m * fr.f0) - (m === fr.nearestHarmonic ? 1.5 : 0.5), 8, m === fr.nearestHarmonic ? 3 : 1, 34); }
+    ctx.fillStyle = COL.muted; ctx.textAlign = 'left'; ctx.fillText('Teiltöne ' + fmt(fr.f0, 1) + ' Hz, H' + fr.nearestHarmonic + ' an F1', 6, 52);
+    for (var i = 0; i < 5; i++) {
+      var F = disp ? disp[i] : fr.F[i];
+      if (!isFinite(F)) continue;
+      var bw = Math.max(6, x(isFinite(fr.BW[i]) ? fr.BW[i] : 60)), xc = x(F), yb = 70 + i * 16;
+      if (fr.valid[i]) { ctx.fillStyle = COL.gold; ctx.fillRect(xc - bw / 2, yb, bw, 10); }
+      else { ctx.strokeStyle = COL.rust; ctx.setLineDash([3, 3]); ctx.strokeRect(xc - bw / 2, yb, bw, 10); ctx.setLineDash([]); }
+      ctx.fillStyle = fr.valid[i] ? COL.ink : COL.rust; ctx.textAlign = 'left'; ctx.fillText('F' + (i + 1) + ' ' + fmt(F), xc + bw / 2 + 3, yb + 9);
+    }
+    function bracket(i, j, y) {
+      if (!(fr.valid[i] && fr.valid[j])) return;
+      var a = x(disp ? disp[i] : fr.F[i]), b = x(disp ? disp[j] : fr.F[j]);
+      ctx.strokeStyle = COL.gold; ctx.beginPath(); ctx.moveTo(a, y); ctx.lineTo(a, y + 6); ctx.lineTo(b, y + 6); ctx.lineTo(b, y); ctx.stroke();
+      // Die Klammer darf an der geglätteten Bandlage hängen, die ZAHL muss die rohe sein — sonst
+      // stehen für dieselbe Größe zwei verschiedene Werte gleichzeitig auf dem Schirm.
+      ctx.fillStyle = COL.gold; ctx.textAlign = 'center'; ctx.fillText('Δ ' + fmt(fr.F[j] - fr.F[i]) + ' Hz', (a + b) / 2, y + 16);
+    }
+    bracket(2, 3, 150); bracket(3, 4, 132);
+  }
+  function drawHist() {
+    var c = CH.setupCanvas($('hist-canvas'), 140), ctx = c.ctx, w = c.w, h = c.h, now = st.hist.length ? st.hist[st.hist.length - 1].t : 0;
+    var x = function (t) { return w - (now - t) / 20 * w; }, y = function (f) { return h - 12 - Math.max(0, Math.min(4000, f)) / 4000 * (h - 20); };
+    ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'left';
+    [1000, 2000, 3000].forEach(function (f) { ctx.fillStyle = COL.line; ctx.fillRect(0, y(f), w, 1); ctx.fillStyle = COL.muted; ctx.fillText(f + '', 2, y(f) - 2); });
+    ctx.fillText('F3 gold · F2 hell · 2·F0 grau · hohl = instabil — letzte 20 s', 2, 10);
+    for (var i = 0; i < st.hist.length; i++) {
+      var e = st.hist[i], xx = x(e.t);
+      if (isFinite(e.f0x2)) { ctx.fillStyle = COL.muted; ctx.fillRect(xx - 1, y(e.f0x2) - 1, 2, 2); }
+      if (isFinite(e.f2)) { if (e.v2) { ctx.fillStyle = COL.ink; ctx.fillRect(xx - 1, y(e.f2) - 1, 2, 2); } else { ctx.strokeStyle = COL.rust; ctx.strokeRect(xx - 1.5, y(e.f2) - 1.5, 3, 3); } }
+      if (isFinite(e.f3)) { if (e.v3) { ctx.fillStyle = COL.gold; ctx.fillRect(xx - 1.5, y(e.f3) - 1.5, 3, 3); } else { ctx.strokeStyle = COL.rust; ctx.strokeRect(xx - 1.5, y(e.f3) - 1.5, 3, 3); } }
+    }
+  }
+
+  /* ---------- Kalibrierung ---------- */
+  function renderCalStatus(warnings) {
+    var c = st.cal, el = $('cal-status');
+    if (!c) { el.innerHTML = 'Noch keine Kalibrierung in dieser Sitzung.' + (st.settings.requireCal ? ' <span class="rust">Ohne Kalibrierung ist kein Take möglich.</span>' : ''); }
+    else el.innerHTML = 'Kalibriert ' + CH.esc(CH.dateShort(c.createdAt)) + ' · ' + CH.esc(c.deviceLabel) + ' · Rauschboden <span class="mono">' + fmt(c.floorDb, 1) + ' dBFS</span> · /a/ <span class="mono">' + fmt(c.levelDb, 1) + ' dBFS</span> · SNR <span class="mono">' + fmt(c.snrDb, 1) + ' dB</span> (Band 2,4–3,2 kHz <span class="mono">' + fmt(c.bandSnr && c.bandSnr.sf, 1) + ' dB</span>) · Ausklang <span class="mono">' + fmt(c.decayDbPerS, 0) + ' dB/s</span> · F1–F3 des /a/ <span class="mono">' + (c.F || []).slice(0, 3).map(function (v) { return fmt(v); }).join(' / ') + '</span>' + (c.snrDb < 30 ? ' <span class="rust">SNR unter 30 dB — Messungen im Sängerformantband unsicher.</span>' : '');
+    $('cal-warnings').innerHTML = warnings && warnings.length ? 'Kette gegenüber der letzten Kalibrierung verändert: ' + warnings.map(CH.esc).join(' · ') : '';
+  }
+  function calibrate() {
+    if (!st.rec || !st.rec.active || st.calRunning || st.taking) return;
+    freezeLive('Kalibrierung läuft');
+    st.calRunning = true; $('btn-cal').disabled = true; $('cal-progress').hidden = false; updateTakeButton();
+    var phases = K.PHASES, t0 = performance.now(), total = K.totalSeconds();
+    st.rec.beginTake();
+    var iv = setInterval(function () {
+      var el = (performance.now() - t0) / 1000, acc = 0, cur = null, left = 0;
+      for (var i = 0; i < phases.length; i++) { if (el < acc + phases[i].seconds) { cur = phases[i]; left = acc + phases[i].seconds - el; break; } acc += phases[i].seconds; }
+      if (cur) { $('cal-progress').textContent = cur.label + ' — noch ' + left.toFixed(1) + ' s'; drawLevel(st.rec.latest(0.1).length ? D.rmsDb(st.rec.latest(0.1)) : NaN, st.cal ? st.cal.floorDb : -67); }
+      if (el >= total + 0.1 || !st.rec || !st.rec.active) {
+        clearInterval(iv);
+        if (!st.rec || !st.rec.active) { st.calRunning = false; $('btn-cal').disabled = true; $('cal-progress').hidden = true; status('Kalibrierung abgebrochen — Mikrofon nicht mehr aktiv.', true); updateTakeButton(); return; }
+        var take = st.rec.endTake();
+        if (take.durationS < total - 0.3) {
+          st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+          status('Kalibrierung abgebrochen (' + take.durationS.toFixed(1).replace('.', ',') + ' s von ' + total + ' s aufgenommen) — nicht übernommen.', true);
+          return;
+        }
+        $('cal-progress').textContent = 'Auswertung …';
+        setTimeout(function () {
+          try {
+            var info = st.rec.info, rec = K.analyseCalibration(take.samples, take.sampleRate, { deviceLabel: info.deviceLabel, deviceId: info.deviceId, createdAt: new Date().toISOString(), id: 'cal-' + uuid() });
+            rec.captureFlags = { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl };
+            /* Eine Kalibrierung, die keine Zahlen hergibt, darf nicht als Bezug gelten: sonst
+               rechnet jeder Take danach gegen einen Rauschboden, den es nicht gibt. */
+            var fehlt = [];
+            if (!isFinite(rec.floorDb)) fehlt.push('Rauschboden');
+            if (!isFinite(rec.levelDb) || !rec.nVoiced) fehlt.push('/a/ nicht erkannt');
+            if (!isFinite(rec.snrDb)) fehlt.push('SNR');
+            if (fehlt.length) {
+              st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+              status('Kalibrierung unbrauchbar (' + fehlt.join(', ') + ') — nicht übernommen. Lauter singen, näher ans Mikrofon, Ablauf wiederholen.', true);
+              return;
+            }
+            S.allCalibrations().then(function (all) {
+              var prev = all.filter(function (c) { return c.deviceLabel === rec.deviceLabel; })[0] || all[0] || null;
+              var warnings = K.compare(prev, rec);
+              st.cal = rec; st.calSession = true; st.rmsRing = [];
+              return S.putCalibration(rec).then(function () { renderCalStatus(warnings); });
+            }).catch(function (e) { status('Kalibrierung konnte nicht gespeichert werden: ' + e.message, true); }).then(function () {
+              st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+            });
+          } catch (e) { st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; status('Kalibrierung fehlgeschlagen: ' + e.message, true); updateTakeButton(); }
+        }, 20);
+      }
+    }, 100);
+  }
+
+  /* ---------- Take ---------- */
+  function updateTakeButton() {
+    var ok = st.rec && st.rec.active && !st.calRunning && !st.busy && (!st.settings.requireCal || st.calSession);
+    $('btn-take').disabled = !ok && !st.taking;
+    $('take-hint').textContent = !st.rec || !st.rec.active ? 'Mikrofon starten, dann kalibrieren, dann Take.' : (st.settings.requireCal && !st.calSession ? 'Kalibrierung ist Pflicht (Einstellungen: abschaltbar, aber dann fehlt der Bezug für SNR und Rauschboden).' : '');
+  }
+  function takeToggle() {
+    if (!st.taking) {
+      if ($('btn-take').disabled) return;
+      st.taking = true; st.rec.beginTake(); $('btn-take').textContent = 'Take beenden'; $('btn-take').className = 'danger'; $('take-result').innerHTML = '';
+      st.timer = setInterval(function () { $('take-timer').textContent = fmt(st.rec.recordedSeconds, 1) + ' s'; }, 100);
+      return;
+    }
+    clearInterval(st.timer); st.taking = false; $('btn-take').textContent = 'Take starten'; $('btn-take').className = 'primary';
+    var take = st.rec.endTake();
+    if (take.durationS < st.settings.minTakeS) { status('Take zu kurz (' + take.durationS.toFixed(1) + ' s) — nicht gespeichert.', true); updateTakeButton(); return; }
+    finishTake(take.samples, take.sampleRate);
+  }
+  function finishTake(samples, sr) {
+    st.busy = true; updateTakeButton();
+    var prog = $('take-progress'); prog.hidden = false; prog.innerHTML = '<div class="skeleton"></div><div class="small muted" id="take-progress-text">Analyse …</div>';
+    var opts = { floorDb: st.cal ? st.cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, yieldMs: 0 };
+    var now = new Date();
+    A.analyseTake(samples, sr, opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; }).then(function (res) {
+      return Promise.all([S.getMeta('nextCode', 0), S.allTakes()]).then(function (rr) {
+        var n = A.nextCodeIndex(rr[1], rr[0]);
+        var code = codeFromIndex(n), label = $('take-label').value.trim() || defaultLabel(code, now), info = st.rec.info || {};
+        var take = {
+          id: uuid(), schemaVersion: 1, code: code, label: label, comment: $('take-comment').value, createdAt: now.toISOString(),
+          durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate || null,
+          deviceLabel: info.deviceLabel || '', deviceId: info.deviceId || '', channelCount: 1,
+          captureFlags: { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
+          vowelIntent: $('take-intent').value, calibrationId: st.cal ? st.cal.id : null,
+          analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: !!st.settings.storeAudio
+        };
+        return S.putTake(take).then(function () { return S.putSeries(take.id, res.series); }).then(function () {
+          if (!st.settings.storeAudio) return null;
+          var wav = W.encode(samples, sr, st.settings.audioFormat);
+          return S.putAudio(take.id, sr, st.settings.audioFormat, new Blob([wav], { type: 'audio/wav' }));
+        }).then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
+          S.persist().catch(function () { });
+          $('take-label').value = ''; $('take-comment').value = '';
+          renderTakeResult(take);
+        });
+      });
+    }).catch(function (e) {
+      /* Ist die Analyse fertig und nur das Speichern scheitert (Speicherplatz, privater Modus),
+         liegt die Aufnahme nur noch im Arbeitsspeicher dieser Seite. Dann wenigstens einen Weg
+         anbieten, sie zu retten, statt sie mit einer Fehlermeldung verschwinden zu lassen. */
+      status('NICHT gespeichert (' + (e && e.message || e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
+      var box = $('take-result'); box.innerHTML = '';
+      var b = document.createElement('button'); b.className = 'danger'; b.textContent = 'Aufnahme als WAV retten';
+      b.addEventListener('click', function () { download('vare-ungespeichert-' + stamp(now) + '.wav', new Blob([W.encode(samples, sr, st.settings.audioFormat)], { type: 'audio/wav' })); });
+      box.appendChild(b);
+    }).then(function () { prog.hidden = true; st.busy = false; updateTakeButton(); });
+  }
+  function analysisMeta(meta, now) {
+    return { kernelVersion: D.VERSION, hopS: meta.hopS, windowsS: meta.windowsS, orders: meta.orders, yinThresh: meta.yinThresh, spreadMaxHz: meta.spreadMaxHz, gate: meta.gate, floorSource: meta.floorSource, analysedAt: now.toISOString() };
+  }
+  function renderTakeResult(take) {
+    var s = take.summary, per = s.perVowel || {};
+    $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
+      '<div class="grid">' +
+      '<div class="stat"><span class="k">F0</span><span class="v">' + fmt(s.f0.med) + ' Hz ' + CH.esc(s.f0.note) + '</span></div>' +
+      '<div class="stat"><span class="k">F1–F5 Median</span><span class="v">' + s.F.map(function (f) { return fmt(f.med); }).join(' · ') + '</span></div>' +
+      '<div class="stat' + (s.d34stable.n ? '' : ' unsure') + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ')' : 'keine gewerteten Rahmen') + '</span></div>' +
+      '<div class="stat"><span class="k">Bestes Segment je Vokal</span><span class="v">' + (Object.keys(per).map(function (k) { return '/' + k + '/ ' + (per[k].bestSegment ? fmt(per[k].bestSegment.d34Med) : '–'); }).join(' · ') || '–') + '</span></div>' +
+      '<div class="stat"><span class="k">SFR · SHR max · CPP</span><span class="v">' + fmt(s.sfr.med, 1) + ' · ' + fmt(s.shr.max, 1) + ' · ' + fmt(s.cpp.med, 1) + '</span></div>' +
+      '<div class="stat' + (s.floorSource === 'calibration' ? '' : ' unsure') + '"><span class="k">stimmhaft · gültig · stabil · SNR</span><span class="v">' + fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' % · ' + fmt(s.snrDb, 1) + ' dB</span></div>' +
+      '</div>';
+  }
+
+  /* ---------- Chronik ---------- */
+  function recomputeRefs() {
+    return S.allTakes().then(function (takes) { st.takes = takes; return S.getMeta('refs', {}); }).then(function (prev) { st.refs = A.computeRefs(st.takes, prev); return S.setMeta('refs', st.refs); });
+  }
+  function refreshChronik() {
+    Promise.all([S.allTakes(), S.audioIds(), S.getMeta('refs', {}), S.estimate(), S.persisted()]).then(function (r) {
+      st.takes = r[0]; st.audioIds = {}; (r[1] || []).forEach(function (id) { st.audioIds[id] = true; }); st.refs = r[2] || {};
+      var est = r[3];
+      $('chronik-storage').textContent = (est ? 'Belegt ' + bytesText(est.usage || 0) + ' von ' + bytesText(est.quota || 0) : '') + (r[4] ? ' · dauerhaft' : ' · Speicher nicht als dauerhaft markiert (Browser darf bei Platznot löschen — JSON-Sicherung anlegen)') + ' · ' + st.takes.length + ' Takes';
+      CH.renderRefs($('refs-table'), st.refs, handlers);
+      CH.renderList($('takes-list'), st.takes, st.audioIds, handlers);
+    }).catch(function (e) { $('takes-list').innerHTML = '<p class="rust">Chronik nicht lesbar: ' + CH.esc(e && e.message || e) + '</p>'; });
+  }
+  var handlers = {
+    rowCsv: function (take) { download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.csv', new Blob([C.takesToCsv([take], st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); },
+    frameCsv: function (take, series) { if (!series) return; download('vare-' + take.code + '-rahmen.csv', new Blob([C.framesToCsv(series, st.settings.csvDialect, V)], { type: 'text/csv;charset=utf-8' })); },
+    downloadWav: function (take) { S.getAudio(take.id).then(function (a) { if (a) download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.wav', a.blob); }); },
+    reanalyse: function (take) {
+      if (st.busy) return; st.busy = true; status('Neu-Analyse von ' + take.code + ' …');
+      S.getAudio(take.id).then(function (a) {
+        if (!a) throw new Error('kein Audio gespeichert');
+        return a.blob.arrayBuffer().then(function (buf) {
+          var dec = W.decode(buf), calP = take.calibrationId ? S.allCalibrations().then(function (all) { return all.filter(function (c) { return c.id === take.calibrationId; })[0] || null; }) : Promise.resolve(null);
+          return calP.then(function (cal) { return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS }); });
+        });
+      }).then(function (res) {
+        var now = new Date();
+        /* Die ganze alte Auswertung in die Historie, nicht nur zwei Felder: sonst ist nach einer
+           Neu-Analyse nicht mehr nachvollziehbar, mit welchen Schwellen der alte Wert entstand. */
+        take.history = (take.history || []).concat([{ analysis: take.analysis, summary: take.summary }]);
+        var neu = analysisMeta(res.meta, now), alt = take.analysis || {}, geaendert = [];
+        if (alt.gate && neu.gate && alt.gate.f3MinHz !== neu.gate.f3MinHz) geaendert.push('F3-Mindestwert ' + alt.gate.f3MinHz + ' → ' + neu.gate.f3MinHz + ' Hz');
+        if (alt.spreadMaxHz !== neu.spreadMaxHz) geaendert.push('Streuungsgrenze ' + alt.spreadMaxHz + ' → ' + neu.spreadMaxHz + ' Hz');
+        if (alt.hopS !== neu.hopS) geaendert.push('Rahmenabstand ' + alt.hopS + ' → ' + neu.hopS + ' s');
+        if (alt.kernelVersion !== neu.kernelVersion) geaendert.push('Kern ' + alt.kernelVersion + ' → ' + neu.kernelVersion);
+        take.summary = res.summary; take.analysis = neu; take.reanalysisNote = geaendert.join(', ');
+        return S.putTake(take).then(function () { return S.putSeries(take.id, res.series); }).then(recomputeRefs).then(function () { return geaendert; });
+      }).then(function (geaendert) { status('Neu analysiert: ' + take.code + (geaendert && geaendert.length ? ' — geändert: ' + geaendert.join(', ') : ' (gleiche Einstellungen)')); st.busy = false; route(); })
+        .catch(function (e) { st.busy = false; status('Neu-Analyse fehlgeschlagen: ' + (e && e.message || e), true); });
+    },
+    remove: function (take) {
+      if (!window.confirm('Take ' + take.code + ' „' + take.label + '“ endgültig löschen?')) return;
+      S.deleteTake(take.id).then(recomputeRefs).then(function () { if (/^#\/take\//.test(location.hash)) location.hash = '#/chronik'; else refreshChronik(); });
+    },
+    unpinRef: function (cls) { if (st.refs[cls]) { st.refs[cls].pinned = false; } S.setMeta('refs', st.refs).then(recomputeRefs).then(refreshChronik); },
+    pinRef: function (cls, take) {
+      var b = take.summary && take.summary.perVowel && take.summary.perVowel[cls] && take.summary.perVowel[cls].bestSegment;
+      if (!b) return;
+      st.refs[cls] = { d34: b.d34Med, takeId: take.id, code: take.code, label: take.label, date: take.createdAt, startS: b.startS, lenS: b.lenS, pinned: true };
+      S.setMeta('refs', st.refs).then(function () { status('Referenz /' + cls + '/ angepinnt: ' + fmt(b.d34Med) + ' Hz aus ' + take.code); route(); });
+    },
+    saveEdit: function (take, edit) { take.label = edit.label || take.label; take.vowelIntent = edit.vowelIntent; take.comment = edit.comment; S.putTake(take).then(recomputeRefs).then(function () { status('Gespeichert.'); route(); }); }
+  };
+  function openDetail(id) {
+    var el = $('take-detail'); el.innerHTML = '<div class="skeleton"></div>';
+    Promise.all([S.getTake(id), S.getSeries(id), S.hasAudio(id), S.getMeta('refs', {})]).then(function (r) {
+      if (!r[0]) { el.innerHTML = '<p class="rust">Take nicht gefunden. <a href="#/chronik">Chronik</a></p>'; return; }
+      st.refs = r[3] || {};
+      CH.renderDetail(el, r[0], r[1], st.refs, r[2], handlers);
+    }).catch(function (e) { el.innerHTML = '<p class="rust">' + CH.esc(e && e.message || e) + '</p>'; });
+  }
+  function exportCsv() { S.allTakes().then(function (takes) { download('vare-chronik-' + stamp(new Date()) + '.csv', new Blob([C.takesToCsv(takes, st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); }); }
+  function exportJson() {
+    Promise.all([S.allTakes(), S.allCalibrations(), S.getMeta('refs', {}), S.audioIds()]).then(function (r) {
+      var takes = r[0], withAudio = false, ids = r[3] || [];
+      var seriesP = Promise.all(takes.map(function (t) { return S.getSeries(t.id); }));
+      var audioP = Promise.resolve({});
+      if (ids.length) {
+        return Promise.all(ids.map(function (id) { return S.getAudio(id); })).then(function (auds) {
+          var bytes = auds.reduce(function (a, b) { return a + (b ? b.bytes : 0); }, 0);
+          /* Die ganze Sicherung entsteht in einem einzigen JSON.stringify. Chrome und Edge können
+             höchstens 2^29−24 ≈ 537 Mio. Zeichen in einem String halten; Base64 braucht 4 Zeichen
+             je 3 Byte, also ist bei etwa 70 Minuten 16-Bit-Audio Schluss. Vorher sagen, statt
+             hinterher mit „Invalid string length“ zu scheitern. */
+          var b64Chars = Math.ceil(bytes / 3) * 4, MAXCHARS = 450e6;
+          if (b64Chars > MAXCHARS) {
+            withAudio = false;
+            status('Audio kann nicht mitgesichert werden: ' + bytesText(bytes) + ' ergeben ' + Math.round(b64Chars / 1e6) + ' Mio. Zeichen, der Browser hält höchstens ' + Math.round(MAXCHARS / 1e6) + ' Mio. in einer Datei (etwa 70 min 16-Bit-Audio). Die Sicherung enthält nur die Messwerte; die WAVs einzeln über die Chronik sichern.', true);
+          } else withAudio = window.confirm('Audio mitsichern? ' + ids.length + ' WAV-Dateien, etwa ' + bytesText(bytes * 1.37) + ' zusätzlich. (Abbrechen = nur Messwerte)');
+          if (withAudio) audioP = Promise.all(auds.map(function (a) { return a.blob.arrayBuffer().then(function (buf) { return [a.takeId, b64FromBuffer(buf)]; }); })).then(function (pairs) { var o = {}; pairs.forEach(function (p) { o[p[0]] = p[1]; }); return o; });
+          return [takes, r[1], r[2], seriesP, audioP];
+        });
+      }
+      return [takes, r[1], r[2], seriesP, audioP];
+    }).then(function (x) {
+      return Promise.all([x[3], x[4]]).then(function (sa) {
+        var series = {}; x[0].forEach(function (t, i) { if (sa[0][i]) series[t.id] = sa[0][i]; });
+        var text = C.serializeBackup({ takes: x[0], series: series, refs: x[2], calibrations: x[1], settings: st.settings, kernelVersion: D.VERSION, exportedAt: new Date().toISOString(), audio: sa[1] });
+        download('vare-sicherung-' + stamp(new Date()) + '.json', new Blob([text], { type: 'application/json' }));
+      });
+    }).catch(function (e) { status('Sicherung fehlgeschlagen: ' + (e && e.message || e), true); });
+  }
+  function importJson(file) {
+    file.text().then(function (text) {
+      var b = C.parseBackup(text), added = 0, skipped = 0;
+      return S.allTakes().then(function (existing) {
+        var have = {}; existing.forEach(function (t) { have[t.id] = true; });
+        var chain = Promise.resolve();
+        b.takes.forEach(function (t) {
+          if (have[t.id]) { skipped++; return; }
+          added++;
+          chain = chain.then(function () { return S.putTake(t); }).then(function () { return b.series[t.id] ? S.putSeries(t.id, b.series[t.id]) : null; }).then(function () { return b.audio[t.id] ? S.putAudio(t.id, t.sampleRate, 'wav', blobFromB64(b.audio[t.id])) : null; });
+        });
+        (b.calibrations || []).forEach(function (c) { chain = chain.then(function () { return S.putCalibration(c); }); });
+        return chain;
+      }).then(recomputeRefs).then(function () {
+        // Angepinnte Referenzen der Sicherung NACH recomputeRefs einmischen — vorher wären sie
+        // sofort wieder vom automatischen Minimum überschrieben.
+        if (!b.refs) return 0;
+        return S.getMeta('refs', {}).then(function (local) {
+          var pin = 0;
+          for (var cls in b.refs) {
+            if (!b.refs[cls] || !b.refs[cls].pinned) continue;
+            if (local[cls] && local[cls].pinned) continue;
+            local[cls] = b.refs[cls]; pin++;
+          }
+          st.refs = local;
+          return S.setMeta('refs', local).then(function () { return pin; });
+        });
+      }).then(function (pin) {
+        status('Import: ' + added + ' Takes übernommen, ' + skipped + ' schon vorhanden (übersprungen)' + (pin ? ', ' + pin + ' angepinnte Referenz(en) übernommen' : '') + '.');
+        refreshChronik();
+      });
+    }).catch(function (e) { status('Import fehlgeschlagen: ' + (e && e.message || e), true); });
+  }
+  function clearAll() {
+    if (!window.confirm('Wirklich die gesamte Chronik dieses Browsers löschen? Vorher JSON-Sicherung anlegen!')) return;
+    if (!window.confirm('Letzte Frage: alles löschen?')) return;
+    S.clearAll().then(function () { st.refs = {}; st.cal = null; st.calSession = false; renderCalStatus([]); refreshChronik(); status('Chronik gelöscht.'); });
+  }
+
+  /* ---------- Prüfsignal ---------- */
+  function pruefsignal() {
+    if (st.busy) return; st.busy = true; updateTakeButton();
+    var F = [700, 1200, 2500, 3300, 4200], B = [80, 90, 120, 150, 200], sr = 48000, out = $('pruef-out');
+    out.innerHTML = '<div class="skeleton"></div>';
+    var sig = D.synthVowel(196, F, B, 2.0, sr), pad0 = new Float64Array(Math.round(0.3 * sr)), all = new Float64Array(sig.length + 2 * pad0.length);
+    for (var i = 0; i < pad0.length; i++) pad0[i] = (Math.random() * 2 - 1) * 1e-3;
+    all.set(pad0, 0); all.set(sig, pad0.length); all.set(pad0, pad0.length + sig.length);
+    A.analyseTake(all, sr, { gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS }).then(function (res) {
+      var s = res.summary, rows = F.map(function (f, k) { var m = s.F[k].med, e = Math.abs(m - f); return '<tr><td>F' + (k + 1) + '</td><td class="num">' + f + '</td><td class="num">' + fmt(m) + '</td><td class="num ' + (e >= 60 ? 'rust' : '') + '">' + fmt(e) + '</td></tr>'; });
+      var d = s.d34stable.n ? s.d34stable.med : s.d34.med, de = Math.abs(d - 800);
+      rows.push('<tr><td>ΔF3–4</td><td class="num">800</td><td class="num">' + fmt(d) + '</td><td class="num ' + (de >= 120 ? 'rust' : '') + '">' + fmt(de) + '</td></tr>');
+      rows.push('<tr><td>F0</td><td class="num">196</td><td class="num">' + fmt(s.f0.med, 1) + '</td><td class="num">' + fmt(Math.abs(s.f0.med - 196), 1) + '</td></tr>');
+      out.innerHTML = '<table><thead><tr><th>Größe</th><th class="num">Soll (Hz)</th><th class="num">Gemessen</th><th class="num">Fehler</th></tr></thead><tbody>' + rows.join('') + '</tbody></table><p class="small muted">Abnahmegrenze 60 Hz je Formant, 120 Hz für ΔF3–4 (Rost = gerissen). Vokalklasse gemessen: /' + CH.esc(s.vowel.dominant || '–') + '/, stabil ' + fmt(s.stableShare * 100) + ' %, gültig ' + fmt(s.validShare * 100) + ' %. Nicht gespeichert.</p>';
+    }).catch(function (e) { out.innerHTML = '<p class="rust">' + CH.esc(e && e.message || e) + '</p>'; }).then(function () { st.busy = false; updateTakeButton(); });
+  }
+
+  /* ---------- Anmeldung am privaten Korpus ---------- */
+  /* Die öffentliche Seite zeigt vor der Verbindung nur das Token-Feld. Erst wenn korpus.json
+     gelesen ist, erscheint die Oberfläche — und mit ihr die persönlichen Marken, die nirgends
+     im öffentlichen Code stehen. */
+  function zeigeApp(an) {
+    $('anmeldung').hidden = an; $('app').hidden = !an; $('nav').hidden = !an;
+  }
+  function verbinden(token, merken) {
+    var fehler = $('anmeldung-fehler'), stand = $('anmeldung-stand'), knopf = $('btn-verbinden');
+    fehler.textContent = ''; stand.textContent = 'verbinde …'; knopf.disabled = true;
+    return KO.laden(token).then(function (korpus) {
+      st.korpus = korpus;
+      CH.setMarken(korpus.marken);
+      if (merken !== null) KO.tokenSchreiben(token, !!merken);
+      /* Der Korpus liefert die Ausgangswerte, überschreibt aber nichts, was hier am Regler
+         verstellt wurde — sonst wäre jede Einstellung nach dem nächsten Neuladen wieder weg.
+         Weicht ein verstellter Wert ab, wird das gesagt statt still entschieden. */
+      var abweichend = [];
+      for (var k in korpus.gatter) {
+        if (st.settings[k] == null) continue;
+        if (st.touched[k]) { if (st.settings[k] !== korpus.gatter[k]) abweichend.push(k + ' ' + st.settings[k] + ' statt ' + korpus.gatter[k]); }
+        else st.settings[k] = korpus.gatter[k];
+      }
+      st.gate = V.createGate(gateOpts());
+      saveSettings(); renderSettings();
+      stand.textContent = ''; zeigeApp(true);
+      $('korpus-stand').textContent = 'Korpus vom ' + (korpus.stand || '?') + ' · ' + korpus.marken.length + ' Marken'
+        + (abweichend.length ? ' · hier abweichend eingestellt: ' + abweichend.join(', ') : '');
+      $('live-hints').textContent = hintText();
+      route();
+    }).catch(function (e) {
+      stand.textContent = ''; fehler.textContent = (e && e.message) || String(e);
+      zeigeApp(false);
+    }).then(function () { knopf.disabled = false; });
+  }
+  function abmelden() {
+    KO.tokenLoeschen(); st.korpus = null;
+    CH.setMarken([]);
+    if (st.rec && st.rec.active) st.rec.stop();
+    cancelAnimationFrame(st.raf);
+    $('token').value = ''; zeigeApp(false);
+    status('Token entfernt. Die Chronik bleibt in diesem Browser erhalten.');
+  }
+
+  /* ---------- Start ---------- */
+  function init() {
+    $('kernel-version').textContent = D.VERSION;
+    $('korpus-repo').textContent = KO.REPO; $('korpus-repo-2').textContent = KO.REPO;
+    $('anmeldung-file').hidden = location.protocol !== 'file:';
+    $('btn-verbinden').addEventListener('click', function () { verbinden($('token').value.trim(), $('token-merken').checked); });
+    $('token').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btn-verbinden').click(); });
+    $('btn-abmelden').addEventListener('click', abmelden);
+    $('origin-name').textContent = location.origin === 'null' ? 'file://' : location.origin;
+    $('notice-file').hidden = location.protocol !== 'file:';
+    var sel = $('take-intent'); sel.innerHTML = '<option value="">–</option>' + V.CENTROIDS.map(function (c) { return '<option value="' + c.cls + '">/' + c.cls + '/</option>'; }).join('');
+    loadSettings().then(function () {
+      renderSettings(); renderCalStatus([]); updateTakeButton(); $('live-hints').textContent = hintText();
+      // Gemerktes Token: still versuchen. Schlägt es fehl, bleibt die Anmeldung stehen.
+      var gemerkt = KO.tokenLesen();
+      if (gemerkt) { $('token').value = gemerkt; $('token-merken').checked = true; verbinden(gemerkt, null); }
+      else zeigeApp(false);
+      S.allCalibrations().then(function (all) { if (all.length) { var c = all[0]; $('cal-status').innerHTML += ' <span class="muted">Letzte gespeicherte Kalibrierung: ' + CH.esc(CH.dateShort(c.createdAt)) + ', Boden ' + fmt(c.floorDb, 1) + ' dBFS, SNR ' + fmt(c.snrDb, 1) + ' dB — für diese Sitzung neu kalibrieren.</span>'; } }).catch(function () { });
+    });
+    $('btn-mic').addEventListener('click', micToggle);
+    $('btn-cal').addEventListener('click', calibrate);
+    $('btn-take').addEventListener('click', takeToggle);
+    $('btn-pruef').addEventListener('click', pruefsignal);
+    $('btn-settings-reset').addEventListener('click', function () {
+      st.settings = Object.assign({}, SETTINGS_DEFAULT); st.touched = {};
+      if (st.korpus) for (var k in st.korpus.gatter) if (st.settings[k] != null) st.settings[k] = st.korpus.gatter[k];
+      st.gate = V.createGate(gateOpts()); saveSettings(); renderSettings(); updateTakeButton(); $('live-hints').textContent = hintText();
+    });
+    $('btn-export-csv').addEventListener('click', exportCsv);
+    $('btn-export-json').addEventListener('click', exportJson);
+    $('btn-import-json').addEventListener('click', function () { $('file-import').click(); });
+    $('file-import').addEventListener('change', function (e) { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ''; });
+    $('btn-clear-all').addEventListener('click', clearAll);
+    window.addEventListener('hashchange', route);
+    window.addEventListener('resize', function () { if (st.rec && st.rec.active) return; drawHist(); });
+    fillDevices();
+    drawLevel(NaN, -67); drawD34({ state: 'pause', score: NaN }, null); drawSpec({ voiced: false, F: [], valid: [], BW: [] }, null); drawHist();
+  }
+  window.VAREAPP = { state: st, init: init, finishTake: finishTake, handlers: handlers, refreshChronik: refreshChronik, SETTINGS_DEFAULT: SETTINGS_DEFAULT };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
