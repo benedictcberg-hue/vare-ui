@@ -205,14 +205,49 @@
       '</div>';
   }
 
+  /* Schritt 0 aus dem Manual, als Zeile: Wanduhrzeit, Stelle in der Sitzung, Pause davor,
+     Einsing-Status. Was nicht angegeben wurde, steht als Fehlt da und wird nicht beschönigt. */
+  var WARMUP_TEXT = { kalt: 'kalt, nicht eingesungen', kurz: 'kurz eingesungen', voll: 'voll eingesungen', nachpause: 'nach Pause wieder angewärmt' };
+  /* Zahlen aus einer importierten Sicherung sind Fremddaten: ein Text an der Stelle einer
+     Zahl darf die Seite nicht abwerfen und nicht ungeprüft ins HTML. */
+  function num(v) { if (v == null || v === '' || typeof v === 'boolean') return null; var n = Number(v); return isFinite(n) ? n : null; }
+  function dauerText(sek) {
+    sek = num(sek);
+    if (sek == null) return null;
+    if (sek < 90) return Math.round(sek) + ' s';
+    if (sek < 5400) return Math.round(sek / 60) + ' min';
+    return (sek / 3600).toFixed(1) + ' h';
+  }
+  function kontextZeile(take) {
+    var si = take.sitzung || {}, teile = [];
+    var tz = num(take.tzOffsetMin), nr = num(si.nr), pos = num(si.position), wmin = num(si.warmupMin);
+    teile.push(take.timeLocal ? 'Uhrzeit <span class="mono">' + esc(take.timeLocal) + '</span>'
+      + (tz == null ? '' : ' <span class="muted">(UTC' + (tz >= 0 ? '+' : '−') + fmt(Math.abs(tz) / 60, 1) + ')</span>')
+      : '<span class="rust">Uhrzeit fehlt</span>');
+    teile.push(nr != null && pos != null
+      ? 'Sitzung ' + fmt(nr) + ', Take ' + fmt(pos) + ' darin'
+      : '<span class="rust">Stelle in der Sitzung fehlt</span>');
+    var d = dauerText(si.pauseVorherS);
+    teile.push(d ? 'Pause davor ' + d + (si.pauseSelbeSitzung === false ? ' <span class="muted">(über eine Sitzungsgrenze)</span>' : '')
+      : (si.pauseVorherS === null && si.id ? 'erster Take' : '<span class="rust">Pause unbekannt</span>'));
+    teile.push(si.warmup ? esc(Object.prototype.hasOwnProperty.call(WARMUP_TEXT, si.warmup) ? WARMUP_TEXT[si.warmup] : si.warmup) + (wmin == null ? '' : ', seit ' + fmt(wmin) + ' min')
+      : '<span class="rust">Einsing-Status nicht angegeben</span>');
+    return teile.join(' · ');
+  }
+
   function renderDetail(el, take, series, refs, hasAudio, handlers) {
     var s = take.summary || {}, old = take.analysis && take.analysis.kernelVersion !== D.VERSION;
     var intents = [''].concat(V.CENTROIDS.map(function (c) { return c.cls; }));
     el.innerHTML = '<div class="panel"><a href="#/chronik">← Chronik</a>' +
       '<h2>' + esc(take.code) + ' <span id="d-label-view">' + esc(take.label) + '</span></h2>' +
       '<div class="small muted">' + esc(dateShort(take.createdAt)) + ' · ' + esc(take.deviceLabel || '') + ' · ' + fmt(take.sampleRate) + ' Hz · Kern ' + esc(take.analysis && take.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">älterer Kern</span>' : '') + (s.floorSource === 'calibration' ? ' · kalibriert' : ' · <span class="rust">Rauschboden ' + (s.floorSource === 'unknown' ? 'unbekannt' : 'geschätzt') + '</span>') + '</div>' +
+      '<div class="small">' + kontextZeile(take) + '</div>' +
       '<div class="row"><label>Bezeichnung <input type="text" id="d-label" value="' + esc(take.label) + '" size="24"></label>' +
       '<label>Vokalabsicht <select id="d-intent">' + intents.map(function (v) { return '<option value="' + esc(v) + '"' + (v === (take.vowelIntent || '') ? ' selected' : '') + '>' + (v ? '/' + esc(v) + '/' : '–') + '</option>'; }).join('') + '</select></label>' +
+      '<label>Einsing-Status <select id="d-warmup">' +
+        [''].concat(Object.keys(WARMUP_TEXT)).map(function (v) { return '<option value="' + esc(v) + '"' + (v === ((take.sitzung && take.sitzung.warmup) || '') ? ' selected' : '') + '>' + (v ? esc(WARMUP_TEXT[v]) : '– nicht angegeben') + '</option>'; }).join('') +
+      '</select></label>' +
+      '<label>seit (min) <input type="number" id="d-warmup-min" min="0" max="600" step="1" size="4" value="' + (take.sitzung && take.sitzung.warmupMin != null ? esc(String(take.sitzung.warmupMin)) : '') + '"></label>' +
       '<button id="d-save">Speichern</button></div>' +
       '<label>Kommentar <textarea id="d-comment">' + esc(take.comment || '') + '</textarea></label></div>' +
       '<div class="panel">' + summaryGrid(s, take) + '</div>' +
@@ -229,7 +264,14 @@
       var idx = Math.max(0, Math.min(n - 1, Math.round(t / Math.max(geo.T, 1e-6) * (n - 1))));
       hover.textContent = hoverText(series, idx); redraw(idx);
     });
-    el.querySelector('#d-save').addEventListener('click', function () { handlers.saveEdit(take, { label: el.querySelector('#d-label').value.trim(), vowelIntent: el.querySelector('#d-intent').value, comment: el.querySelector('#d-comment').value }); });
+    el.querySelector('#d-save').addEventListener('click', function () {
+      var wm = el.querySelector('#d-warmup-min').value.trim(), n = wm === '' ? null : Number(wm);
+      handlers.saveEdit(take, {
+        label: el.querySelector('#d-label').value.trim(), vowelIntent: el.querySelector('#d-intent').value,
+        comment: el.querySelector('#d-comment').value, warmup: el.querySelector('#d-warmup').value,
+        warmupMin: (n != null && isFinite(n) && n >= 0) ? n : null
+      });
+    });
     el.querySelector('#d-frames').addEventListener('click', function () { handlers.frameCsv(take, series); });
     el.querySelector('#d-row').addEventListener('click', function () { handlers.rowCsv(take); });
     if (hasAudio) { el.querySelector('#d-wav').addEventListener('click', function () { handlers.downloadWav(take); }); el.querySelector('#d-re').addEventListener('click', function () { handlers.reanalyse(take); }); }
@@ -237,5 +279,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

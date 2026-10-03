@@ -27,7 +27,7 @@
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
   ];
 
-  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, cal: null, calSession: false, takes: [], audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null };
+  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, cal: null, calSession: false, takes: [], audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -35,6 +35,17 @@
   function codeFromIndex(n) { var s = ''; n = n + 1; while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; }
   function defaultLabel(code, d) { return code + ' ' + d.getDate() + '.' + (d.getMonth() + 1) + '. ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
   function stamp(d) { return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()); }
+  /* Schritt 0 aus dem Manual verlangt die Uhrzeit, nicht den Zeitstempel. createdAt ist UTC —
+     wer im Sommer um 9:48 singt, findet dort 07:48. Die Wanduhrzeit und der Abstand zu UTC
+     werden deshalb getrennt mitgeschrieben, damit beides nachprüfbar bleibt. */
+  function wallClock(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function tzOffsetMin(d) { return -d.getTimezoneOffset(); }
+  function dauerText(sek) {
+    if (sek == null || !isFinite(sek)) return '–';
+    if (sek < 90) return Math.round(sek) + ' s';
+    if (sek < 5400) return Math.round(sek / 60) + ' min';
+    return (sek / 3600).toFixed(1) + ' h';
+  }
   function fmt(v, dec) { return CH.fmt(v, dec); }
   function download(name, blob) {
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
@@ -385,9 +396,82 @@
     $('btn-take').disabled = !ok && !st.taking;
     $('take-hint').textContent = !st.rec || !st.rec.active ? 'Mikrofon starten, dann kalibrieren, dann Take.' : (st.settings.requireCal && !st.calSession ? 'Kalibrierung ist Pflicht (Einstellungen: abschaltbar, aber dann fehlt der Bezug für SNR und Rauschboden).' : '');
   }
+  /* ---------- Schritt 0: Sitzungskontext ---------- */
+  /* Das Manual verlangt vier Angaben, bevor eine Zahl etwas bedeutet: Uhrzeit, wo im Verlauf
+     der Sitzung der Take liegt, wie lange die Pause davor war, und ob überhaupt eingesungen
+     wurde. Drei davon kann die Seite selbst wissen, eine muss der Nutzer sagen. Was er nicht
+     sagt, wird nicht geraten — es bleibt leer und steht in der CSV als Sentinel. */
+  function ladeSitzung() {
+    return S.getMeta('sitzung', null).then(function (v) {
+      if (v && v.id) { st.sitzung = v; return v; }
+      st.sitzung = { nr: 1, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null };
+      return S.setMeta('sitzung', st.sitzung).then(function () { return st.sitzung; });
+    });
+  }
+  function speichereSitzung() { return st.sitzung ? S.setMeta('sitzung', st.sitzung) : Promise.resolve(); }
+  function sitzungsTakes() {
+    if (!st.sitzung) return [];
+    return st.takes.filter(function (t) { return t.sitzung && t.sitzung.id === st.sitzung.id; });
+  }
+  function letzterTake() {
+    var best = null;
+    st.takes.forEach(function (t) { if (!best || String(t.createdAt) > String(best.createdAt)) best = t; });
+    return best;
+  }
+  /* Pause vor diesem Take: Abstand zur UHRZEIT DES ENDES des letzten Takes, nicht zu seinem
+     Beginn — sonst zählt die Singzeit des letzten Takes als Pause mit. */
+  function pauseSeitLetztem(jetzt) {
+    var t = letzterTake();
+    if (!t || !t.createdAt) return { sek: null, selbeSitzung: null };
+    var ende = Date.parse(t.createdAt);
+    if (!isFinite(ende)) return { sek: null, selbeSitzung: null };
+    var sek = (jetzt.getTime() - ende) / 1000;
+    if (!(sek >= 0)) return { sek: null, selbeSitzung: null };
+    return { sek: sek, selbeSitzung: !!(t.sitzung && st.sitzung && t.sitzung.id === st.sitzung.id) };
+  }
+  function kontextJetzt(jetzt) {
+    var p = pauseSeitLetztem(jetzt);
+    var wm = $('ctx-warmup-min').value.trim();
+    var min = wm === '' ? null : Number(wm);
+    return {
+      id: st.sitzung ? st.sitzung.id : null,
+      nr: st.sitzung ? st.sitzung.nr : null,
+      startedAt: st.sitzung ? st.sitzung.startedAt : null,
+      position: sitzungsTakes().length + 1,
+      pauseVorherS: p.sek,
+      pauseSelbeSitzung: p.selbeSitzung,
+      warmup: $('ctx-warmup').value || '',
+      warmupMin: (min != null && isFinite(min) && min >= 0) ? min : null
+    };
+  }
+  function renderKontext() {
+    if (!st.sitzung) return;
+    var k = kontextJetzt(new Date());
+    $('ctx-session-nr').textContent = String(k.nr);
+    $('ctx-position').textContent = String(k.position);
+    var el = $('ctx-pause');
+    el.textContent = k.pauseVorherS == null ? '– (erster Take)'
+      : dauerText(k.pauseVorherS) + (k.pauseSelbeSitzung === false ? ' (letzter Take aus einer früheren Sitzung)' : '');
+  }
+  function neueSitzung() {
+    var nr = (st.sitzung && st.sitzung.nr ? st.sitzung.nr : 0) + 1;
+    st.sitzung = { nr: nr, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null };
+    $('ctx-warmup').value = ''; $('ctx-warmup-min').value = '';
+    /* Eine neue Sitzung heißt: andere Kette, anderer Raum, anderes Mikrofon-Gain. Die alte
+       Kalibrierung darf dafür nicht mehr gelten, sonst wird SNR gegen gestern gerechnet. */
+    st.calSession = false; st.cal = null;
+    speichereSitzung().then(function () {
+      renderKontext(); updateTakeButton(); renderCalStatus([]);
+      status('Sitzung ' + nr + ' begonnen. Die Kalibrierung gilt nicht mehr — bitte neu kalibrieren.');
+    });
+  }
+
   function takeToggle() {
     if (!st.taking) {
       if ($('btn-take').disabled) return;
+      /* Der Kontext wird im Moment des Starts festgehalten, nicht beim Speichern — sonst
+         zählte die Dauer des Takes selbst zur Pause davor. */
+      st.pendingCtx = kontextJetzt(new Date());
       st.taking = true; st.rec.beginTake(); $('btn-take').textContent = 'Take beenden'; $('btn-take').className = 'danger'; $('take-result').innerHTML = '';
       st.timer = setInterval(function () { $('take-timer').textContent = fmt(st.rec.recordedSeconds, 1) + ' s'; }, 100);
       return;
@@ -411,6 +495,8 @@
           durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate || null,
           deviceLabel: info.deviceLabel || '', deviceId: info.deviceId || '', channelCount: 1,
           captureFlags: { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
+          timeLocal: wallClock(now), tzOffsetMin: tzOffsetMin(now),
+          sitzung: st.pendingCtx || kontextJetzt(now),
           vowelIntent: $('take-intent').value, calibrationId: st.cal ? st.cal.id : null,
           analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: !!st.settings.storeAudio
         };
@@ -421,6 +507,7 @@
         }).then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
           S.persist().catch(function () { });
           $('take-label').value = ''; $('take-comment').value = '';
+          st.pendingCtx = null;
           renderTakeResult(take);
         });
       });
@@ -441,6 +528,7 @@
   function renderTakeResult(take) {
     var s = take.summary, per = s.perVowel || {};
     $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
+      '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
       '<div class="stat"><span class="k">F0</span><span class="v">' + fmt(s.f0.med) + ' Hz ' + CH.esc(s.f0.note) + '</span></div>' +
       '<div class="stat"><span class="k">F1–F5 Median</span><span class="v">' + s.F.map(function (f) { return fmt(f.med); }).join(' · ') + '</span></div>' +
@@ -462,6 +550,7 @@
       $('chronik-storage').textContent = (est ? 'Belegt ' + bytesText(est.usage || 0) + ' von ' + bytesText(est.quota || 0) : '') + (r[4] ? ' · dauerhaft' : ' · Speicher nicht als dauerhaft markiert (Browser darf bei Platznot löschen — JSON-Sicherung anlegen)') + ' · ' + st.takes.length + ' Takes';
       CH.renderRefs($('refs-table'), st.refs, handlers);
       CH.renderList($('takes-list'), st.takes, st.audioIds, handlers);
+      renderKontext();
     }).catch(function (e) { $('takes-list').innerHTML = '<p class="rust">Chronik nicht lesbar: ' + CH.esc(e && e.message || e) + '</p>'; });
   }
   var handlers = {
@@ -502,7 +591,17 @@
       st.refs[cls] = { d34: b.d34Med, takeId: take.id, code: take.code, label: take.label, date: take.createdAt, startS: b.startS, lenS: b.lenS, pinned: true };
       S.setMeta('refs', st.refs).then(function () { status('Referenz /' + cls + '/ angepinnt: ' + fmt(b.d34Med) + ' Hz aus ' + take.code); route(); });
     },
-    saveEdit: function (take, edit) { take.label = edit.label || take.label; take.vowelIntent = edit.vowelIntent; take.comment = edit.comment; S.putTake(take).then(recomputeRefs).then(function () { status('Gespeichert.'); route(); }); }
+    saveEdit: function (take, edit) {
+      take.label = edit.label || take.label; take.vowelIntent = edit.vowelIntent; take.comment = edit.comment;
+      /* Einsing-Status darf nachgetragen werden — er fällt beim Singen oft hinten runter.
+         Die gerechneten Felder (Uhrzeit, Stelle, Pause) bleiben unberührt: die kann man
+         nicht nachträglich wissen, und geraten werden sie nicht. */
+      if (edit.warmup !== undefined) {
+        if (!take.sitzung) take.sitzung = { id: null, nr: null, startedAt: null, position: null, pauseVorherS: null, pauseSelbeSitzung: null, warmup: '', warmupMin: null };
+        take.sitzung.warmup = edit.warmup || ''; take.sitzung.warmupMin = edit.warmupMin;
+      }
+      S.putTake(take).then(recomputeRefs).then(function () { status('Gespeichert.'); route(); });
+    }
   };
   function openDetail(id) {
     var el = $('take-detail'); el.innerHTML = '<div class="skeleton"></div>';
@@ -665,6 +764,25 @@
     $('btn-mic').addEventListener('click', micToggle);
     $('btn-cal').addEventListener('click', calibrate);
     $('btn-take').addEventListener('click', takeToggle);
+    $('btn-neue-sitzung').addEventListener('click', neueSitzung);
+    /* Einsing-Status und -Dauer gelten für die ganze Sitzung, nicht nur für den nächsten Take —
+       sie werden deshalb mitgespeichert und sind nach einem Neuladen noch da. */
+    $('ctx-warmup').addEventListener('change', function () { if (st.sitzung) { st.sitzung.warmup = $('ctx-warmup').value; speichereSitzung(); } });
+    $('ctx-warmup-min').addEventListener('change', function () {
+      if (!st.sitzung) return;
+      var v = $('ctx-warmup-min').value.trim(), n = v === '' ? null : Number(v);
+      st.sitzung.warmupMin = (n != null && isFinite(n) && n >= 0) ? n : null;
+      if (st.sitzung.warmupMin == null) $('ctx-warmup-min').value = '';
+      speichereSitzung();
+    });
+    ladeSitzung().then(function (si) {
+      $('ctx-warmup').value = si.warmup || '';
+      $('ctx-warmup-min').value = si.warmupMin == null ? '' : String(si.warmupMin);
+      renderKontext();
+      /* Die Pause läuft weiter, während die Seite offen steht. Sie wird deshalb jede halbe
+         Minute neu angezeigt — festgehalten wird sie erst beim Take-Start. */
+      st.ctxTimer = setInterval(renderKontext, 30000);
+    });
     $('btn-pruef').addEventListener('click', pruefsignal);
     $('btn-settings-reset').addEventListener('click', function () {
       st.settings = Object.assign({}, SETTINGS_DEFAULT); st.touched = {};

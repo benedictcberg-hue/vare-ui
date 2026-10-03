@@ -586,6 +586,32 @@ for (const srIn of [44100, 48000, 96000]) {
   const refs = A.computeRefs([{ id: 'x', code: 'A', createdAt: '2026-09-03', summary: rG.summary }]);
   check('T12', 'Referenzen je Vokal aus Chronik', refs.a && isFinite(refs.a.d34) && Object.keys(refs).length === 2, JSON.stringify(Object.keys(refs)));
 
+  // T27 Schritt 0 aus dem Manual: Uhrzeit, Stelle in der Sitzung, Pause davor, Einsing-Status.
+  {
+    const CHR = require('./chronik.js').VARECHRONIK;
+    const want = ['time_local', 'tz_offset_min', 'session_nr', 'session_id', 'take_in_session', 'pause_before_s', 'pause_same_session', 'warmup_state', 'warmup_min'];
+    const keys = C.TAKE_COLUMNS.map(c => c.key), i0 = keys.indexOf('datetime_iso');
+    check('T27', 'CSV: neun Schritt-0-Spalten direkt nach datetime_iso', want.every((k, j) => keys[i0 + 1 + j] === k), keys.slice(i0 + 1, i0 + 10).join(','));
+    const voll = { code: 'A', createdAt: '2026-10-03T07:48:00.000Z', timeLocal: '09:48', tzOffsetMin: 120,
+      sitzung: { nr: 3, id: 's-1', position: 4, pauseVorherS: 612.5, pauseSelbeSitzung: true, warmup: 'voll', warmupMin: 22 } };
+    const L = C.takesToCsv([voll, { code: 'B', createdAt: 'x' }], 'standard').split('\n');
+    const head = L[0].split(','), r1 = L[1].split(','), r2 = L[2].split(',');
+    const val = (r, k) => r[head.indexOf(k)];
+    check('T27', 'CSV: Werte kommen unverändert an', val(r1, 'time_local') === '09:48' && val(r1, 'tz_offset_min') === '120' && val(r1, 'take_in_session') === '4' && val(r1, 'pause_before_s') === '612.5' && val(r1, 'pause_same_session') === '1' && val(r1, 'warmup_state') === 'voll' && val(r1, 'warmup_min') === '22', want.map(k => val(r1, k)).join('|'));
+    check('T27', 'CSV: fehlende Zahl = Sentinel, fehlender Text = leer, nichts geraten', val(r2, 'take_in_session') === '-99' && val(r2, 'pause_before_s') === '-99.0' && val(r2, 'warmup_min') === '-99' && val(r2, 'time_local') === '' && val(r2, 'warmup_state') === '', want.map(k => val(r2, k)).join('|'));
+    const de = C.takesToCsv([voll], 'excelde').replace(/^﻿/, '').split(/\r?\n/);
+    check('T27', 'CSV Excel DE: Pause mit Dezimalkomma', de[1].split(';')[de[0].split(';').indexOf('pause_before_s')] === '612,5', '');
+    const z = CHR.kontextZeile(voll);
+    check('T27', 'Anzeige: Uhrzeit, Stelle, Pause, Einsing-Status stehen da', /09:48/.test(z) && /Sitzung 3, Take 4/.test(z) && /Pause davor 10 min/.test(z) && /voll eingesungen, seit 22 min/.test(z), z.replace(/<[^>]+>/g, ''));
+    const leer = CHR.kontextZeile({});
+    check('T27', 'Anzeige: jede fehlende Angabe ist in Rost benannt', (leer.match(/class="rust"/g) || []).length === 4, leer.replace(/<[^>]+>/g, ''));
+    const erster = CHR.kontextZeile({ timeLocal: '09:00', sitzung: { id: 's', nr: 1, position: 1, pauseVorherS: null } });
+    check('T27', 'Anzeige: erster Take heißt erster Take, nicht Pause unbekannt', /erster Take/.test(erster) && !/Pause unbekannt/.test(erster), '');
+    let fremd, ok = true;
+    try { fremd = CHR.kontextZeile({ timeLocal: '<img src=x onerror=1>', tzOffsetMin: 'x', sitzung: { nr: '<b>', position: '"x', pauseVorherS: 'abc', warmup: 'constructor', warmupMin: {} } }); } catch (e) { ok = false; fremd = String(e); }
+    check('T27', 'Import-Fremddaten: kein Absturz, nichts unmaskiert im HTML', ok && !/<img|<b>/.test(fremd) && !/function/.test(fremd), fremd.replace(/<[^>]+>/g, ''));
+  }
+
   console.log('\n=== ERGEBNIS: ' + passes + ' bestanden, ' + fails + ' gerissen ===');
   process.exit(fails ? 1 : 0);
 })().catch(e => { console.error('FEHLER im Prueflauf:', e); process.exit(2); });

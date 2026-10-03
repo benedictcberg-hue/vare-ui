@@ -131,6 +131,37 @@
     </div>
 
     <div class="panel">
+      <h2>Schritt 0 — Sitzungskontext</h2>
+      <p class="small muted">Sieben Lieder zum Warmwerden, und nach zehn Minuten Kaffee ist die Hälfte wieder weg.
+        Diese vier Angaben entscheiden, ob zwei Takes überhaupt vergleichbar sind. Sie werden mitgeschrieben,
+        nicht geschätzt: was hier leer bleibt, steht in der CSV als Sentinel −99,00.</p>
+      <div class="row">
+        <label class="inline">Einsing-Status
+          <select id="ctx-warmup">
+            <option value="">– nicht angegeben</option>
+            <option value="kalt">kalt, nicht eingesungen</option>
+            <option value="kurz">kurz eingesungen</option>
+            <option value="voll">voll eingesungen</option>
+            <option value="nachpause">nach Pause wieder angewärmt</option>
+          </select>
+        </label>
+        <label class="inline">Minuten seit Einsingbeginn
+          <input type="number" id="ctx-warmup-min" min="0" max="600" step="1" size="4">
+        </label>
+      </div>
+      <div class="row">
+        <span class="small">Sitzung <strong id="ctx-session-nr" class="mono">1</strong> ·
+          nächster Take ist Nummer <strong id="ctx-position" class="mono">1</strong> ·
+          Pause seit dem letzten Take <strong id="ctx-pause" class="mono">–</strong></span>
+        <button id="btn-neue-sitzung">Neue Sitzung beginnen</button>
+      </div>
+      <div class="small muted">Die Pause wird aus der Uhrzeit des letzten Takes gerechnet und läuft
+        mit — sie wird im Moment des Take-Starts festgehalten. Die Take-Position zählt innerhalb
+        dieser Sitzung; „Neue Sitzung beginnen" setzt sie auf 1 zurück und verlangt eine neue
+        Kalibrierung.</div>
+    </div>
+
+    <div class="panel">
       <h2>Take</h2>
       <div class="row">
         <label>Bezeichnung <input type="text" id="take-label" size="22"></label>

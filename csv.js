@@ -32,6 +32,18 @@
     { key: 'code', get: g('code') },
     { key: 'label', get: g('label') },
     { key: 'datetime_iso', get: g('createdAt') },
+    /* Schritt 0 aus dem Manual: ohne Uhrzeit, Position in der Sitzung, Pause davor und
+       Einsing-Status sind zwei Takes nicht vergleichbar. datetime_iso ist UTC, time_local ist
+       die Wanduhrzeit — beides steht da, damit keins aus dem anderen geraten werden muss. */
+    { key: 'time_local', get: g('timeLocal') },
+    { key: 'tz_offset_min', get: g('tzOffsetMin'), dec: 0 },
+    { key: 'session_nr', get: g('sitzung.nr'), dec: 0 },
+    { key: 'session_id', get: g('sitzung.id') },
+    { key: 'take_in_session', get: g('sitzung.position'), dec: 0 },
+    { key: 'pause_before_s', get: g('sitzung.pauseVorherS'), dec: 1 },
+    { key: 'pause_same_session', get: g('sitzung.pauseSelbeSitzung'), dec: 0 },
+    { key: 'warmup_state', get: g('sitzung.warmup') },
+    { key: 'warmup_min', get: g('sitzung.warmupMin'), dec: 0 },
     { key: 'duration_s', get: g('durationS'), dec: 2 },
     { key: 'sample_rate', get: g('sampleRate'), dec: 0 },
     { key: 'device', get: g('deviceLabel') },
