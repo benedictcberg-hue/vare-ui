@@ -27,7 +27,7 @@
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
   ];
 
-  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, cal: null, calSession: false, takes: [], audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null };
+  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -392,9 +392,15 @@
 
   /* ---------- Take ---------- */
   function updateTakeButton() {
-    var ok = st.rec && st.rec.active && !st.calRunning && !st.busy && (!st.settings.requireCal || st.calSession);
+    /* Ohne gelesene Chronik kennt die Seite weder die Stelle in der Sitzung noch die Pause davor —
+       ein Take davor bekäme „Take 1, erster Take“, obwohl es längst Takes gibt. */
+    var s = st.settings || SETTINGS_DEFAULT, kontext = st.takesGeladen && !!st.sitzung;
+    var ok = st.rec && st.rec.active && !st.calRunning && !st.busy && kontext && (!s.requireCal || st.calSession);
     $('btn-take').disabled = !ok && !st.taking;
-    $('take-hint').textContent = !st.rec || !st.rec.active ? 'Mikrofon starten, dann kalibrieren, dann Take.' : (st.settings.requireCal && !st.calSession ? 'Kalibrierung ist Pflicht (Einstellungen: abschaltbar, aber dann fehlt der Bezug für SNR und Rauschboden).' : '');
+    $('take-hint').textContent = st.kontextFehler ? 'Chronik nicht lesbar (' + st.kontextFehler + ') — Stelle in der Sitzung und Pause wären unbekannt, deshalb kein Take. Seite neu laden.'
+      : !st.rec || !st.rec.active ? 'Mikrofon starten, dann kalibrieren, dann Take.'
+      : !kontext ? 'Chronik wird gelesen …'
+      : (s.requireCal && !st.calSession ? 'Kalibrierung ist Pflicht (Einstellungen: abschaltbar, aber dann fehlt der Bezug für SNR und Rauschboden).' : '');
   }
   /* ---------- Schritt 0: Sitzungskontext ---------- */
   /* Das Manual verlangt vier Angaben, bevor eine Zahl etwas bedeutet: Uhrzeit, wo im Verlauf
@@ -404,7 +410,7 @@
   function ladeSitzung() {
     return S.getMeta('sitzung', null).then(function (v) {
       if (v && v.id) { st.sitzung = v; return v; }
-      st.sitzung = { nr: 1, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null };
+      st.sitzung = { nr: 1, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null, letztePos: 0 };
       return S.setMeta('sitzung', st.sitzung).then(function () { return st.sitzung; });
     });
   }
@@ -412,6 +418,25 @@
   function sitzungsTakes() {
     if (!st.sitzung) return [];
     return st.takes.filter(function (t) { return t.sitzung && t.sitzung.id === st.sitzung.id; });
+  }
+  /* Die Position kommt aus einem Zähler der Sitzung, nicht aus der Anzahl ihrer Takes: nach dem
+     Löschen ergäbe „Anzahl + 1“ eine Nummer, die es schon gibt. Die gespeicherten Takes zählen mit,
+     damit auch ein verlorener Zähler (Meta gelöscht, Sicherung eingespielt) nichts doppelt vergibt. */
+  function naechstePosition() {
+    var m = st.sitzung ? Number(st.sitzung.letztePos) || 0 : 0;
+    sitzungsTakes().forEach(function (t) { var p = Number(t.sitzung.position); if (isFinite(p) && p > m) m = p; });
+    return m + 1;
+  }
+  /* Erst nach dem Speichern weiterzählen: ein verworfener oder gescheiterter Take belegt keine
+     Nummer. Gehört der Take zu einer Sitzung, die während seiner Analyse beendet wurde, bleibt der
+     Zähler der neuen Sitzung unberührt. */
+  function zaehlerFortschreiben(ctx, ende) {
+    if (!st.sitzung || !ctx || ctx.id !== st.sitzung.id) return;
+    var p = Number(ctx.position);
+    if (!isFinite(p)) return;
+    st.sitzung.letztePos = Math.max(Number(st.sitzung.letztePos) || 0, p);
+    st.sitzung.letztesEnde = ende;
+    speichereSitzung().catch(function () { });
   }
   function letzterTake() {
     var best = null;
@@ -421,13 +446,17 @@
   /* Pause vor diesem Take: Abstand zur UHRZEIT DES ENDES des letzten Takes, nicht zu seinem
      Beginn — sonst zählt die Singzeit des letzten Takes als Pause mit. */
   function pauseSeitLetztem(jetzt) {
-    var t = letzterTake();
-    if (!t || !t.createdAt) return { sek: null, selbeSitzung: null };
-    var ende = Date.parse(t.createdAt);
+    var t = letzterTake(), ende = t && t.createdAt ? Date.parse(t.createdAt) : NaN;
+    var selbe = !!(t && t.sitzung && st.sitzung && t.sitzung.id === st.sitzung.id);
+    /* Ein gelöschter Take wurde trotzdem gesungen. Das Ende des zuletzt gespeicherten Takes dieser
+       Sitzung steht deshalb beim Zähler und gilt, wenn es später liegt als der jüngste noch
+       vorhandene Take — sonst wüchse die Pause durch Löschen. */
+    var eigen = st.sitzung ? Date.parse(st.sitzung.letztesEnde) : NaN;
+    if (isFinite(eigen) && !(eigen <= ende)) { ende = eigen; selbe = true; }
     if (!isFinite(ende)) return { sek: null, selbeSitzung: null };
     var sek = (jetzt.getTime() - ende) / 1000;
     if (!(sek >= 0)) return { sek: null, selbeSitzung: null };
-    return { sek: sek, selbeSitzung: !!(t.sitzung && st.sitzung && t.sitzung.id === st.sitzung.id) };
+    return { sek: sek, selbeSitzung: selbe };
   }
   function kontextJetzt(jetzt) {
     var p = pauseSeitLetztem(jetzt);
@@ -437,7 +466,7 @@
       id: st.sitzung ? st.sitzung.id : null,
       nr: st.sitzung ? st.sitzung.nr : null,
       startedAt: st.sitzung ? st.sitzung.startedAt : null,
-      position: sitzungsTakes().length + 1,
+      position: st.sitzung ? naechstePosition() : null,
       pauseVorherS: p.sek,
       pauseSelbeSitzung: p.selbeSitzung,
       warmup: $('ctx-warmup').value || '',
@@ -445,7 +474,8 @@
     };
   }
   function renderKontext() {
-    if (!st.sitzung) return;
+    // Vor dem Lesen der Chronik wäre jede Nummer geraten.
+    if (!st.sitzung || !st.takesGeladen) return;
     var k = kontextJetzt(new Date());
     $('ctx-session-nr').textContent = String(k.nr);
     $('ctx-position').textContent = String(k.position);
@@ -455,7 +485,7 @@
   }
   function neueSitzung() {
     var nr = (st.sitzung && st.sitzung.nr ? st.sitzung.nr : 0) + 1;
-    st.sitzung = { nr: nr, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null };
+    st.sitzung = { nr: nr, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null, letztePos: 0 };
     $('ctx-warmup').value = ''; $('ctx-warmup-min').value = '';
     /* Eine neue Sitzung heißt: andere Kette, anderer Raum, anderes Mikrofon-Gain. Die alte
        Kalibrierung darf dafür nicht mehr gelten, sonst wird SNR gegen gestern gerechnet. */
@@ -500,7 +530,7 @@
           vowelIntent: $('take-intent').value, calibrationId: st.cal ? st.cal.id : null,
           analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: !!st.settings.storeAudio
         };
-        return S.putTake(take).then(function () { return S.putSeries(take.id, res.series); }).then(function () {
+        return S.putTake(take).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); return S.putSeries(take.id, res.series); }).then(function () {
           if (!st.settings.storeAudio) return null;
           var wav = W.encode(samples, sr, st.settings.audioFormat);
           return S.putAudio(take.id, sr, st.settings.audioFormat, new Blob([wav], { type: 'audio/wav' }));
@@ -541,7 +571,9 @@
 
   /* ---------- Chronik ---------- */
   function recomputeRefs() {
-    return S.allTakes().then(function (takes) { st.takes = takes; return S.getMeta('refs', {}); }).then(function (prev) { st.refs = A.computeRefs(st.takes, prev); return S.setMeta('refs', st.refs); });
+    // Wer die Takes neu liest, zeigt auch Schritt 0 neu: sonst stünde nach Take, Löschen oder
+    // Import bis zur nächsten halben Minute die alte Nummer da.
+    return S.allTakes().then(function (takes) { st.takes = takes; renderKontext(); return S.getMeta('refs', {}); }).then(function (prev) { st.refs = A.computeRefs(st.takes, prev); return S.setMeta('refs', st.refs); });
   }
   function refreshChronik() {
     Promise.all([S.allTakes(), S.audioIds(), S.getMeta('refs', {}), S.estimate(), S.persisted()]).then(function (r) {
@@ -775,13 +807,22 @@
       if (st.sitzung.warmupMin == null) $('ctx-warmup-min').value = '';
       speichereSitzung();
     });
+    /* Sitzung UND Takes lesen, bevor ein Take möglich ist: Stelle in der Sitzung und Pause davor
+       kommen aus der Chronik. Bis dahin bleibt der Take-Knopf gesperrt (updateTakeButton). */
     ladeSitzung().then(function (si) {
-      $('ctx-warmup').value = si.warmup || '';
-      $('ctx-warmup-min').value = si.warmupMin == null ? '' : String(si.warmupMin);
-      renderKontext();
-      /* Die Pause läuft weiter, während die Seite offen steht. Sie wird deshalb jede halbe
-         Minute neu angezeigt — festgehalten wird sie erst beim Take-Start. */
-      st.ctxTimer = setInterval(renderKontext, 30000);
+      return S.allTakes().then(function (alle) {
+        st.takes = alle; st.takesGeladen = true;
+        $('ctx-warmup').value = si.warmup || '';
+        $('ctx-warmup-min').value = si.warmupMin == null ? '' : String(si.warmupMin);
+        renderKontext(); updateTakeButton();
+        /* Die Pause läuft weiter, während die Seite offen steht. Sie wird deshalb jede halbe
+           Minute neu angezeigt — festgehalten wird sie erst beim Take-Start. */
+        st.ctxTimer = setInterval(renderKontext, 30000);
+      });
+    }).catch(function (e) {
+      st.kontextFehler = (e && e.message) || String(e);
+      updateTakeButton();
+      status('Chronik nicht lesbar (' + st.kontextFehler + ') — ohne sie sind Stelle in der Sitzung und Pause unbekannt, deshalb ist kein Take möglich.', true);
     });
     $('btn-pruef').addEventListener('click', pruefsignal);
     $('btn-settings-reset').addEventListener('click', function () {
