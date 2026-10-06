@@ -74,11 +74,12 @@
     minFillShare: 0.6,      // fest: und mindestens so viel von windowS abdecken
     // Live: der gewertete Rahmen muss selbst noch im Vokal stehen (frameLeaves)
     frameTolShare: 0.5,     // fest: Band um den Fenstermedian, Anteil von sdF1Max bzw. sdF2Max …
-    frameVibRel: 0.045,     // fest: … oder dieser Anteil des Medians, je nachdem, was größer ist
+    frameVibRel: 0.065,     // fest: … oder dieser Anteil des Medians, je nachdem, was größer ist
     refS: 0.6,              // fest: Bezug „was der Vokal zuvor gezeigt hat“: Rahmen der letzten refS …
     refLagS: 0.1,           // fest: … ohne die jüngsten refLagS …
     refMinSpanS: 0.4,       // fest: … gilt erst, wenn er so lange reicht …
-    refMarginHz: 20         // fest: … und erlaubt so viel über seine Spanne hinaus
+    refMarginHz: 20,        // fest: … und erlaubt so viel über seine Spanne hinaus …
+    refMarginRel: 0.02      // fest: … oder diesen Anteil des Fenstermedians, je nachdem, was größer ist
   };
 
   function entry(fr, centroids) {
@@ -130,17 +131,20 @@
      der Rand: im Interdezilbereich zählt seine Abweichung bei sieben Rahmen nur mit 0,4. Ein
      beginnender Vokalwechsel blieb so „stabil /a/“ und gewertet — mit einem schrumpfenden Cluster,
      das wie Fortschritt aussah. Zwei Bänder, beide müssen halten:
-     1. Fenstermedian ± max(halbe Streuungsgrenze, 4,5 %). Die halbe Grenze ist das Band, das das
+     1. Fenstermedian ± max(halbe Streuungsgrenze, 6,5 %). Die halbe Grenze ist das Band, das das
         Fenster selbst einhalten muss. Vibrato ±50 Cent schiebt jeden Teilton um ±2,9 %, ein am
-        Teilton hängender Formantwert wandert mit — an stehenden Vokalen 85–250 Hz (SNR 30–60 dB)
-        gemessen bis 3,5 % auf F2 (/i/: über 60 Hz) und bis 4,0 % auf F1 (/a/ bei 250 Hz).
-     2. Spanne dessen, was der Vokal von t − refS bis t − refLagS gezeigt hat, ± refMarginHz. Die
+        Teilton hängender Formantwert wandert mit (gemessen bis 4 %). Liegt der Formant zwischen zwei
+        Teiltönen, springt der Messwert im Takt des Vibratos zwischen ihnen: an stehenden Vokalen auf
+        jedem Halbton 87–247 Hz gemessen bis 6,25 % (/i/-F2 bei 233 Hz: 135 Hz, schon bei ±30 Cent).
+        Ein kurzes Fenster sieht oft nur eine der beiden Lagen.
+     2. Spanne dessen, was der Vokal von t − refS bis t − refLagS gezeigt hat, ± max(20 Hz, 2 %). Die
         jüngsten 0,1 s fehlen, weil diese Rahmen ihr Analysefenster (bis 0,14 s) mit dem geprüften
-        teilen und einen beginnenden Wechsel schon mittragen. Die Spanne enthält das Vibrato des
-        Takes selbst; gemessen überschritt ein stehender Rahmen sie um höchstens 17 Hz (auch bei
-        unregelmäßigem Vibrato und ±1–2 % Formantmitbewegung). Das Band fängt den Wechsel früh, wo
-        Band 1 zu weit ist, und hält bei kurzem Fenster, dessen Median langsamen Wechseln folgt. Es
-        gilt erst, wenn der Bezug 0,4 s überdeckt (Vokalanfang, nach einer Pause).
+        teilen und einen beginnenden Wechsel schon mittragen. Die Spanne enthält Vibrato und Sprünge
+        des Takes selbst; gemessen überschritt ein stehender Rahmen sie um höchstens 17 Hz, bei
+        Sprüngen, deren Tiefe von Periode zu Periode schwankt, um 31 Hz bei F2 2050 Hz (1,5 %). Das
+        Band fängt den Wechsel früh, wo Band 1 zu weit ist, und hält bei kurzem Fenster, dessen
+        Median langsamen Wechseln folgt. Es gilt erst, wenn der Bezug 0,4 s überdeckt (Vokalanfang,
+        nach einer Pause).
      Ohne eigenes F1/F2 lässt sich das nicht prüfen, dann keine Wertung. */
   function frameLeaves(e, r, hist, opts) {
     if (!isFinite(e.F1) || !isFinite(e.F2)) return 'F1/F2 dieses Rahmens fehlt';
@@ -148,7 +152,8 @@
     var t2 = Math.max(opts.frameTolShare * opts.sdF2Max, opts.frameVibRel * r.F2med);
     if (!(Math.abs(e.F1 - r.F1med) <= t1)) return 'Rahmen verlässt den Vokal (F1 ' + Math.round(e.F1) + ' Hz, Fenster ' + Math.round(r.F1med) + ' ± ' + Math.round(t1) + ')';
     if (!(Math.abs(e.F2 - r.F2med) <= t2)) return 'Rahmen verlässt den Vokal (F2 ' + Math.round(e.F2) + ' Hz, Fenster ' + Math.round(r.F2med) + ' ± ' + Math.round(t2) + ')';
-    var lo1 = Infinity, hi1 = -Infinity, lo2 = Infinity, hi2 = -Infinity, ta = Infinity, tb = -Infinity, i, x, m = opts.refMarginHz;
+    var lo1 = Infinity, hi1 = -Infinity, lo2 = Infinity, hi2 = -Infinity, ta = Infinity, tb = -Infinity, i, x;
+    var m1 = Math.max(opts.refMarginHz, opts.refMarginRel * r.F1med), m2 = Math.max(opts.refMarginHz, opts.refMarginRel * r.F2med);
     for (i = 0; i < hist.length; i++) {
       x = hist[i];
       if (!x.ok || x.t > e.t - opts.refLagS || x.t < e.t - opts.refS) continue;
@@ -157,8 +162,8 @@
       if (x.t < ta) ta = x.t; if (x.t > tb) tb = x.t;
     }
     if (!(tb - ta >= opts.refMinSpanS)) return '';
-    if (e.F1 < lo1 - m || e.F1 > hi1 + m) return 'Rahmen verlässt den Vokal (F1 ' + Math.round(e.F1) + ' Hz, zuvor ' + Math.round(lo1) + '–' + Math.round(hi1) + ' ± ' + m + ')';
-    if (e.F2 < lo2 - m || e.F2 > hi2 + m) return 'Rahmen verlässt den Vokal (F2 ' + Math.round(e.F2) + ' Hz, zuvor ' + Math.round(lo2) + '–' + Math.round(hi2) + ' ± ' + m + ')';
+    if (e.F1 < lo1 - m1 || e.F1 > hi1 + m1) return 'Rahmen verlässt den Vokal (F1 ' + Math.round(e.F1) + ' Hz, zuvor ' + Math.round(lo1) + '–' + Math.round(hi1) + ' ± ' + Math.round(m1) + ')';
+    if (e.F2 < lo2 - m2 || e.F2 > hi2 + m2) return 'Rahmen verlässt den Vokal (F2 ' + Math.round(e.F2) + ' Hz, zuvor ' + Math.round(lo2) + '–' + Math.round(hi2) + ' ± ' + Math.round(m2) + ')';
     return '';
   }
   function mergeOpts(o) {

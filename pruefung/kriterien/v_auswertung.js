@@ -121,4 +121,20 @@ module.exports = async function (H) {
     check('V1', 'Live-Gatter: stehende Vokale mit Vibrato ±50 Cent und Wobble ±30 Cent (98–250 Hz) — kein Rahmen gilt als „verlässt den Vokal“, jede Folge gewertet (Fenster ' + FENSTER_VIBRATO.join('/') + ' s)',
       falsch === 0 && leer.length === 0, falsch ? falsch + ' Rahmen, erster: ' + beispiel : 'gewertet ' + gewertet + (leer.length ? ', ohne Wertung: ' + leer.join('; ') : ''));
   }
+
+  /* V1d: Teiltonsprünge. Liegt der Formant zwischen zwei Teiltönen (/i/-F2 2200 und /e/-F2 2000 Hz
+     bei 233 Hz), springt der Messwert im Takt des Vibratos um bis zu 6 % zwischen ihnen hin und her.
+     Das ist Messunsicherheit des stehenden Vokals, kein Verlassen. */
+  {
+    let falsch = 0, gewertet = 0, beispiel = '';
+    for (const v of ['i', 'e']) for (const [rate, cent] of [[5.5, 40], [3.5, 30]]) {
+      const sig = synth(vib(233.1, rate, cent), () => VOK[v], 2.0, BV[v], 60, 233 + Math.round(rate * 7));
+      const frames = live(sig, takt(0.2, 2.0, 0.042));
+      for (const windowS of FENSTER_VIBRATO) {
+        const g = V.createGate({ windowS });
+        for (const f of frames) { const r = g.update(f); if (isFinite(r.score)) gewertet++; if (/verlässt|fehlt/.test(r.reason)) { falsch++; if (!beispiel) beispiel = '/' + v + '/ ' + rate + ' Hz ±' + cent + ' Cent, Fenster ' + windowS + ' s: ' + r.reason; } }
+      }
+    }
+    check('V1', 'Live-Gatter: Teiltonsprünge bei 233 Hz (/i/, /e/, Vibrato ±40 Cent, Wobble ±30 Cent) gelten nicht als „verlässt den Vokal“', falsch === 0 && gewertet > 0, falsch ? falsch + ' Rahmen, erster: ' + beispiel : 'gewertet ' + gewertet);
+  }
 };
