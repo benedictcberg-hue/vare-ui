@@ -612,6 +612,21 @@ for (const srIn of [44100, 48000, 96000]) {
     check('T27', 'Import-Fremddaten: kein Absturz, nichts unmaskiert im HTML', ok && !/<img|<b>/.test(fremd) && !/function/.test(fremd), fremd.replace(/<[^>]+>/g, ''));
   }
 
+  /* Weitere Kriterien stehen in eigenen Modulen unter pruefung/kriterien/, eine Datei je Bereich.
+     Jedes Modul exportiert eine async-Funktion und bekommt die gemeinsamen Hilfen übergeben.
+     Reihenfolge: alphabetisch nach Dateiname. Ein Modul, das wirft, zählt als gerissenes Kriterium. */
+  {
+    const fs = require('fs'), path = require('path');
+    const KDIR = path.join(__dirname, 'pruefung', 'kriterien');
+    const H = { check, near, r0, r1, r2, noise, tone, concat, scale, dbToLin, SR, TSR, BW5, CASES, D, V, A, C, W, glide };
+    if (fs.existsSync(KDIR)) {
+      for (const f of fs.readdirSync(KDIR).filter(n => /\.js$/.test(n)).sort()) {
+        try { await require(path.join(KDIR, f))(H); }
+        catch (e) { check('MOD', 'Kriterienmodul ' + f + ' läuft ohne Ausnahme', false, String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
+      }
+    }
+  }
+
   console.log('\n=== ERGEBNIS: ' + passes + ' bestanden, ' + fails + ' gerissen ===');
   process.exit(fails ? 1 : 0);
 })().catch(e => { console.error('FEHLER im Prueflauf:', e); process.exit(2); });
