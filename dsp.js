@@ -781,22 +781,31 @@
      Deshalb eine zweite Spur mit kurzem Fenster. Sie misst nur grob, taugt nicht für Formanten
      und nicht für feine Tonhöhenarbeit — sie beantwortet eine einzige Frage: war da ein Sprung?
      Der Mindestgrundton ist höher angesetzt (120 Hz), damit das Fenster überhaupt kurz sein kann:
-     tauMax = sr/fmin bestimmt, wie viel Signal für den Vergleich übrig bleibt. */
-  var FINE_WINDOW_S = 0.030, FINE_HOP_S = 0.005, FINE_FMIN = 120;
+     tauMax = sr/fmin bestimmt, wie viel Signal für den Vergleich übrig bleibt.
+     Randprüfung: Liegt ein Tonanfang oder -ende im Fenster (Energie einer Fensterhälfte unter
+     FINE_EDGE_RATIO der anderen), misst YIN die Kante statt der Periode — gemessen am Phrasenende
+     650 Hz statt 98 Hz, im Staccato Läufe, die vor dem Ton beginnen. Solche Rahmen sind in rand
+     markiert und gelten in detectJumps als stimmlos; f0 und ap bleiben unverändert stehen. */
+  var FINE_WINDOW_S = 0.030, FINE_HOP_S = 0.005, FINE_FMIN = 120, FINE_EDGE_RATIO = 0.1;
 
   function pitchTrackFine(ds, sr, opts) {
     opts = opts || {};
     var winS = opts.windowS || FINE_WINDOW_S, hopS = opts.hopS || FINE_HOP_S;
     var fmin = opts.fmin || FINE_FMIN, fmax = opts.fmax || 900;
-    var n = Math.round(winS * sr), hop = Math.max(1, Math.round(hopS * sr));
+    var randR = (opts.edgeRatio == null) ? FINE_EDGE_RATIO : opts.edgeRatio;
+    var n = Math.round(winS * sr), hop = Math.max(1, Math.round(hopS * sr)), h2 = n >> 1;
+    var cs = new Float64Array(ds.length + 1), k;
+    for (k = 0; k < ds.length; k++) cs[k + 1] = cs[k] + ds[k] * ds[k];
     var m = 0, c;
     for (c = n >> 1; c + (n >> 1) <= ds.length; c += hop) m++;
-    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), i = 0;
+    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), rand = new Uint8Array(m), i = 0;
     for (c = n >> 1; c + (n >> 1) <= ds.length && i < m; c += hop, i++) {
-      var p = detectF0(ds.subarray(c - (n >> 1), c - (n >> 1) + n), sr, fmin, fmax, opts.yinThresh);
+      var s0 = c - (n >> 1), p = detectF0(ds.subarray(s0, s0 + n), sr, fmin, fmax, opts.yinThresh);
+      var e1 = cs[s0 + h2] - cs[s0], e2 = cs[s0 + n] - cs[s0 + h2];
       t[i] = c / sr; f0[i] = p.f0; ap[i] = p.ap;
+      rand[i] = (randR > 0 && Math.min(e1, e2) < randR * Math.max(e1, e2)) ? 1 : 0;
     }
-    return { t: t, f0: f0, ap: ap, hopS: hopS, windowS: winS, fmin: fmin };
+    return { t: t, f0: f0, ap: ap, rand: rand, hopS: hopS, windowS: winS, fmin: fmin };
   }
 
   /* Sprünge in der kurzen Spur: Läufe, die mindestens minSemitones von der ruhigen Umgebung
@@ -811,15 +820,29 @@
     var backS = (opts.referenceS == null) ? 0.20 : opts.referenceS;
     var ruheSt = (opts.quietSemitones == null) ? 2 : opts.quietSemitones;
     var maxOnset = (opts.maxOnsetFrames == null) ? 4 : opts.maxOnsetFrames;
+    var pauseS = (opts.pauseMs == null ? 120 : opts.pauseMs) / 1000;
     var n = track.t.length, back = Math.max(3, Math.round(backS / track.hopS));
-    var ruhe = [], events = [], run = null, seitRuhe = 0, i, j;
+    var pauseFr = Math.max(1, Math.round(pauseS / track.hopS));
+    var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, i, j;
 
     for (i = 0; i < n; i++) {
-      var ok = isFinite(track.f0[i]) && track.ap[i] < apMax;
+      var ok = isFinite(track.f0[i]) && track.ap[i] < apMax && !(track.rand && track.rand[i]);
       if (!ok) {
-        if (run) { if (run.dauerFrames >= 2) events.push(run); run = null; }
+        /* Eine kurze stimmlose Lücke (Konsonant, Staccato) unterbricht weder den Bezug noch einen
+           laufenden Sprung. Erst eine Pause ab pauseMs trennt Phrasen: Der Lauf endet, der Bezug wird
+           verworfen — eine neue Phrase auf anderem Ton ist kein Sprung. Gemessen (Feinspur, Rahmen
+           als stimmlos gezählt): 20 ms löscht den Bezug schon bei Konsonanten von 30–60 ms, in
+           Staccato-Lücken und bei 30–60 ms Rauschen am Übergang eines Bruchs; dann wird der neue Ton
+           zum Bezug und die Rückkehr erscheint als gehaltener Sprung in Gegenrichtung. 90–200 ms
+           bestehen alle geprüften Fälle; 120 ms hält Abstand zu den längsten Lücken (80 ms) und zur
+           kürzesten Atempause (200 ms). */
+        if (++luecke >= pauseFr) {
+          if (run) { if (run.dauerFrames >= 2) events.push(run); run = null; }
+          ruhe = []; seitRuhe = 0;
+        }
         continue;
       }
+      luecke = 0;
       /* Bezug sind die ruhigen Rahmen VOR dem Ereignis. Während eines Laufs wird er eingefroren —
          wandert er mit, endet ein gehaltener Sprung nach rund 80 ms von selbst und wird als Kante
          gemeldet. Das ist derselbe Fehler, der gehaltene Registerwechsel unsichtbar macht. */
@@ -900,7 +923,7 @@
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,
     nextPow2: nextPow2, pitchTrackFine: pitchTrackFine, detectJumps: detectJumps,
-    FINE_WINDOW_S: FINE_WINDOW_S, FINE_HOP_S: FINE_HOP_S, FINE_FMIN: FINE_FMIN, synthVowel: synthVowel, resonate: resonate, lowpassFor: lowpassFor, lowpassBank: lowpassBank,
+    FINE_WINDOW_S: FINE_WINDOW_S, FINE_HOP_S: FINE_HOP_S, FINE_FMIN: FINE_FMIN, FINE_EDGE_RATIO: FINE_EDGE_RATIO, synthVowel: synthVowel, resonate: resonate, lowpassFor: lowpassFor, lowpassBank: lowpassBank,
     _burg: burg, _formantsFromLPC: formantsFromLPC, _detectF0: detectF0, _resample: resample
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
