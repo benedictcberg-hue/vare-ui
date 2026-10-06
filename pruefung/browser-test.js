@@ -1,6 +1,7 @@
 /* VARE — Browser-Pruefung. Oeffnet die Seite in Chromium, stellt die GitHub-API nach (nur
    erfundene Daten, kein Netz, kein echtes Token) und spielt einen ganzen Durchgang durch:
-   Token-Tor, Mikrofon, Kalibrierung, Take, Chronik, CSV, Sicherung, Import, Detail, Neu-Analyse.
+   Token-Tor, Mikrofon, Kalibrierung, Take, Chronik, CSV, Sicherung, Import, Detail, Neu-Analyse,
+   danach Schritt 0 über Neuladen, Löschen und neue Sitzung sowie die Einsing-Angaben.
 
      npm install -g playwright && npx playwright install chromium
      node pruefung/browser-test.js            (Windows: node pruefung\browser-test.js)
@@ -30,14 +31,20 @@ const WAV = path.join(SP, 'fake.wav');
   const server = http.createServer((req, res) => {
     const p = path.join(ROOT, decodeURIComponent(req.url.split('?')[0].split('#')[0]));
     fs.readFile(p, (e, data) => { if (e) { res.writeHead(404); res.end('nicht da'); return; } res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream' }); res.end(data); });
-  }).listen(8765);
+  });
+  // Freier Port statt fest 8765: laufen zwei Prüfläufe gleichzeitig (zweiter Arbeitsstand), fiele
+  // der zweite sonst mit EADDRINUSE aus.
+  await new Promise(r => server.listen(0, r));
+  const BASE = 'http://localhost:' + server.address().port;
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', headless: true, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + WAV, '--autoplay-policy=no-user-gesture-required', '--no-sandbox'] });
   const ctx = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
   const page = await ctx.newPage();
   const errors = [], logs = [];
   page.on('pageerror', e => errors.push(String(e && e.stack || e)));
   page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') logs.push(m.type() + ': ' + m.text()); });
-  page.on('dialog', d => d.dismiss());
+  // Rückfragen werden abgelehnt (z. B. „Audio mitsichern?“), außer der Ablauf will ausdrücklich bestätigen.
+  let dialogAntwort = false;
+  page.on('dialog', d => (dialogAntwort ? d.accept() : d.dismiss()));
   const KORPUS = JSON.stringify({ format: 'vare-korpus', version: 1, stand: '2026-10-03', notiz: 'Testkorpus',
     marken: { d34: [{ hz: 404, text: 'erfundener Prueftwert' }, { hz: 707 }, { hz: 1111 }] },
     gatter: { f3MinHz: 2500, spreadMaxHz: 130 } });
@@ -47,7 +54,7 @@ const WAV = path.join(SP, 'fake.wav');
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ content: Buffer.from(KORPUS, 'utf8').toString('base64'), encoding: 'base64' }) });
   });
   try {
-    await page.goto('http://localhost:8765/index.html#/aufnahme');
+    await page.goto(BASE + '/index.html#/aufnahme');
     await page.waitForFunction(() => document.getElementById('anmeldung') && !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
     check('Oeffentliche Huelle: vor der Verbindung nur die Token-Eingabe', await page.isHidden('#app') && await page.isHidden('#nav') && await page.isVisible('#token'));
     check('Huelle nennt das private Repo', (await page.textContent('#korpus-repo')).includes('vare-tools'), await page.textContent('#korpus-repo'));
@@ -94,11 +101,21 @@ const WAV = path.join(SP, 'fake.wav');
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
     await page.click('#btn-take');
+    // Während der Analyse schon den nächsten Take beschriften: das gehört nicht in diesen Take.
+    const busyBeiEingabe = await page.evaluate(() => VAREAPP.state.busy);
+    await page.fill('#take-label', 'NAECHSTER');
+    await page.selectOption('#take-intent', 'i');
+    await page.fill('#take-comment', 'fuer den naechsten Take');
     await page.waitForFunction(() => document.querySelector('#take-result .notice'), null, { timeout: 180000 });
     const result = await page.textContent('#take-result');
     check('Take analysiert und gespeichert', /Gespeichert als/.test(result), result.replace(/\s+/g, ' ').slice(0, 300));
     const takes = await page.evaluate(() => VARESTORE.allTakes());
     check('IndexedDB: 1 Take', takes.length === 1, String(takes.length));
+    const felder = [await page.inputValue('#take-label'), await page.inputValue('#take-intent'), await page.inputValue('#take-comment')].join('|');
+    check('Eingabe während der Analyse: Take behält Bezeichnung, Vokalabsicht, Kommentar; die neuen bleiben für den nächsten',
+      busyBeiEingabe === true && takes[0] && takes[0].label === 'E2E /a/ G3' && takes[0].vowelIntent === 'a' && takes[0].comment === 'automatischer Durchlauf' && felder === 'NAECHSTER|i|fuer den naechsten Take',
+      'Analyse lief=' + busyBeiEingabe + ' | gespeichert ' + (takes[0] && [takes[0].label, takes[0].vowelIntent, takes[0].comment].join('|')) + ' | Felder ' + felder);
+    check('Schritt 0 gleich nach dem Take: nächster Take ist Nummer 2', (await page.textContent('#ctx-position')) === '2', await page.textContent('#ctx-position'));
     const s = takes[0] && takes[0].summary;
     if (s) {
       check('Take: F1..F3 innerhalb 100 Hz von 700/1200/2500', Math.abs(s.F[0].med - 700) < 100 && Math.abs(s.F[1].med - 1200) < 100 && Math.abs(s.F[2].med - 2500) < 100, s.F.map(f => Math.round(f.med)).join(' '));
@@ -115,7 +132,7 @@ const WAV = path.join(SP, 'fake.wav');
     const pruef = await page.textContent('#pruef-out');
     check('Prüfsignal: Tabelle, keine gerissene Grenze', !(await page.$('#pruef-out td.rust')), pruef.replace(/\s+/g, ' ').slice(0, 200));
     // Chronik
-    await page.goto('http://localhost:8765/index.html#/chronik');
+    await page.goto(BASE + '/index.html#/chronik');
     await page.waitForFunction(() => document.querySelector('#takes-list table'), null, { timeout: 10000 });
     check('Chronik zeigt Take', (await page.$$('#takes-list tr[data-id]')).length === 1);
     check('Referenz /a/ gesetzt', /\/a\//.test(await page.textContent('#refs-table')), (await page.textContent('#refs-table')).replace(/\s+/g, ' ').slice(0, 120));
@@ -151,7 +168,7 @@ const WAV = path.join(SP, 'fake.wav');
     check('Neu-Analyse: Historie hat einen Eintrag', t2[0].history && t2[0].history.length === 1, JSON.stringify(t2[0].history && t2[0].history.map(h => h.kernelVersion)));
     await page.screenshot({ path: path.join(SP, 'shot-detail.png'), fullPage: true });
     // Einstellungen: Regler ändern und Reload
-    await page.goto('http://localhost:8765/index.html#/aufnahme');
+    await page.goto(BASE + '/index.html#/aufnahme');
     await page.waitForFunction(() => document.getElementById('s-f3MinHz'), null, { timeout: 10000 });
     await page.$eval('#s-f3MinHz', el => { el.value = '2700'; el.dispatchEvent(new Event('input', { bubbles: true })); });
     await page.waitForTimeout(600);
@@ -162,6 +179,81 @@ const WAV = path.join(SP, 'fake.wav');
     // Zugänglichkeit: Bedienelemente ≥ 46 px
     const small = await page.$$eval('button, select, input[type=text], input[type=range]', els => els.filter(e => !e.hidden && e.offsetParent !== null && e.getBoundingClientRect().height < 46).map(e => e.id || e.textContent.trim().slice(0, 20)));
     check('Alle sichtbaren Bedienelemente ≥ 46 px hoch', small.length === 0, small.join(', '));
+
+    // ---------- Schritt 0 über Neuladen, Löschen und neue Sitzung; Einsing-Angaben ----------
+    async function mikrofonUndKalibrieren() {
+      await page.click('#btn-mic');
+      await page.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
+      await page.waitForTimeout(800);
+      // Die Prüfdatei läuft in Schleife; trifft die Kalibrierung den Vokal nicht, nochmals.
+      for (let v = 0; v < 4; v++) {
+        await page.click('#btn-cal');
+        await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 30000 });
+        if (/^Kalibriert/.test((await page.textContent('#cal-status')).trim())) return true;
+        await page.waitForTimeout(1500);
+      }
+      return false;
+    }
+    async function takeAufnehmen(ms, waehrend) {
+      await page.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 20000 });
+      const vorher = (await page.evaluate(() => VARESTORE.allTakes())).map(t => t.id);
+      await page.click('#btn-take'); await page.waitForTimeout(ms); await page.click('#btn-take');
+      if (waehrend) await waehrend();
+      await page.waitForFunction(() => !VAREAPP.state.busy && document.querySelector('#take-result .notice, #take-result button'), null, { timeout: 180000 });
+      return (await page.evaluate(() => VARESTORE.allTakes())).find(t => !vorher.includes(t.id)) || null;
+    }
+    // Die Seite ist eben neu geladen; in der Sitzung liegt Take A an Position 1.
+    await page.waitForFunction(() => document.getElementById('ctx-position').textContent !== '–', null, { timeout: 5000 }).catch(() => { });
+    const tA = (await page.evaluate(() => VARESTORE.allTakes()))[0];
+    const anzReload = { pos: await page.textContent('#ctx-position'), pause: await page.textContent('#ctx-pause') };
+    check('Neuladen: Schritt 0 zeigt nächste Nummer 2 und eine Pause, nicht „erster Take“', anzReload.pos === '2' && !/erster Take/.test(anzReload.pause), JSON.stringify(anzReload));
+    check('Neuladen: Mikrofon und Kalibrierung', await mikrofonUndKalibrieren(), (await page.textContent('#cal-status')).slice(0, 80));
+    // Einsing-Status eintragen und die Eingabe um 30 min zurückdatieren: der Take muss 45 min tragen.
+    await page.selectOption('#ctx-warmup', 'voll');
+    await page.fill('#ctx-warmup-min', '15'); await page.press('#ctx-warmup-min', 'Tab');
+    await page.evaluate(() => { VAREAPP.state.sitzung.warmupMinAt -= 30 * 60000; });
+    await page.fill('#take-label', 'E2E B');
+    const tB = await takeAufnehmen(2500);
+    check('Neuladen: Take B an Position 2, Pause > 0, selbe Sitzung wie A',
+      !!tB && tB.sitzung.position === 2 && tB.sitzung.pauseVorherS > 0 && tB.sitzung.pauseSelbeSitzung === true && tB.sitzung.id === tA.sitzung.id,
+      tB ? JSON.stringify({ position: tB.sitzung.position, pause: tB.sitzung.pauseVorherS, gleich: tB.sitzung.pauseSelbeSitzung, sitzungWieA: tB.sitzung.id === tA.sitzung.id }) : 'kein Take');
+    check('Einsing-Minuten laufen mit: 15 min eingetragen, 30 min zurückdatiert, Take B trägt 45 min',
+      !!tB && tB.sitzung.warmup === 'voll' && tB.sitzung.warmupMin >= 44.9 && tB.sitzung.warmupMin <= 46, tB ? tB.sitzung.warmup + ' ' + tB.sitzung.warmupMin : 'kein Take');
+    // Take A löschen: der nächste Take darf nicht wieder die 2 bekommen.
+    await page.evaluate(() => { location.hash = '#/chronik'; });
+    await page.waitForSelector('#takes-list tr[data-id="' + tA.id + '"]', { timeout: 10000 });
+    dialogAntwort = true;
+    await page.click('#takes-list tr[data-id="' + tA.id + '"] button[data-act="del"]');
+    await page.waitForFunction(id => !document.querySelector('#takes-list tr[data-id="' + id + '"]'), tA.id, { timeout: 10000 });
+    dialogAntwort = false;
+    await page.evaluate(() => { location.hash = '#/aufnahme'; });
+    await page.waitForTimeout(300);
+    const anzLoeschen = await page.textContent('#ctx-position');
+    // Take C; während seiner Analyse „Neue Sitzung beginnen“.
+    let busyC = null;
+    const tC = await takeAufnehmen(2500, async () => { busyC = await page.evaluate(() => VAREAPP.state.busy); await page.click('#btn-neue-sitzung'); });
+    check('Löschen: Anzeige und Take C bekommen 3, keine Position doppelt',
+      anzLoeschen === '3' && !!tC && tC.sitzung.position === 3 && tC.sitzung.position !== tB.sitzung.position, 'Anzeige ' + anzLoeschen + ', C ' + (tC && tC.sitzung.position) + ', B ' + tB.sitzung.position);
+    check('„Neue Sitzung“ während der Analyse: Take C behält Kalibrierung und Sitzung seiner Aufnahme',
+      busyC === true && !!tC && !!tC.calibrationId && tC.summary.floorSource === 'calibration' && tC.sitzung.id === tA.sitzung.id,
+      'Analyse lief=' + busyC + ' | ' + (tC ? 'calibrationId=' + tC.calibrationId + ' floorSource=' + tC.summary.floorSource + ' Sitzung ' + tC.sitzung.nr : 'kein Take'));
+    check('Nach „Neue Sitzung“: Take-Knopf gesperrt bis zur Kalibrierung, nächste Nummer 1',
+      await page.isDisabled('#btn-take') && (await page.textContent('#ctx-position')) === '1', await page.textContent('#take-hint'));
+    // Über drei Stunden weder Take noch Eingabe: alles um 4 h zurückdatieren und neu laden.
+    await page.selectOption('#ctx-warmup', 'voll');
+    await page.fill('#ctx-warmup-min', '20'); await page.press('#ctx-warmup-min', 'Tab');
+    await page.evaluate(async () => {
+      const vier = 4 * 3600e3, s = VAREAPP.state.sitzung, frueher = iso => new Date(Date.parse(iso) - vier).toISOString();
+      s.warmupMinAt -= vier; s.warmupAngabeAt -= vier; if (s.letztesEnde) s.letztesEnde = frueher(s.letztesEnde);
+      await VARESTORE.setMeta('sitzung', s);
+      for (const t of await VARESTORE.allTakes()) { t.createdAt = frueher(t.createdAt); await VARESTORE.putTake(t); }
+    });
+    await page.reload();
+    await page.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const ein = { status: await page.inputValue('#ctx-warmup'), min: await page.inputValue('#ctx-warmup-min'), hinweis: (await page.isVisible('#ctx-hinweis')) ? await page.textContent('#ctx-hinweis') : '' };
+    check('Über 3 h ohne Take und Eingabe: Einsing-Angaben nach dem Neuladen leer, Hinweis auf neue Sitzung', ein.status === '' && ein.min === '' && /neue Sitzung/.test(ein.hinweis), JSON.stringify(ein));
+    await page.screenshot({ path: path.join(SP, 'shot-schritt0.png'), fullPage: true });
   } catch (e) { fails.push('AUSNAHME ' + (e && e.stack || e)); console.log('AUSNAHME', e); }
   check('Keine JavaScript-Fehler auf der Seite', errors.length === 0, errors.join(' | '));
   if (logs.length) console.log('Konsole:', logs.slice(0, 10).join('\n'));
