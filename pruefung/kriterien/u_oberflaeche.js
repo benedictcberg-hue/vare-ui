@@ -168,6 +168,8 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
     schliessen() { intervalle.slice().forEach(x => clearInterval(x.h)); }
   };
   if (!(await p.warte(() => st().settings, 5000))) throw new Error('Einstellungen nicht geladen');
+  // Geprüft wird die Verdrahtung, nicht der Rechenkern: gröberer Rahmenabstand spart Laufzeit.
+  st().settings.hopS = 0.05;
   return p;
 }
 
@@ -231,6 +233,8 @@ module.exports = async function (H) {
   try {
     const sp = speicherNeu(), uhr = uhrNeu(T0 + 86400e3);
     const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    // Hier muss die Analyse lange genug laufen, um in sie hinein zu tippen: Vorgabe-Rahmenabstand.
+    p.st().settings.hopS = 0.010;
     p.kalibriert('cal-A'); await p.mikrofon();
     p.el('take-label').value = 'A-Take'; p.el('take-intent').value = 'a'; p.el('take-comment').value = 'A-Kommentar';
     let busy = null;
