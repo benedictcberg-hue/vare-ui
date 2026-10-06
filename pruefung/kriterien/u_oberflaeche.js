@@ -5,7 +5,9 @@
    während der Analyse, eine Uhr, die weiterläuft. Geprüft wird, was gespeichert und angezeigt
    wird. Dieselben Abläufe spielt pruefung/browser-test.js im echten Chromium. */
 'use strict';
-const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto');
+const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto'), v8 = require('v8');
+// Blob aus dem buffer-Modul: global erst ab Node 18, so läuft es auch mit älterem Node unter Windows.
+const { Blob } = require('buffer');
 const ROOT = path.join(__dirname, '..', '..');
 const QUELLE = {};
 function quelle(f) { return QUELLE[f] || (QUELLE[f] = fs.readFileSync(path.join(ROOT, f), 'utf8')); }
@@ -56,7 +58,8 @@ function uhrNeu(startMs) {
 // bleibt über „Neuladen“ hinweg bestehen. langsam = Verzögerung beim Lesen aller Takes (ms).
 function speicherNeu() {
   const d = { takes: new Map(), series: new Map(), audio: new Map(), cal: new Map(), meta: new Map() };
-  const kopie = v => (v == null ? v : structuredClone(v));
+  // Wie IndexedDB: eine echte Kopie, NaN und typisierte Felder bleiben erhalten.
+  const kopie = v => (v == null ? v : v8.deserialize(v8.serialize(v)));
   const P = v => Promise.resolve(v);
   const api = {
     langsam: 0,
@@ -119,7 +122,7 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
     document, console: { log() { }, warn() { }, error: aufFehler }, navigator: {},
     location: { hash: '#/aufnahme', protocol: 'http:', origin: 'http://localhost' },
     addEventListener() { }, removeEventListener() { }, requestAnimationFrame: () => 0, cancelAnimationFrame() { },
-    performance: { now: () => performance.now() },
+    performance: { now: () => Date.now() },
     setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: h => clearTimeout(h),
     setInterval: (f, ms) => { const h = setInterval(f, ms); if (h.unref) h.unref(); intervalle.push({ h, f, ms }); return h; },
     clearInterval: h => { clearInterval(h); const i = intervalle.findIndex(x => x.h === h); if (i >= 0) intervalle.splice(i, 1); },
