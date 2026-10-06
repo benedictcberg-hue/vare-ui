@@ -106,6 +106,8 @@ const WAV = path.join(SP, 'fake.wav');
     await page.fill('#take-label', 'NAECHSTER');
     await page.selectOption('#take-intent', 'i');
     await page.fill('#take-comment', 'fuer den naechsten Take');
+    // Nur aussagekräftig, wenn die Analyse nach der letzten Eingabe noch lief.
+    const busyNachEingabe = await page.evaluate(() => VAREAPP.state.busy);
     await page.waitForFunction(() => document.querySelector('#take-result .notice'), null, { timeout: 180000 });
     const result = await page.textContent('#take-result');
     check('Take analysiert und gespeichert', /Gespeichert als/.test(result), result.replace(/\s+/g, ' ').slice(0, 300));
@@ -113,8 +115,8 @@ const WAV = path.join(SP, 'fake.wav');
     check('IndexedDB: 1 Take', takes.length === 1, String(takes.length));
     const felder = [await page.inputValue('#take-label'), await page.inputValue('#take-intent'), await page.inputValue('#take-comment')].join('|');
     check('Eingabe während der Analyse: Take behält Bezeichnung, Vokalabsicht, Kommentar; die neuen bleiben für den nächsten',
-      busyBeiEingabe === true && takes[0] && takes[0].label === 'E2E /a/ G3' && takes[0].vowelIntent === 'a' && takes[0].comment === 'automatischer Durchlauf' && felder === 'NAECHSTER|i|fuer den naechsten Take',
-      'Analyse lief=' + busyBeiEingabe + ' | gespeichert ' + (takes[0] && [takes[0].label, takes[0].vowelIntent, takes[0].comment].join('|')) + ' | Felder ' + felder);
+      busyBeiEingabe === true && busyNachEingabe === true && takes[0] && takes[0].label === 'E2E /a/ G3' && takes[0].vowelIntent === 'a' && takes[0].comment === 'automatischer Durchlauf' && felder === 'NAECHSTER|i|fuer den naechsten Take',
+      'Analyse lief vor/nach der Eingabe=' + busyBeiEingabe + '/' + busyNachEingabe + ' | gespeichert ' + (takes[0] && [takes[0].label, takes[0].vowelIntent, takes[0].comment].join('|')) + ' | Felder ' + felder);
     check('Schritt 0 gleich nach dem Take: nächster Take ist Nummer 2', (await page.textContent('#ctx-position')) === '2', await page.textContent('#ctx-position'));
     const s = takes[0] && takes[0].summary;
     if (s) {
@@ -231,7 +233,9 @@ const WAV = path.join(SP, 'fake.wav');
     const anzLoeschen = await page.textContent('#ctx-position');
     // Take C; während seiner Analyse „Neue Sitzung beginnen“.
     let busyC = null;
-    const tC = await takeAufnehmen(2500, async () => { busyC = await page.evaluate(() => VAREAPP.state.busy); await page.click('#btn-neue-sitzung'); });
+    // Klick im Seitenkontext: page.click wartet auf ruhige Animationsframes und käme so womöglich
+    // erst nach der Analyse an. busy wird im selben Schritt gelesen, also sicher während der Analyse.
+    const tC = await takeAufnehmen(2500, async () => { busyC = await page.evaluate(() => { const b = VAREAPP.state.busy; document.getElementById('btn-neue-sitzung').click(); return b; }); });
     check('Löschen: Anzeige und Take C bekommen 3, keine Position doppelt',
       anzLoeschen === '3' && !!tC && tC.sitzung.position === 3 && tC.sitzung.position !== tB.sitzung.position, 'Anzeige ' + anzLoeschen + ', C ' + (tC && tC.sitzung.position) + ', B ' + tB.sitzung.position);
     check('„Neue Sitzung“ während der Analyse: Take C behält Kalibrierung und Sitzung seiner Aufnahme',
