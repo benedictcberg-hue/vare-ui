@@ -257,4 +257,47 @@ module.exports = async function (H) {
     check('V2', 'Neu-Analyse ergibt nur ein zweideutiges Segment → angepinnte Referenz verwaist mit diesem Grund',
       ohneZiel(r.a) && /zweideutig/.test(r.a.grund) && isFinite(r.a.d34Zuletzt), JSON.stringify(r.a));
   }
+
+  /* V2j–m: Referenz nur aus Takes gleicher Rechenweise (Bericht 2, Befund 2; Manual: „Vergleiche nur
+     bei gleicher Rechenweise“). aktuell wie app.js es übergeben soll: Kern, Regler, Streuungsgrenze,
+     Rahmenabstand. Ohne die Prüfung wurde das enge Cluster eines Takes, der mit F3-Regler 2000 lief
+     (F3 2250, unterhalb des Sängerformantbands, physik §4), zur Zielmarke. */
+  const AKTUELL = { kernelVersion: D.VERSION, gate: { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500 }, spreadMaxHz: 130, hopS: 0.010 };
+  const uv = (t, a) => (A.unvergleichbar ? A.unvergleichbar(t, a) : '');
+  {
+    const L = await takeAus('L', 147, [700, 1200, 2250, 2800, 4200], { f3MinHz: 2000 });
+    const N = await takeAus('N', 147, [700, 1200, 2650, 3400, 4200]);
+    const bL = L.summary.perVowel.a && L.summary.perVowel.a.bestSegment, bN = N.summary.perVowel.a && N.summary.perVowel.a.bestSegment;
+    const r = A.computeRefs([L, N], {}, AKTUELL);
+    check('V2', 'computeRefs mit aktuellem Stand (F3 ≥ 2500): das schmalere Cluster eines Takes mit F3-Regler 2000 wird keine Referenz',
+      bL && bN && bL.d34Med < bN.d34Med && r.a && r.a.takeId === 'N', 'Bestsegment L ' + (bL ? bL.d34Med.toFixed(0) : '–') + ', N ' + (bN ? bN.d34Med.toFixed(0) : '–') + ' → Referenz ' + JSON.stringify(r.a));
+    const pin = A.computeRefs([L], {}); if (pin.a) pin.a.pinned = true;
+    const rp = A.computeRefs([L, N], pin, AKTUELL);
+    check('V2', 'Angepinnte Referenz aus dem Take mit F3-Regler 2000: verwaist mit benannter Abweichung, nicht still durch N ersetzt',
+      !!pin.a && ohneZiel(rp.a) && rp.a.takeId === 'L' && /F3-Mindestwert 2000 statt 2500 Hz/.test(rp.a.grund), JSON.stringify(rp.a));
+  }
+  {
+    // Jede Einstellung, die die Rechenweise trägt, einzeln verstellt — auch strenger als jetzt.
+    const mit = (feld, wert) => { const t = JSON.parse(JSON.stringify(T_EIN)); if (feld === 'summaryVersion') delete t.summary.summaryVersion; else if (feld.startsWith('gate.')) t.analysis.gate[feld.slice(5)] = wert; else t.analysis[feld] = wert; return t; };
+    const VAR = [['kernelVersion', '0.0.1', /Kern 0\.0\.1 statt/], ['summaryVersion', null, /Fassung 1 statt/], ['hopS', 0.005, /Rahmenabstand 0,005 statt 0,01 s/], ['spreadMaxHz', 250, /Streuung 250 statt 130 Hz/],
+      ['gate.f3MinHz', 2700, /F3-Mindestwert 2700 statt 2500 Hz/], ['gate.windowS', 0.15, /Gatter-Fenster 0,15 statt 0,3 s/], ['gate.sdF1Max', 100, /F1-Bewegungsgrenze 100 statt 50 Hz/],
+      ['gate.sdF2Max', 60, /F2-Bewegungsgrenze 60 statt 100 Hz/], ['gate.minValidShare', 0.6, /gültiger F1\/F2 0,6 statt 0,8/], ['gate.minFrames', 3, /Mindestzahl Rahmen im Fenster 3 statt 5/]];
+    const falsch = [];
+    for (const [feld, wert, muster] of VAR) {
+      const t = mit(feld, wert), r = A.computeRefs([t], {}, AKTUELL), g = uv(t, AKTUELL);
+      if (r.a || !muster.test(g)) falsch.push(feld + ' → ' + (r.a ? 'Referenz ' + r.a.d34.toFixed(0) : 'keine Referenz') + ' / „' + g + '“');
+    }
+    const basis = A.computeRefs([T_EIN], {}, AKTUELL);
+    check('V2', 'Vergleichbarkeit: jede abweichende Einstellung (Kern, Fassung, Rahmenabstand, Streuungsgrenze, sechs Gatterwerte, auch strengere) schließt den Take aus und wird benannt',
+      falsch.length === 0 && !!basis.a && uv(T_EIN, AKTUELL) === '', falsch.join(' | ') || 'Grundfall: ' + JSON.stringify(basis.a));
+  }
+  {
+    // Nicht zu streng: nur-live wirksame Gatterwerte, fehlende Angaben in aktuell (wie analyseTake:
+    // Vorgabe) und die Darstellung nach einer JSON-Sicherung ändern nichts an der Vergleichbarkeit.
+    const t = JSON.parse(JSON.stringify(T_EIN));
+    Object.assign(t.analysis.gate, { holdS: 0.3, minFramesLive: 4, frameTolShare: 0.7, frameVibRel: 0.1, refS: 1 });
+    const ok = [['nur-live-Werte anders', t, AKTUELL], ['aktuell = {}', T_EIN, {}], ['aktuell nur mit Reglern', T_EIN, { gate: AKTUELL.gate }]];
+    const falsch = ok.filter(([, tk, a]) => !A.computeRefs([tk], {}, a).a || uv(tk, a) !== '').map(([nm, tk, a]) => nm + ': „' + uv(tk, a) + '“');
+    check('V2', 'Vergleichbarkeit: nur live wirksame Gatterwerte und fehlende Angaben in aktuell (gelten als Vorgabe) schließen nicht aus', falsch.length === 0, falsch.join(' | '));
+  }
 };

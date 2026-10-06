@@ -92,6 +92,12 @@
      weder Bestwert noch Referenz für diesen Vokal (Referenzen gelten je Vokal). */
   var AMBIG_MAX_SHARE = 0.5;
 
+  /* Fassung der Zusammenfassung. Erhöhen, sobald bei gleichen Rahmenwerten andere Rahmen stabil,
+     gewertet, Segment oder Bestwert werden (hier oder im Offline-Gatter von vowel.js) — ältere Takes
+     sind dann nicht mehr gleich zusammengefasst. Takes ohne Angabe stammen aus Fassung 1, vor der
+     Prüfung auf zweideutige Vokalzuordnung. */
+  var SUMMARY_VERSION = 2;
+
   /* Segmente: maximale Läufe mit gate = stabil und gleicher Klasse, Mindestlänge, Mindestanteil Score.
      ambiguousShare = Anteil der Rahmen mit zweideutiger Vokalzuordnung (FLAG.VOWELAMBIG). */
   function segments(series, minLenS, minScoreShare) {
@@ -202,6 +208,7 @@
       if (bs && (!best || bs.d34Med < best.d34)) best = { cls: pv, d34: bs.d34Med, startS: bs.startS, lenS: bs.lenS, ambiguousShare: bs.ambiguousShare };
     }
     s.perVowel = per; s.best = best; s.segments = segs;
+    s.summaryVersion = SUMMARY_VERSION;
     return s;
   }
 
@@ -254,7 +261,7 @@
              Kante (Silbengrenze, Staccato) gegen gehaltenen Wechsel (Register). */
           var fein = D.pitchTrackFine(ds, TSR, opts.fine || {});
           var spruenge = D.detectJumps(fein, opts.jumps || {});
-          var meta = { hopS: opts.hopS, durationS: samples.length / sr, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
+          var meta = { hopS: opts.hopS, durationS: samples.length / sr, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
           var summary = summarise(series, meta);
           summary.sfrByNote = sfrByNote;
           var stimmSek = summary.voicedShare * meta.durationS;
@@ -275,7 +282,58 @@
     });
   }
 
-  /* Referenzen je Vokal aus allen Takes: engstes bestSegment (Minimum), mit Herkunft. Angepinnte bleiben. */
+  /* „Vergleiche nur bei gleicher Rechenweise“ (Manual): Eine Referenz ist die Zielmarke für das, was
+     jetzt gemessen wird, also stammt sie nur aus Takes, die so gerechnet und zusammengefasst sind, wie
+     jetzt gerechnet würde. Die Rechenweise tragen:
+     - Kernversion: Formanten, Gültigkeit und ΔF3–4 je Rahmen;
+     - summaryVersion: welche Rahmen Segment und Bestwert werden;
+     - hopS und spreadMaxHz: welche Rahmen es gibt und welche als gültig gelten;
+     - Offline-Gatter: die Regler windowS, sdF1Max, sdF2Max, minValidShare, f3MinHz, dazu die festen
+       Werte und die Zentroide. holdS, minFramesLive und die Rahmenprüfung wirken nur live.
+     Verlangt ist Gleichheit, nicht „mindestens so streng“: Ein strengeres Gatter zieht andere
+     Segmentgrenzen und bildet andere Mediane, auch wenn jeder gewertete Rahmen die jetzige Regel
+     erfüllt. Rauschboden und Gerät werden nicht verglichen: sie beschreiben die Aufnahme. */
+  var GATTER_VERGLEICH = [
+    ['f3MinHz', 'F3-Mindestwert', ' Hz'], ['windowS', 'Gatter-Fenster', ' s'], ['sdF1Max', 'F1-Bewegungsgrenze', ' Hz'],
+    ['sdF2Max', 'F2-Bewegungsgrenze', ' Hz'], ['minValidShare', 'Mindestanteil gültiger F1/F2', ''],
+    ['minVoicedShare', 'Mindestanteil stimmhafter Rahmen', ''], ['classShare', 'Mindestanteil der Fensterklasse', ''],
+    ['minFrames', 'Mindestzahl Rahmen im Fenster', ''], ['minFillShare', 'Mindestfüllung des Fensters', '']
+  ];
+  function istZahl(v) { return typeof v === 'number' && isFinite(v); }
+  function zahlGleich(a, b) { return istZahl(a) && istZahl(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)); }
+  function abweichung(name, alt, neu, einheit) {
+    var txt = function (v) { return String(v).replace('.', ','); };
+    return istZahl(alt) ? name + ' ' + txt(alt) + ' statt ' + txt(neu) + einheit : name + ' nicht gespeichert';
+  }
+  function zentroideGleich(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (!a[i] || !b[i] || a[i].cls !== b[i].cls || !zahlGleich(a[i].F1, b[i].F1) || !zahlGleich(a[i].F2, b[i].F2)) return false;
+    return true;
+  }
+  /* '' = vergleichbar, sonst die Abweichungen als Text. aktuell = { kernelVersion, gate, spreadMaxHz,
+     hopS }: was analyseTake jetzt bekäme; fehlende Angaben gelten wie dort als Vorgabe. Ohne aktuell
+     wird nichts geprüft. */
+  function unvergleichbar(take, aktuell) {
+    if (!aktuell) return '';
+    var an = take && take.analysis, su = take && take.summary, ag = aktuell.gate || {}, d = [], i;
+    if (!an) return 'Rechenweise nicht gespeichert';
+    var kern = aktuell.kernelVersion != null ? aktuell.kernelVersion : D.VERSION;
+    if (an.kernelVersion !== kern) d.push(an.kernelVersion ? 'Kern ' + an.kernelVersion + ' statt ' + kern : 'Kernversion nicht gespeichert');
+    var sv = su && su.summaryVersion != null ? su.summaryVersion : 1;
+    if (sv !== SUMMARY_VERSION) d.push('Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (sv === 1 ? ' (ohne Prüfung auf zweideutige Vokalzuordnung)' : ''));
+    var hop = aktuell.hopS != null ? aktuell.hopS : DEFAULTS.hopS, spr = aktuell.spreadMaxHz != null ? aktuell.spreadMaxHz : DEFAULTS.spreadMaxHz;
+    if (!zahlGleich(an.hopS, hop)) d.push(abweichung('Rahmenabstand', an.hopS, hop, ' s'));
+    if (!zahlGleich(an.spreadMaxHz, spr)) d.push(abweichung('Gültigkeitsgrenze Streuung', an.spreadMaxHz, spr, ' Hz'));
+    var tg = an.gate;
+    if (!tg) { d.push('Gatterwerte nicht gespeichert'); return d.join(', '); }
+    for (i = 0; i < GATTER_VERGLEICH.length; i++) {
+      var f = GATTER_VERGLEICH[i], soll = ag[f[0]] != null ? ag[f[0]] : V.DEFAULTS[f[0]];
+      if (!zahlGleich(tg[f[0]], soll)) d.push(abweichung(f[1], tg[f[0]], soll, f[2]));
+    }
+    if (!zentroideGleich(tg.centroids, ag.centroids || V.CENTROIDS)) d.push(tg.centroids ? 'andere Vokalzentroide' : 'Vokalzentroide nicht gespeichert');
+    return d.join(', ');
+  }
+
   function refAus(t, b, pinned) {
     var r = { d34: b.d34Med, takeId: t.id, code: t.code, label: t.label, date: t.createdAt, startS: b.startS, lenS: b.lenS, pinned: pinned };
     if (typeof b.ambiguousShare === 'number') r.ambiguousShare = b.ambiguousShare;
@@ -294,13 +352,16 @@
     return r;
   }
 
-  function computeRefs(takes, previous) {
+  /* Referenzen je Vokal: engstes Bestsegment über alle Takes, mit Herkunft. aktuell (optional, siehe
+     unvergleichbar): Takes, die anders gerechnet sind, zählen nicht. Ohne aktuell wird die
+     Rechenweise nicht geprüft. */
+  function computeRefs(takes, previous, aktuell) {
     var refs = {};
     /* Eine angepinnte Referenz wird nach einer Neu-Analyse aus dem neuen Bestsegment desselben Takes
-       aufgefrischt, nicht aus dem alten Wert. Geht das nicht — Take gelöscht, kein Bestsegment mehr,
-       Bestsegment zweideutig —, bleibt sie verwaist stehen. Früher wurde sie verworfen und das
-       Minimum der übrigen Takes trat kommentarlos an ihre Stelle. Eine verwaiste Referenz frischt
-       sich wieder auf, sobald ihr Take wieder ein Bestsegment hat (Neu-Analyse, Import). */
+       aufgefrischt, nicht aus dem alten Wert. Geht das nicht — Take gelöscht, anders gerechnet, kein
+       Bestsegment mehr, Bestsegment zweideutig —, bleibt sie verwaist stehen. Früher wurde sie
+       verworfen und das Minimum der übrigen Takes trat kommentarlos an ihre Stelle. Eine verwaiste
+       Referenz frischt sich wieder auf, sobald ihr Take wieder passt (Neu-Analyse, Import). */
     if (previous) for (var p in previous) {
       var pr = previous[p];
       if (!pr || !pr.pinned) continue;
@@ -308,7 +369,9 @@
       for (var q = 0; q < takes.length; q++) if (takes[q] && takes[q].id === pr.takeId) { host = takes[q]; break; }
       var wer = 'Take ' + ((host ? host.code : pr.code) || '?');
       var pv = host && host.summary && host.summary.perVowel && host.summary.perVowel[p], hb = pv && pv.bestSegment, grund = '';
+      var uv = host ? unvergleichbar(host, aktuell) : '';
       if (!host) grund = wer + ' ist gelöscht.';
+      else if (uv) grund = wer + ' ist anders gerechnet als jetzt eingestellt: ' + uv + '.';
       else if (!hb || !isFinite(hb.d34Med)) grund = wer + ' hat in seiner letzten Auswertung ' + (pv && pv.segmentsAmbiguous ? 'für /' + p + '/ nur zweideutig zugeordnete Segmente, kein Bestsegment.' : 'kein Bestsegment für /' + p + '/.');
       else if (hb.ambiguousShare > AMBIG_MAX_SHARE) grund = wer + ': das Bestsegment für /' + p + '/ ist zweideutig zugeordnet (' + Math.round(100 * hb.ambiguousShare) + ' % der Rahmen).';
       refs[p] = grund ? verwaist(pr, host, grund) : refAus(host, hb, true);
@@ -316,6 +379,8 @@
     for (var i = 0; i < takes.length; i++) {
       var t = takes[i], per = t.summary && t.summary.perVowel;
       if (!per) continue;
+      // Bericht 2, Befund 2: ein Take mit gesenkter F3-Schwelle machte sein tiefes, enges Cluster zur Zielmarke.
+      if (unvergleichbar(t, aktuell)) continue;
       for (var cls in per) {
         var b = per[cls].bestSegment;
         if (!b || !isFinite(b.d34Med)) continue;
@@ -343,8 +408,8 @@
     return m;
   }
 
-  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, makeSeries: makeSeries, stats: stats };
+  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);
