@@ -105,7 +105,7 @@ module.exports = async function (H) {
   /* V1c: die Toleranz trägt realistisches Vibrato. Stehende Vokale mit Vibrato 6 Hz ±50 Cent und
      Wobble 3,5 Hz ±30 Cent, auch dort, wo der Formantwert am Teilton hängt (/a/-F1 und /ɐ/ bei
      250 Hz, /i/-F2 bei 220–250 Hz): kein Rahmen darf als „verlässt den Vokal“ gelten. */
-  const FENSTER_VIBRATO = [0.3, 0.6];
+  const FENSTER_VIBRATO = [0.15, 0.3, 0.6];
   {
     let falsch = 0, gewertet = 0, beispiel = '';
     const leer = [];
@@ -136,5 +136,28 @@ module.exports = async function (H) {
       }
     }
     check('V1', 'Live-Gatter: Teiltonsprünge bei 233 Hz (/i/, /e/, Vibrato ±40 Cent, Wobble ±30 Cent) gelten nicht als „verlässt den Vokal“', falsch === 0 && gewertet > 0, falsch ? falsch + ' Rahmen, erster: ' + beispiel : 'gewertet ' + gewertet);
+  }
+
+  /* V1e–g: kleines Fenster (Bericht 2, Befund 8). Live kommt höchstens alle 40–50 ms ein Rahmen; mit
+     fünf geforderten Rahmen war 0,15 s nie stabil. Stehender Vokal mit leichtem Zittern (6 Hz). */
+  const steh = t => ({ t, voiced: true, F1: 700 + 6 * Math.sin(2 * Math.PI * 6 * t), F2: 1200 + 10 * Math.sin(2 * Math.PI * 6 * t + 1), F3: 2600, valid1: true, valid2: true, d34: 700, d34valid: true });
+  {
+    const g = V.createGate({ windowS: 0.15 }); let r = null;
+    for (let t = 0; t <= 0.3 + 1e-9; t += 0.05) r = g.update(steh(t));
+    check('V1', 'Live-Gatter, Fenster 0,15 s, Takt 50 ms: stehender Vokal ist nach 0,3 s stabil und gewertet', r.state === 'stabil' && isFinite(r.score), r.state + ' — ' + r.reason);
+  }
+  {
+    // Bildschirmtakt P, 20 % der Bilder fallen aus; app.js rechnet frühestens 40 ms nach dem letzten Rahmen.
+    let s = 7; const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    const raf = (P, dur) => { const o = []; let last = -1e9; for (let t = 0; t <= dur; t += P) { if (rnd() < 0.2) continue; if (t - last >= 0.040 - 1e-9) { o.push(t); last = t; } } return o; };
+    const verlust = (T, dur) => { const o = []; for (let t = 0; t <= dur; t += T) if (rnd() >= 0.2) o.push(t); return o; };
+    const anteil = (ts, windowS) => { const g = V.createGate({ windowS }); let n = 0, st = 0; for (const t of ts) { const r = g.update(steh(100 + t)); if (t < 1) continue; n++; if (r.state === 'stabil' && isFinite(r.score)) st++; } return st / n; };
+    let minRaf = 1, wRaf = '', minVerl = 1, wVerl = '';
+    for (const windowS of [0.15, 0.2, 0.3, 0.45, 0.6]) {
+      for (const [nm, P] of [['60 Hz', 1 / 60], ['120 Hz', 1 / 120], ['144 Hz', 1 / 144]]) { const a = anteil(raf(P, 20), windowS); if (a < minRaf) { minRaf = a; wRaf = 'Fenster ' + windowS + ' s, Bildschirm ' + nm; } }
+      for (const T of [0.033, 0.042, 0.05]) { const a = anteil(verlust(T, 20), windowS); if (a < minVerl) { minVerl = a; wVerl = 'Fenster ' + windowS + ' s, Takt ' + T * 1000 + ' ms'; } }
+    }
+    check('V1', 'Live-Gatter, Fenster 0,15–0,60 s, 20 % ausgefallene Bildschirmbilder (60/120/144 Hz): mindestens 95 % der Rahmen stabil und gewertet', minRaf >= 0.95, 'kleinster Anteil ' + (100 * minRaf).toFixed(0) + ' % (' + wRaf + ')');
+    check('V1', 'Live-Gatter, Fenster 0,15–0,60 s, Takt 33/42/50 ms, 20 % ganze Takte verloren: überwiegend stabil und gewertet', minVerl > 0.5, 'kleinster Anteil ' + (100 * minVerl).toFixed(0) + ' % (' + wVerl + ')');
   }
 };

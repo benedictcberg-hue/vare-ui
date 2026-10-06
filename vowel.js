@@ -70,7 +70,14 @@
     minVoicedShare: 0.9,    // fest
     classShare: 0.8,        // fest: Anteil der gültigen Rahmen mit der Fensterklasse
     holdS: 0.15,            // fest: Hysterese beim Klassenwechsel
-    minFrames: 5,           // fest: so viele Rahmen muss das Fenster mindestens enthalten
+    minFrames: 5,           // fest: so viele Rahmen muss das Fenster mindestens enthalten (offline)
+    /* Live drei statt fünf: dort kommt höchstens alle 40–50 ms ein Rahmen, in 0,15 s passen nur 3–4 —
+       mit fünf war das kleinste Fenster nie stabil. Zwei wären nur eine Differenz, kein Streuungsmaß;
+       den Einzelrahmen nach einer Lücke fängt minFillShare. Dass ein kurzes Fenster langsamen
+       Vokalwechseln folgt, fängt die Rahmenprüfung (frameLeaves, Band 2). Offline bleibt es bei fünf:
+       bei 10 ms Raster greift die Zahl dort nicht, und bei grobem Raster würde ein kurzes zentriertes
+       Fenster sonst erstmals stabil — ohne diese Rahmenprüfung. */
+    minFramesLive: 3,       // fest
     minFillShare: 0.6,      // fest: und mindestens so viel von windowS abdecken
     // Live: der gewertete Rahmen muss selbst noch im Vokal stehen (frameLeaves)
     frameTolShare: 0.5,     // fest: Band um den Fenstermedian, Anteil von sdF1Max bzw. sdF2Max …
@@ -93,14 +100,15 @@
   }
 
   /* Die eine Prüffunktion für ein Fenster aus Rahmen-Einträgen (entry). Liefert
-     { state: 'pause'|'uebergang'|'stabil', cls, reason, F1med, F2med } — ohne Hysterese, ohne Score. */
-  function evaluateWindow(win, opts) {
-    var voiced = 0, valid = 0, f1 = [], f2 = [], i;
+     { state: 'pause'|'uebergang'|'stabil', cls, reason, F1med, F2med } — ohne Hysterese, ohne Score.
+     minFrames (optional) ersetzt opts.minFrames; live gilt minFramesLive. */
+  function evaluateWindow(win, opts, minFrames) {
+    var voiced = 0, valid = 0, f1 = [], f2 = [], i, nMin = minFrames || opts.minFrames;
     /* Ein Fenster, das kaum Rahmen enthält, kann nicht „stabil“ heißen: bei einem einzigen Rahmen
        liefert der Interdezilbereich NaN, und NaN > Grenze ist false — beide Bewegungsprüfungen
        galten damit als bestanden. Nach jeder Lücke (Registerkarte im Hintergrund, Kalibrierung,
        Mikrofonwechsel) wurde so aus einem einzelnen Rahmen sofort wieder „stabil“ mit Wertung. */
-    if (win.length < opts.minFrames) return res('uebergang', null, NaN, 'zu wenige Rahmen (' + win.length + ')');
+    if (win.length < nMin) return res('uebergang', null, NaN, 'zu wenige Rahmen (' + win.length + ')');
     var span = win[win.length - 1].t - win[0].t;
     if (span < opts.windowS * opts.minFillShare) return res('uebergang', null, NaN, 'Fenster erst ' + span.toFixed(2) + ' s voll');
     for (i = 0; i < win.length; i++) {
@@ -185,7 +193,7 @@
       ring.push(e); hist.push(e);
       while (ring.length && ring[0].t < fr.t - opts.windowS) ring.shift();
       while (hist.length && hist[0].t < fr.t - Math.max(opts.windowS, opts.refS)) hist.shift();
-      var r = evaluateWindow(ring, opts);
+      var r = evaluateWindow(ring, opts, opts.minFramesLive);
       if (r.state === 'pause') { curCls = null; candCls = null; return r; }
       if (r.state === 'uebergang') { r.cls = curCls; return r; }
       // Kandidat verfällt, sobald das Fenster wieder die alte Klasse meldet. Sonst wäre die
