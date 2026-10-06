@@ -858,6 +858,7 @@
     var maxOnset = (opts.maxOnsetFrames == null) ? 4 : opts.maxOnsetFrames;
     var minRef = (opts.minRefFrames == null) ? 3 : opts.minRefFrames;
     var pauseS = (opts.pauseMs == null ? 120 : opts.pauseMs) / 1000;
+    var glideAp = (opts.glideApMax == null) ? 0.15 : opts.glideApMax;
     var n = track.t.length, back = Math.max(3, Math.round(backS / track.hopS));
     var pauseFr = Math.max(1, Math.round(pauseS / track.hopS));
     var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, i;
@@ -919,8 +920,13 @@
         if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], ref: ref, dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
       }
       if (!run) {
+        /* seitRuhe zählt nur Rahmen mit sicherer Periode (ap unter der YIN-Schwelle 0,15). Unsichere
+           Rahmen in einem rauen Übergang sind kein Beleg für ein Gleiten — gemessen: Bei einem
+           simulierten Bruch mit 60 ms aperiodischem Übergang hoben sie seitRuhe über maxOnset, der
+           neue Ton wurde Bezug, und die Rückkehr erschien als gehaltener Sprung in Gegenrichtung
+           (−15 statt +15 HT, 575 ms). Ein Portamento hat ap ≤ 0,06, auch mit Rauschen bei 5 dB. */
         if (isFinite(st) && Math.abs(st) < ruheSt) { ruhe.push(track.f0[i]); seitRuhe = 0; }
-        else { ruhe.push(track.f0[i]); seitRuhe++; }
+        else { ruhe.push(track.f0[i]); if (track.ap[i] < glideAp) seitRuhe++; }
         if (ruhe.length > back) ruhe.shift();
       }
     }

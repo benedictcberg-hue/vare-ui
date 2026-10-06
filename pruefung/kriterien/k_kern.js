@@ -210,4 +210,31 @@ module.exports = async function (H) {
       check('K1a', 'Portamento über eine Quinte in 0,5 s, auch in tiefer Lage: kein Sprung', r.ok === r.n, r.detail);
     }
   }
+
+  /* ---------- K1c: Bruch mit Qualitätseinbruch am Übergang wird richtig gezählt ---------- */
+  /* Simulierter aufsteigender Bruch (aus 165–247 Hz nach 415–466 Hz, gehalten 300 ms): zwischen altem
+     und neuem Ton 30–60 ms vokalgefiltertes Rauschen oder stark aperiodische Impulse (Jitter ±30 %,
+     Shimmer ±50 %) mit dem Pegel des Tons. Soll: genau ein gehaltenes Ereignis in Richtung des
+     Sprungs, kein gehaltenes in Gegenrichtung. Bewertet wird nur die Zählung, nicht ob es ein Bruch ist. */
+  const rmsOf = x => { let p = 0; for (let i = 0; i < x.length; i++) p += x[i] * x[i]; return Math.sqrt(p / x.length); };
+  const aufPegel = (x, r) => { const g = r / rmsOf(x), y = new Float64Array(x.length); for (let i = 0; i < x.length; i++) y[i] = x[i] * g; return y; };
+  const filt = (x, v) => { let y = x; const [F, B] = VOK[v]; for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR); return y; };
+  let lcgB = 4242; const rndB = () => { lcgB = (lcgB * 1664525 + 1013904223) >>> 0; return lcgB / 4294967296 * 2 - 1; };
+  const rauschStueck = (s, v, pg, seed) => aufPegel(filt(noise(Math.round(s * SR), 1, seed), v), pg);
+  const aperStueck = (s, f, v, pg) => { const n = Math.round(s * SR), src = new Float64Array(n); let pos = 0;
+    while (pos < n) { const T = SR / f * (1 + 0.3 * rndB()), g = 1 + 0.5 * rndB(), i0 = Math.floor(pos), q = pos - i0;
+      for (let k = 0; k < 6; k++) { const w = g * Math.cos(Math.PI * k / 12); if (i0 + k < n) src[i0 + k] += w * (1 - q); if (i0 + k + 1 < n) src[i0 + k + 1] += w * q; } pos += T; }
+    return aufPegel(filt(src, v), pg); };
+  const brueche = [];
+  for (const v of ['a', 'o', 'i']) for (const [a, b] of [[165, 415], [175, 415], [196, 440], [220, 440], [247, 466]]) for (const d of [0.03, 0.045, 0.06]) {
+    const A = ton(a, 0.6, v), pg = rmsOf(A);
+    brueche.push({ a, b, v, d, art: 'Rauschen', sig: concat([A, rauschStueck(d, v, pg, 1000 + a), ton(b, 0.3, v), ton(a, 0.6, v)]) });
+    brueche.push({ a, b, v, d, art: 'aperiodisch', sig: concat([A, aperStueck(d, Math.sqrt(a * b), v, pg), ton(b, 0.3, v), ton(a, 0.6, v)]) });
+  }
+  {
+    const faelle = brueche.map(x => { const ht = 12 * Math.log2(x.b / x.a); return { name: x.art + ' ' + x.a + '→' + x.b + ' /' + x.v + '/ ' + x.d * 1000 + ' ms', sig: x.sig,
+      soll: e => e.filter(y => y.art === 'gehalten').length === 1 && e.some(y => y.art === 'gehalten' && Math.abs(y.halbtoene - ht) <= 1) }; });
+    const r = sammle(faelle);
+    check('K1c', 'Bruch mit 30–60 ms Rauschen oder aperiodischen Impulsen am Übergang: genau ein gehaltenes Ereignis in Sprungrichtung', r.ok === r.n, r.detail);
+  }
 };
