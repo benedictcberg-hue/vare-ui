@@ -410,7 +410,7 @@
   function ladeSitzung() {
     return S.getMeta('sitzung', null).then(function (v) {
       if (v && v.id) { st.sitzung = v; return v; }
-      st.sitzung = { nr: 1, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null, letztePos: 0 };
+      st.sitzung = { nr: 1, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null, warmupMinAt: null, warmupAngabeAt: null, letztePos: 0 };
       return S.setMeta('sitzung', st.sitzung).then(function () { return st.sitzung; });
     });
   }
@@ -458,10 +458,43 @@
     if (!(sek >= 0)) return { sek: null, selbeSitzung: null };
     return { sek: sek, selbeSitzung: selbe };
   }
+  /* Einsing-Angaben beschreiben einen Zustand, der verfliegt. Die Minuten seit Einsingbeginn laufen
+     deshalb mit: gespeichert wird die Eingabe samt Zeitpunkt, jeder Take rechnet die Minute seines
+     Starts. Liegen letzte Eingabe und letzter Take mehr als drei Stunden zurück, ist es eine andere
+     Übungseinheit: eine Übungssitzung dauert selten über zwei Stunden, und nach Stunden ohne Singen
+     ist auch „voll eingesungen“ abgeklungen. Dann werden die Angaben geleert, und die Seite sagt
+     warum — still weitergeführt landete „voll eingesungen, seit 15 min“ im nächsten Tag. */
+  var EINSING_GUELTIG_MS = 3 * 3600 * 1000;
+  function einsingMinuten(jetzt) {
+    var s = st.sitzung;
+    if (!s || s.warmupMin == null || !isFinite(s.warmupMin) || !(Number(s.warmupMinAt) > 0)) return null;
+    var d = (jetzt.getTime() - Number(s.warmupMinAt)) / 60000;
+    // Uhr zurückgestellt: lieber keine Zahl als eine erfundene.
+    if (!(d >= 0)) return null;
+    return Math.round((s.warmupMin + d) * 10) / 10;
+  }
+  function einsingHinweis(text) { var el = $('ctx-hinweis'); el.textContent = text || ''; el.hidden = !text; }
+  function einsingPruefen(jetzt) {
+    var s = st.sitzung;
+    if (!s || (!s.warmup && s.warmupMin == null)) return;
+    var ref = Number(s.warmupAngabeAt) || 0, t = letzterTake(), te = t ? Date.parse(t.createdAt) : NaN, le = Date.parse(s.letztesEnde);
+    if (isFinite(te) && te > ref) ref = te;
+    if (isFinite(le) && le > ref) ref = le;
+    if (ref > 0 && jetzt.getTime() - ref <= EINSING_GUELTIG_MS) {
+      // Ältere Daten: Minuten ohne Zeitpunkt der Eingabe können nicht mitlaufen.
+      if (s.warmupMin != null && !(Number(s.warmupMinAt) > 0)) {
+        s.warmupMin = null; $('ctx-warmup-min').value = ''; speichereSitzung().catch(function () { });
+        einsingHinweis('Minuten seit Einsingbeginn waren ohne Zeitpunkt der Eingabe gespeichert und können nicht mitlaufen — geleert, bitte neu angeben.');
+      }
+      return;
+    }
+    s.warmup = ''; s.warmupMin = null; s.warmupMinAt = null; s.warmupAngabeAt = null;
+    $('ctx-warmup').value = ''; $('ctx-warmup-min').value = ''; speichereSitzung().catch(function () { });
+    einsingHinweis('Einsing-Angaben geleert: ' + (ref > 0 ? 'letzte Eingabe und letzter Take liegen ' + dauerText((jetzt.getTime() - ref) / 1000) + ' zurück' : 'unbekannt, wann sie eingegeben wurden')
+      + '. Vermutlich beginnt hier eine neue Sitzung — „Neue Sitzung beginnen“ und den Einsing-Status neu angeben.');
+  }
   function kontextJetzt(jetzt) {
     var p = pauseSeitLetztem(jetzt);
-    var wm = $('ctx-warmup-min').value.trim();
-    var min = wm === '' ? null : Number(wm);
     return {
       id: st.sitzung ? st.sitzung.id : null,
       nr: st.sitzung ? st.sitzung.nr : null,
@@ -469,14 +502,19 @@
       position: st.sitzung ? naechstePosition() : null,
       pauseVorherS: p.sek,
       pauseSelbeSitzung: p.selbeSitzung,
-      warmup: $('ctx-warmup').value || '',
-      warmupMin: (min != null && isFinite(min) && min >= 0) ? min : null
+      warmup: (st.sitzung && st.sitzung.warmup) || '',
+      warmupMin: einsingMinuten(jetzt)
     };
   }
   function renderKontext() {
     // Vor dem Lesen der Chronik wäre jede Nummer geraten.
     if (!st.sitzung || !st.takesGeladen) return;
-    var k = kontextJetzt(new Date());
+    var jetzt = new Date();
+    einsingPruefen(jetzt);
+    var k = kontextJetzt(jetzt);
+    // Das Feld zeigt den laufenden Stand — außer jemand tippt gerade darin.
+    var fm = $('ctx-warmup-min');
+    if (document.activeElement !== fm) fm.value = k.warmupMin == null ? '' : String(Math.round(k.warmupMin));
     $('ctx-session-nr').textContent = String(k.nr);
     $('ctx-position').textContent = String(k.position);
     var el = $('ctx-pause');
@@ -485,8 +523,8 @@
   }
   function neueSitzung() {
     var nr = (st.sitzung && st.sitzung.nr ? st.sitzung.nr : 0) + 1;
-    st.sitzung = { nr: nr, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null, letztePos: 0 };
-    $('ctx-warmup').value = ''; $('ctx-warmup-min').value = '';
+    st.sitzung = { nr: nr, id: uuid(), startedAt: new Date().toISOString(), warmup: '', warmupMin: null, warmupMinAt: null, warmupAngabeAt: null, letztePos: 0 };
+    $('ctx-warmup').value = ''; $('ctx-warmup-min').value = ''; einsingHinweis('');
     /* Eine neue Sitzung heißt: andere Kette, anderer Raum, anderes Mikrofon-Gain. Die alte
        Kalibrierung darf dafür nicht mehr gelten, sonst wird SNR gegen gestern gerechnet. */
     st.calSession = false; st.cal = null;
@@ -501,7 +539,9 @@
       if ($('btn-take').disabled) return;
       /* Der Kontext wird im Moment des Starts festgehalten, nicht beim Speichern — sonst
          zählte die Dauer des Takes selbst zur Pause davor. */
-      st.pendingCtx = kontextJetzt(new Date());
+      var jetzt = new Date();
+      einsingPruefen(jetzt);
+      st.pendingCtx = kontextJetzt(jetzt);
       st.taking = true; st.rec.beginTake(); $('btn-take').textContent = 'Take beenden'; $('btn-take').className = 'danger'; $('take-result').innerHTML = '';
       st.timer = setInterval(function () { $('take-timer').textContent = fmt(st.rec.recordedSeconds, 1) + ' s'; }, 100);
       return;
@@ -816,13 +856,20 @@
     $('btn-neue-sitzung').addEventListener('click', neueSitzung);
     /* Einsing-Status und -Dauer gelten für die ganze Sitzung, nicht nur für den nächsten Take —
        sie werden deshalb mitgespeichert und sind nach einem Neuladen noch da. */
-    $('ctx-warmup').addEventListener('change', function () { if (st.sitzung) { st.sitzung.warmup = $('ctx-warmup').value; speichereSitzung(); } });
+    $('ctx-warmup').addEventListener('change', function () {
+      if (!st.sitzung) return;
+      st.sitzung.warmup = $('ctx-warmup').value; st.sitzung.warmupAngabeAt = Date.now();
+      einsingHinweis(''); speichereSitzung();
+    });
     $('ctx-warmup-min').addEventListener('change', function () {
       if (!st.sitzung) return;
-      var v = $('ctx-warmup-min').value.trim(), n = v === '' ? null : Number(v);
+      var v = $('ctx-warmup-min').value.trim(), n = v === '' ? null : Number(v), jetzt = Date.now();
       st.sitzung.warmupMin = (n != null && isFinite(n) && n >= 0) ? n : null;
+      // Ab dem Zeitpunkt der Eingabe zählen die Minuten weiter.
+      st.sitzung.warmupMinAt = st.sitzung.warmupMin == null ? null : jetzt;
+      st.sitzung.warmupAngabeAt = jetzt;
       if (st.sitzung.warmupMin == null) $('ctx-warmup-min').value = '';
-      speichereSitzung();
+      einsingHinweis(''); speichereSitzung();
     });
     /* Sitzung UND Takes lesen, bevor ein Take möglich ist: Stelle in der Sitzung und Pause davor
        kommen aus der Chronik. Bis dahin bleibt der Take-Knopf gesperrt (updateTakeButton). */
@@ -830,7 +877,6 @@
       return S.allTakes().then(function (alle) {
         st.takes = alle; st.takesGeladen = true;
         $('ctx-warmup').value = si.warmup || '';
-        $('ctx-warmup-min').value = si.warmupMin == null ? '' : String(si.warmupMin);
         renderKontext(); updateTakeButton();
         /* Die Pause läuft weiter, während die Seite offen steht. Sie wird deshalb jede halbe
            Minute neu angezeigt — festgehalten wird sie erst beim Take-Start. */

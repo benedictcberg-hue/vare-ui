@@ -169,7 +169,9 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
 }
 
 module.exports = async function (H) {
-  const { check, D, SR, concat, noise, BW5 } = H;
+  const { D, SR, concat, noise, BW5 } = H;
+  // test_dsp.js füllt die ID auf 5 Zeichen auf; bei „U1.10“ fehlte sonst der Abstand zum Namen.
+  const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
   process.on('unhandledRejection', aufFehler);
   // Kurzer Take: /a/ bei G3 zwischen zwei Stücken Raumrauschen, 1,2 s.
   const SIG = concat([noise(Math.round(0.1 * SR), 2e-4, 7), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 8)]);
@@ -266,6 +268,72 @@ module.exports = async function (H) {
       'Analyse lief während des Wechsels=' + busy + ' | Gerät ' + C.deviceLabel + ' (' + C.deviceId + ') | hasAudio=' + C.hasAudio + ' Audio ' + (audio ? audio.format : 'fehlt'));
     p.schliessen();
   } catch (e) { check('U1.7', 'Ablauf Eingaben während der Analyse läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U1 · Einsing-Minuten laufen mit und wandern nicht in einen anderen Tag ---------- */
+  const ein = t => t ? t.code + ' ' + (t.sitzung.warmup || '–') + ' ' + (t.sitzung.warmupMin == null ? 'null' : t.sitzung.warmupMin) + ' min' : '–';
+  const hinweisSichtbar = p => !p.el('ctx-hinweis').hidden && /neue Sitzung/.test(p.el('ctx-hinweis').textContent);
+  try {
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 2 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-W'); await p.mikrofon();
+    p.aendern('ctx-warmup', 'voll'); p.aendern('ctx-warmup-min', '15');
+    uhr.vor(30 * 60e3); p.intervall(30000);
+    const feld30 = p.el('ctx-warmup-min').value;
+    const W1 = await p.take();
+    check('U1.10', 'Einsing-Minuten laufen mit: 15 min eingetragen, 30 min später zeigen Feld und Take 45 min',
+      W1.sitzung.warmup === 'voll' && W1.sitzung.warmupMin >= 44.9 && W1.sitzung.warmupMin <= 46 && feld30 === '45', 'Feld nach 30 min: ' + feld30 + ' | ' + ein(W1));
+    // Weitersingen mit 2,5 h Abstand: die Angaben bleiben, gemessen ab dem letzten Take, nicht ab der Eingabe.
+    uhr.vor(150 * 60e3);
+    const W2 = await p.take();
+    uhr.vor(150 * 60e3); p.intervall(30000);
+    const nochDa = p.el('ctx-hinweis').hidden && p.el('ctx-warmup').value === 'voll';
+    const W3 = await p.take();
+    check('U1.11', 'Takes im Abstand von 2,5 h: Einsing-Angaben bleiben, die Minuten zählen weiter',
+      nochDa && W2.sitzung.warmup === 'voll' && Math.abs(W2.sitzung.warmupMin - 195) < 1 && W3.sitzung.warmup === 'voll' && Math.abs(W3.sitzung.warmupMin - 345) < 1,
+      [W1, W2, W3].map(ein).join(' | ') + ' | vor W3 noch eingetragen=' + nochDa);
+    // Über drei Stunden weder Take noch Eingabe: leeren und sagen, warum.
+    uhr.vor(3 * 3600e3 + 60e3); p.intervall(30000);
+    const s = p.st().sitzung, gesp = sp.d.meta.get('sitzung');
+    const geleert = s.warmup === '' && s.warmupMin == null && p.el('ctx-warmup').value === '' && p.el('ctx-warmup-min').value === '' && gesp.warmup === '' && gesp.warmupMin == null;
+    const text = p.el('ctx-hinweis').textContent, sichtbar = hinweisSichtbar(p);
+    const W4 = await p.take();
+    check('U1.12', 'Über 3 h ohne Take und ohne Eingabe: Einsing-Angaben geleert, Hinweis auf neue Sitzung, Take trägt keine alten Angaben',
+      geleert && sichtbar && W4.sitzung.warmup === '' && W4.sitzung.warmupMin == null,
+      'geleert=' + geleert + ' | Hinweis sichtbar=' + sichtbar + ' „' + text + '“ | ' + ein(W4));
+    p.schliessen();
+  } catch (e) { check('U1.10', 'Ablauf Einsing-Minuten läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+  try {
+    // Am nächsten Tag geöffnet: dieselbe Sitzung im Speicher, Angaben vom Vortag.
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 3 * 86400e3);
+    let p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-T'); await p.mikrofon();
+    p.aendern('ctx-warmup', 'voll'); p.aendern('ctx-warmup-min', '15');
+    const V = await p.take();
+    p.schliessen(); uhr.vor(20 * 3600e3);
+    p = await seiteOeffnen(sp, uhr, SIG, SR);
+    await p.ruhe(30);
+    const anz = p.el('ctx-warmup').value + '|' + p.el('ctx-warmup-min').value, gesp = sp.d.meta.get('sitzung');
+    check('U1.13', 'Am nächsten Tag geöffnet: Einsing-Angaben vom Vortag sind leer, der Hinweis sagt warum',
+      anz === '|' && p.st().sitzung.warmup === '' && gesp.warmup === '' && gesp.warmupMin == null && hinweisSichtbar(p),
+      'Vortag ' + ein(V) + ' | Felder jetzt „' + anz + '“ | Hinweis „' + p.el('ctx-hinweis').textContent + '“');
+    p.schliessen();
+    // Ältere Daten: Minuten ohne Zeitpunkt der Eingabe, letzter Take vor 10 min.
+    const sp2 = speicherNeu(), uhr2 = uhrNeu(T0 + 4 * 86400e3);
+    p = await seiteOeffnen(sp2, uhr2, SIG, SR);
+    p.kalibriert('cal-L'); await p.mikrofon();
+    p.aendern('ctx-warmup', 'voll'); p.aendern('ctx-warmup-min', '15');
+    await p.take(); p.schliessen();
+    const alt = sp2.d.meta.get('sitzung'); delete alt.warmupMinAt; delete alt.warmupAngabeAt;
+    uhr2.vor(10 * 60e3);
+    p = await seiteOeffnen(sp2, uhr2, SIG, SR);
+    p.kalibriert('cal-L2'); await p.mikrofon();
+    const felder = p.el('ctx-warmup').value + '|' + p.el('ctx-warmup-min').value, hw = p.el('ctx-hinweis');
+    const L = await p.take();
+    check('U1.14', 'Minuten ohne Zeitpunkt (ältere Daten): nicht fortgeschrieben, geleert und benannt; Einsing-Status bleibt',
+      felder === 'voll|' && !hw.hidden && /ohne Zeitpunkt/.test(hw.textContent) && L.sitzung.warmup === 'voll' && L.sitzung.warmupMin == null,
+      'Felder „' + felder + '“ | Hinweis „' + hw.textContent + '“ | ' + ein(L));
+    p.schliessen();
+  } catch (e) { check('U1.13', 'Ablauf Einsing-Angaben über Neuladen läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
