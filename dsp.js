@@ -780,32 +780,68 @@
      blinden Fleck aus einem anderen Grund (Glättung des Tonhöhenverlaufs).
      Deshalb eine zweite Spur mit kurzem Fenster. Sie misst nur grob, taugt nicht für Formanten
      und nicht für feine Tonhöhenarbeit — sie beantwortet eine einzige Frage: war da ein Sprung?
-     Der Mindestgrundton ist höher angesetzt (120 Hz), damit das Fenster überhaupt kurz sein kann:
-     tauMax = sr/fmin bestimmt, wie viel Signal für den Vergleich übrig bleibt.
+     Fenster, Untergrenze und Tiefpass sind gemessen (Bariton 75–470 Hz, Kiekser bis rund 940 Hz):
+     - FINE_FMIN 70 Hz: tauMax = sr/fmin muss länger sein als die Periode des tiefsten Tons samt
+       Vibrato (75 Hz − 50 Cent = 72,8 Hz). Mit der früheren Untergrenze 120 Hz war die Spur darunter
+       blind (98 Hz: 0 % richtige F0, Kiekser unsichtbar; 117 Hz: 29 Scheinsprünge in 2 s).
+     - FINE_WINDOW_S 35 ms: lässt bei 75 Hz noch 1,5 Perioden für den Vergleich. 30 ms (auch mit
+       fmin 80) ergibt Scheinsprünge bei 75–80 Hz; 40 ms dehnt Staccato-Kanten über 90 ms.
+     - FINE_LOWPASS_HZ vor YIN: YIN vergleicht nur ganzzahlige Verzögerungen. Liegt die Periode nahe
+       einem halben Abtastwert (bei 12 kHz etwa 25,5 → 470 Hz), stören die hohen Formanten den
+       Vergleich bei T, und YIN nimmt 2T — gemessen bei /i/ 410–470 Hz mit Vibrato. Der Grundton bis
+       940 Hz bleibt im Durchlassband.
      Randprüfung: Liegt ein Tonanfang oder -ende im Fenster (Energie einer Fensterhälfte unter
      FINE_EDGE_RATIO der anderen), misst YIN die Kante statt der Periode — gemessen am Phrasenende
      650 Hz statt 98 Hz, im Staccato Läufe, die vor dem Ton beginnen. Solche Rahmen sind in rand
      markiert und gelten in detectJumps als stimmlos; f0 und ap bleiben unverändert stehen. */
-  var FINE_WINDOW_S = 0.030, FINE_HOP_S = 0.005, FINE_FMIN = 120, FINE_EDGE_RATIO = 0.1;
+  var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1;
+
+  // Nullphasige FIR-Filterung mit symmetrischem Kern: verschiebt keine Zeitmarken der Spur.
+  function firSymmetric(x, h) {
+    var N = x.length, taps = h.length, mid = (taps - 1) >> 1, y = new Float64Array(N);
+    for (var i = 0; i < N; i++) {
+      var k0 = Math.max(0, mid - i), k1 = Math.min(taps, N + mid - i), a = 0;
+      for (var k = k0; k < k1; k++) a += h[k] * x[i + k - mid];
+      y[i] = a;
+    }
+    return y;
+  }
 
   function pitchTrackFine(ds, sr, opts) {
     opts = opts || {};
     var winS = opts.windowS || FINE_WINDOW_S, hopS = opts.hopS || FINE_HOP_S;
     var fmin = opts.fmin || FINE_FMIN, fmax = opts.fmax || 900;
+    var lpHz = (opts.lowpassHz == null) ? FINE_LOWPASS_HZ : opts.lowpassHz;
     var randR = (opts.edgeRatio == null) ? FINE_EDGE_RATIO : opts.edgeRatio;
+    var x = (lpHz > 0) ? firSymmetric(ds, makeLowpass(lpHz / sr, 2 * Math.round(16 * sr / 12000) + 1)) : ds;
     var n = Math.round(winS * sr), hop = Math.max(1, Math.round(hopS * sr)), h2 = n >> 1;
-    var cs = new Float64Array(ds.length + 1), k;
-    for (k = 0; k < ds.length; k++) cs[k + 1] = cs[k] + ds[k] * ds[k];
+    var cs = new Float64Array(x.length + 1), k;
+    for (k = 0; k < x.length; k++) cs[k + 1] = cs[k] + x[k] * x[k];
     var m = 0, c;
     for (c = n >> 1; c + (n >> 1) <= ds.length; c += hop) m++;
     var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), rand = new Uint8Array(m), i = 0;
     for (c = n >> 1; c + (n >> 1) <= ds.length && i < m; c += hop, i++) {
-      var s0 = c - (n >> 1), p = detectF0(ds.subarray(s0, s0 + n), sr, fmin, fmax, opts.yinThresh);
+      var s0 = c - (n >> 1), p = detectF0(x.subarray(s0, s0 + n), sr, fmin, fmax, opts.yinThresh);
       var e1 = cs[s0 + h2] - cs[s0], e2 = cs[s0 + n] - cs[s0 + h2];
       t[i] = c / sr; f0[i] = p.f0; ap[i] = p.ap;
       rand[i] = (randR > 0 && Math.min(e1, e2) < randR * Math.max(e1, e2)) ? 1 : 0;
     }
-    return { t: t, f0: f0, ap: ap, rand: rand, hopS: hopS, windowS: winS, fmin: fmin };
+    return { t: t, f0: f0, ap: ap, rand: rand, hopS: hopS, windowS: winS, fmin: fmin, lowpassHz: lpHz };
+  }
+
+  /* Weite eines Laufs: Median der größten Gruppe von Rahmen, die auf ±1 HT übereinstimmen.
+     Die Randrahmen eines Laufs mischen alten und neuen Ton im Fenster und liefern Oktav- oder
+     Quintfehler. Das frühere Maximum griff genau diese: gemessen 23 HT für einen Sprung von 11 HT
+     bei 98 Hz und −12 statt +11 HT bei 147 Hz; der Median aller Rahmen ergab −7 statt +12 HT bei
+     einem Kiekser 470 → 940 Hz. */
+  function kernGruppe(v) {
+    var best = NaN, bestN = -1, bestD = Infinity;
+    for (var a = 0; a < v.length; a++) {
+      var z = 0, d = 0;
+      for (var b = 0; b < v.length; b++) { var x = Math.abs(v[b] - v[a]); if (x <= 1) { z++; d += x; } }
+      if (z > bestN || (z === bestN && d < bestD)) { bestN = z; bestD = d; best = v[a]; }
+    }
+    return best;
   }
 
   /* Sprünge in der kurzen Spur: Läufe, die mindestens minSemitones von der ruhigen Umgebung
@@ -820,11 +856,21 @@
     var backS = (opts.referenceS == null) ? 0.20 : opts.referenceS;
     var ruheSt = (opts.quietSemitones == null) ? 2 : opts.quietSemitones;
     var maxOnset = (opts.maxOnsetFrames == null) ? 4 : opts.maxOnsetFrames;
+    var minRef = (opts.minRefFrames == null) ? 3 : opts.minRefFrames;
     var pauseS = (opts.pauseMs == null ? 120 : opts.pauseMs) / 1000;
     var n = track.t.length, back = Math.max(3, Math.round(backS / track.hopS));
     var pauseFr = Math.max(1, Math.round(pauseS / track.hopS));
-    var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, i, j;
+    var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, i;
 
+    /* Der Bezug gilt erst, wenn mindestens minRef Rahmen auf ±quietSemitones um ihren Median
+       übereinstimmen. Sonst wird ein einzelner Fehlrahmen am Toneinsatz (Oktavfehler im ersten
+       Fenster) zum Bezug, und der ganze folgende Ton erscheint als gehaltener Sprung. */
+    function bezug() {
+      if (ruhe.length < minRef) return NaN;
+      var m = median(ruhe), z = 0;
+      for (var k = 0; k < ruhe.length; k++) if (Math.abs(12 * Math.log2(ruhe[k] / m)) < ruheSt) z++;
+      return z >= minRef ? m : NaN;
+    }
     for (i = 0; i < n; i++) {
       var ok = isFinite(track.f0[i]) && track.ap[i] < apMax && !(track.rand && track.rand[i]);
       if (!ok) {
@@ -846,22 +892,31 @@
       /* Bezug sind die ruhigen Rahmen VOR dem Ereignis. Während eines Laufs wird er eingefroren —
          wandert er mit, endet ein gehaltener Sprung nach rund 80 ms von selbst und wird als Kante
          gemeldet. Das ist derselbe Fehler, der gehaltene Registerwechsel unsichtbar macht. */
-      var ref = run ? run.ref : median(ruhe);
+      var ref = run ? run.ref : bezug();
       var st = (isFinite(ref) && ref > 0) ? 12 * Math.log2(track.f0[i] / ref) : NaN;
       var drueber = isFinite(st) && Math.abs(st) >= minSt;
 
       if (run) {
         if (drueber) {
-          run.bis = track.t[i]; run.dauerFrames++;
-          if (Math.abs(st) > Math.abs(run.st)) { run.st = st; run.f0 = track.f0[i]; }
-        } else {
-          if (run.dauerFrames >= 2) events.push(run);
-          run = null; ruhe = []; seitRuhe = 0;
+          run.bis = track.t[i]; run.dauerFrames++; run.sts.push(st); run.fs.push(track.f0[i]); run.zurueck = 0;
+        } else if (++run.zurueck >= 2) {
+          /* Zurück beim Bezug erst nach zwei Rahmen: Ein einzelner Mischrahmen am Rand eines lauten
+             Kieksers beendete den Lauf sonst mittendrin. Ein Lauf aus einem einzigen Rahmen ist ein
+             Messfehler am Übergang und wird verworfen, ohne den Bezug zu löschen. Nach einer Kante ist
+             die Stimme zurück am Bezugston, der Bezug bleibt; erst nach einem gehaltenen Wechsel wird
+             er neu aufgebaut. Gemessen: Wurde der Bezug nach jedem Lauf gelöscht, machte ein
+             Fehlrahmen am Übergang den neuen Ton zum Bezug, und die Rückkehr erschien als gehaltener
+             Sprung in Gegenrichtung (+16 HT gesungen, −16 HT über 580 ms gemeldet). */
+          if (run.dauerFrames >= 2) {
+            events.push(run);
+            if (run.bis - run.von + track.hopS >= holdS) { ruhe = []; seitRuhe = 0; }
+          }
+          run = null;
         }
       } else if (drueber) {
         /* Ein Sprung muss schnell einsetzen. Ein Portamento erreicht dieselbe Weite, aber über
            Hunderte Millisekunden — das ist Tonbewegung, kein Wechsel. */
-        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], st: st, ref: ref, f0: track.f0[i], dauerFrames: 1 };
+        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], ref: ref, dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
       }
       if (!run) {
         if (isFinite(st) && Math.abs(st) < ruheSt) { ruhe.push(track.f0[i]); seitRuhe = 0; }
@@ -872,9 +927,11 @@
     if (run && run.dauerFrames >= 2) events.push(run);
 
     return events.map(function (e) {
-      var dauer = e.bis - e.von + track.hopS;
-      return { startS: e.von, dauerS: dauer, halbtoene: e.st, richtung: e.st > 0 ? 'auf' : 'ab',
-        vonHz: e.ref, nachHz: e.f0, art: dauer >= holdS ? 'gehalten' : 'kante' };
+      var dauer = e.bis - e.von + track.hopS, kern = kernGruppe(e.sts), hs = [], fz = [];
+      for (var k = 0; k < e.sts.length; k++) if (Math.abs(e.sts[k] - kern) <= 1) { hs.push(e.sts[k]); fz.push(e.fs[k]); }
+      var h = median(hs);
+      return { startS: e.von, dauerS: dauer, halbtoene: h, richtung: h > 0 ? 'auf' : 'ab',
+        vonHz: e.ref, nachHz: median(fz), art: dauer >= holdS ? 'gehalten' : 'kante' };
     });
   }
 
@@ -923,7 +980,7 @@
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,
     nextPow2: nextPow2, pitchTrackFine: pitchTrackFine, detectJumps: detectJumps,
-    FINE_WINDOW_S: FINE_WINDOW_S, FINE_HOP_S: FINE_HOP_S, FINE_FMIN: FINE_FMIN, FINE_EDGE_RATIO: FINE_EDGE_RATIO, synthVowel: synthVowel, resonate: resonate, lowpassFor: lowpassFor, lowpassBank: lowpassBank,
+    FINE_WINDOW_S: FINE_WINDOW_S, FINE_HOP_S: FINE_HOP_S, FINE_FMIN: FINE_FMIN, FINE_LOWPASS_HZ: FINE_LOWPASS_HZ, FINE_EDGE_RATIO: FINE_EDGE_RATIO, synthVowel: synthVowel, resonate: resonate, lowpassFor: lowpassFor, lowpassBank: lowpassBank,
     _burg: burg, _formantsFromLPC: formantsFromLPC, _detectF0: detectF0, _resample: resample
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
