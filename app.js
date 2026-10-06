@@ -509,35 +509,50 @@
     clearInterval(st.timer); st.taking = false; $('btn-take').textContent = 'Take starten'; $('btn-take').className = 'primary';
     var take = st.rec.endTake();
     if (take.durationS < st.settings.minTakeS) { status('Take zu kurz (' + take.durationS.toFixed(1) + ' s) — nicht gespeichert.', true); updateTakeButton(); return; }
-    finishTake(take.samples, take.sampleRate);
+    /* Alles, was zu diesem Take gehört, wird JETZT festgehalten. Die Analyse dauert Sekunden; wer
+       währenddessen schon den nächsten Take beschriftet, eine neue Sitzung beginnt oder das Gerät
+       wechselt, darf damit nicht den gerade gesungenen Take umschreiben. Danach sind die Felder
+       frei für den nächsten Take. */
+    var feld = takeAngaben(new Date());
+    st.pendingCtx = null; $('take-label').value = ''; $('take-comment').value = '';
+    finishTake(take.samples, take.sampleRate, feld);
   }
-  function finishTake(samples, sr) {
+  function takeAngaben(jetzt) {
+    var info = (st.rec && st.rec.info) || {}, cal = st.cal, s = st.settings;
+    return {
+      ende: jetzt, label: $('take-label').value.trim(), comment: $('take-comment').value, vowelIntent: $('take-intent').value,
+      sitzung: st.pendingCtx || kontextJetzt(jetzt), calibrationId: cal ? cal.id : null,
+      info: { trackSampleRate: info.trackSampleRate || null, deviceLabel: info.deviceLabel || '', deviceId: info.deviceId || '',
+        echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
+      storeAudio: !!s.storeAudio, audioFormat: s.audioFormat,
+      opts: { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: s.spreadMaxHz, hopS: s.hopS, yieldMs: 0 }
+    };
+  }
+  function finishTake(samples, sr, feld) {
+    feld = feld || takeAngaben(new Date());
     st.busy = true; updateTakeButton();
     var prog = $('take-progress'); prog.hidden = false; prog.innerHTML = '<div class="skeleton"></div><div class="small muted" id="take-progress-text">Analyse …</div>';
-    var opts = { floorDb: st.cal ? st.cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, yieldMs: 0 };
-    var now = new Date();
-    A.analyseTake(samples, sr, opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; }).then(function (res) {
+    var now = feld.ende, info = feld.info;
+    A.analyseTake(samples, sr, feld.opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; }).then(function (res) {
       return Promise.all([S.getMeta('nextCode', 0), S.allTakes()]).then(function (rr) {
         var n = A.nextCodeIndex(rr[1], rr[0]);
-        var code = codeFromIndex(n), label = $('take-label').value.trim() || defaultLabel(code, now), info = st.rec.info || {};
+        var code = codeFromIndex(n), label = feld.label || defaultLabel(code, now);
         var take = {
-          id: uuid(), schemaVersion: 1, code: code, label: label, comment: $('take-comment').value, createdAt: now.toISOString(),
-          durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate || null,
-          deviceLabel: info.deviceLabel || '', deviceId: info.deviceId || '', channelCount: 1,
+          id: uuid(), schemaVersion: 1, code: code, label: label, comment: feld.comment, createdAt: now.toISOString(),
+          durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate,
+          deviceLabel: info.deviceLabel, deviceId: info.deviceId, channelCount: 1,
           captureFlags: { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
           timeLocal: wallClock(now), tzOffsetMin: tzOffsetMin(now),
-          sitzung: st.pendingCtx || kontextJetzt(now),
-          vowelIntent: $('take-intent').value, calibrationId: st.cal ? st.cal.id : null,
-          analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: !!st.settings.storeAudio
+          sitzung: feld.sitzung,
+          vowelIntent: feld.vowelIntent, calibrationId: feld.calibrationId,
+          analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio
         };
         return S.putTake(take).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); return S.putSeries(take.id, res.series); }).then(function () {
-          if (!st.settings.storeAudio) return null;
-          var wav = W.encode(samples, sr, st.settings.audioFormat);
-          return S.putAudio(take.id, sr, st.settings.audioFormat, new Blob([wav], { type: 'audio/wav' }));
+          if (!feld.storeAudio) return null;
+          var wav = W.encode(samples, sr, feld.audioFormat);
+          return S.putAudio(take.id, sr, feld.audioFormat, new Blob([wav], { type: 'audio/wav' }));
         }).then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
           S.persist().catch(function () { });
-          $('take-label').value = ''; $('take-comment').value = '';
-          st.pendingCtx = null;
           renderTakeResult(take);
         });
       });
@@ -546,9 +561,11 @@
          liegt die Aufnahme nur noch im Arbeitsspeicher dieser Seite. Dann wenigstens einen Weg
          anbieten, sie zu retten, statt sie mit einer Fehlermeldung verschwinden zu lassen. */
       status('NICHT gespeichert (' + (e && e.message || e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
+      // Bezeichnung und Kommentar wurden beim Stopp geleert; stehen dort noch keine neuen, kommen sie zurück.
+      if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
       var box = $('take-result'); box.innerHTML = '';
       var b = document.createElement('button'); b.className = 'danger'; b.textContent = 'Aufnahme als WAV retten';
-      b.addEventListener('click', function () { download('vare-ungespeichert-' + stamp(now) + '.wav', new Blob([W.encode(samples, sr, st.settings.audioFormat)], { type: 'audio/wav' })); });
+      b.addEventListener('click', function () { download('vare-ungespeichert-' + stamp(now) + '.wav', new Blob([W.encode(samples, sr, feld.audioFormat)], { type: 'audio/wav' })); });
       box.appendChild(b);
     }).then(function () { prog.hidden = true; st.busy = false; updateTakeButton(); });
   }

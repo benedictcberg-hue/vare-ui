@@ -222,6 +222,51 @@ module.exports = async function (H) {
     p.schliessen();
   } catch (e) { check('U1.1', 'Ablauf Schritt 0 (Neuladen, Löschen) läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
+  /* ---------- U1 · Was während der Analyse geschieht, gehört zum nächsten Take ---------- */
+  try {
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-A'); await p.mikrofon();
+    p.el('take-label').value = 'A-Take'; p.el('take-intent').value = 'a'; p.el('take-comment').value = 'A-Kommentar';
+    let busy = null;
+    const A = await p.take(() => {
+      busy = p.st().busy;
+      p.el('take-label').value = 'B-Take'; p.el('take-intent').value = 'i'; p.el('take-comment').value = 'B-Kommentar';
+    });
+    const felder = [p.el('take-label').value, p.el('take-intent').value, p.el('take-comment').value].join('|');
+    check('U1.7', 'Eingabe während der Analyse: der gespeicherte Take behält seine Angaben, die neuen bleiben für den nächsten',
+      busy === true && A.label === 'A-Take' && A.vowelIntent === 'a' && A.comment === 'A-Kommentar' && felder === 'B-Take|i|B-Kommentar',
+      'Analyse lief=' + busy + ' | gespeichert ' + JSON.stringify({ label: A.label, vowelIntent: A.vowelIntent, comment: A.comment }) + ' | Felder danach ' + felder);
+    // „Neue Sitzung beginnen“ während der Analyse: verwirft die Kalibrierung für künftige Takes,
+    // nicht für den, der mit ihr aufgenommen wurde.
+    const sid = p.st().sitzung.id, nr = p.st().sitzung.nr;
+    busy = null;
+    const B = await p.take(() => { busy = p.st().busy; p.klick('btn-neue-sitzung'); });
+    await p.ruhe(20);
+    const fs0 = B.analysis && B.analysis.floorSource;
+    check('U1.8', '„Neue Sitzung“ während der Analyse: Take behält Kalibrierung und Sitzung seiner Aufnahme',
+      busy === true && B.calibrationId === 'cal-A' && fs0 === 'calibration' && B.sitzung.id === sid && B.sitzung.nr === nr && p.st().sitzung.id !== sid && p.el('ctx-position').textContent === '1',
+      'Analyse lief=' + busy + ' | calibrationId=' + B.calibrationId + ' floorSource=' + fs0 + ' | Sitzung des Takes ' + B.sitzung.nr + ', jetzt ' + p.st().sitzung.nr + ', nächste Nummer ' + p.el('ctx-position').textContent);
+    // Gerätewechsel und Audio-Einstellung während der Analyse.
+    // Neue Sitzung verlangt neue Kalibrierung; Mikrofon aus und an, damit der Take-Knopf sie sieht.
+    p.kalibriert('cal-B');
+    p.klick('btn-mic'); await p.warte(() => !p.st().rec.active); await p.mikrofon();
+    busy = null;
+    const C = await p.take(async () => {
+      busy = p.st().busy;
+      p.st().settings.storeAudio = false; p.st().settings.audioFormat = 'f32';
+      p.klick('btn-mic'); await p.warte(() => !p.st().rec.active);
+      p.el('mic-device').value = 'zweit';
+      p.klick('btn-mic'); await p.warte(() => p.st().rec.active && p.st().rec.info.deviceLabel === 'Zweitgerät');
+      busy = busy && p.st().busy;
+    });
+    const audio = sp.d.audio.get(C.id);
+    check('U1.9', 'Gerätewechsel und Audio-Einstellung während der Analyse: Take behält Gerät und Audioablage seiner Aufnahme',
+      busy === true && C.deviceLabel === 'Testmikrofon' && C.deviceId === 'standard' && C.hasAudio === true && !!audio && audio.format === 'i16',
+      'Analyse lief während des Wechsels=' + busy + ' | Gerät ' + C.deviceLabel + ' (' + C.deviceId + ') | hasAudio=' + C.hasAudio + ' Audio ' + (audio ? audio.format : 'fehlt'));
+    p.schliessen();
+  } catch (e) { check('U1.7', 'Ablauf Eingaben während der Analyse läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
 };
