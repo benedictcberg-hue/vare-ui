@@ -87,17 +87,27 @@
     series.flags[i] = fl;
   }
 
-  /* Segmente: maximale Läufe mit gate = stabil und gleicher Klasse, Mindestlänge, Mindestanteil Score. */
+  /* Ein Segment, dessen Rahmen überwiegend dicht an der Grenze zur Nachbarklasse liegen, hat keinen
+     gemessenen, sondern einen entschiedenen Vokal. Es bleibt in den Segmenten sichtbar, wird aber
+     weder Bestwert noch Referenz für diesen Vokal (Referenzen gelten je Vokal). */
+  var AMBIG_MAX_SHARE = 0.5;
+
+  /* Segmente: maximale Läufe mit gate = stabil und gleicher Klasse, Mindestlänge, Mindestanteil Score.
+     ambiguousShare = Anteil der Rahmen mit zweideutiger Vokalzuordnung (FLAG.VOWELAMBIG). */
   function segments(series, minLenS, minScoreShare) {
     minLenS = minLenS || 0.5; minScoreShare = minScoreShare || 0.7;
     var out = [], n = series.t.length, i = 0;
     while (i < n) {
       if (series.gate[i] !== 2 || series.cls[i] < 0) { i++; continue; }
-      var j = i, cls = series.cls[i], scores = [];
-      while (j < n && series.gate[j] === 2 && series.cls[j] === cls) { if (isFinite(series.score[j])) scores.push(series.score[j]); j++; }
+      var j = i, cls = series.cls[i], scores = [], amb = 0;
+      while (j < n && series.gate[j] === 2 && series.cls[j] === cls) {
+        if (isFinite(series.score[j])) scores.push(series.score[j]);
+        if (series.flags[j] & FLAG.VOWELAMBIG) amb++;
+        j++;
+      }
       var lenS = series.t[j - 1] - series.t[i] + (n > 1 ? series.t[1] - series.t[0] : 0);
       if (lenS >= minLenS && scores.length / (j - i) >= minScoreShare) {
-        out.push({ cls: V.CENTROIDS[cls].cls, startS: series.t[i], lenS: lenS, n: j - i, d34Med: D.median(scores), d34Q1: D.quantile(scores, 0.25), d34Q3: D.quantile(scores, 0.75) });
+        out.push({ cls: V.CENTROIDS[cls].cls, startS: series.t[i], lenS: lenS, n: j - i, d34Med: D.median(scores), d34Q1: D.quantile(scores, 0.25), d34Q3: D.quantile(scores, 0.75), ambiguousShare: amb / (j - i) });
       }
       i = j;
     }
@@ -170,21 +180,27 @@
     for (var nm in counts) { shares[nm] = counts[nm] / tot; if (counts[nm] > domN) { domN = counts[nm]; dom = nm; } }
     s.vowel = { dominant: dom, dominantShare: tot ? domN / tot : 0, shares: shares };
     // Vokalsegmente und Bestwert je Vokal (engstes Segment-Median = trägt innerhalb des Vokals am besten)
+    // Zweideutig zugeordnete Segmente zählen in segmentsAmbiguous, nicht als Bestsegment (s. AMBIG_MAX_SHARE).
     var segs = segments(series), per = {};
     for (i = 0; i < segs.length; i++) {
-      var sg = segs[i], e = per[sg.cls] || (per[sg.cls] = { nStable: 0, segments: 0, d34: null, bestSegment: null, scores: [] });
+      var sg = segs[i], e = per[sg.cls] || (per[sg.cls] = { nStable: 0, segments: 0, segmentsAmbiguous: 0, d34: null, bestSegment: null, scores: [] });
       e.segments++;
-      if (!e.bestSegment || sg.d34Med < e.bestSegment.d34Med) e.bestSegment = { d34Med: sg.d34Med, startS: sg.startS, lenS: sg.lenS, n: sg.n };
+      if (sg.ambiguousShare > AMBIG_MAX_SHARE) { e.segmentsAmbiguous++; continue; }
+      if (!e.bestSegment || sg.d34Med < e.bestSegment.d34Med) e.bestSegment = { d34Med: sg.d34Med, startS: sg.startS, lenS: sg.lenS, n: sg.n, ambiguousShare: sg.ambiguousShare };
     }
     for (i = 0; i < stabilIdx.length; i++) {
       var ci = series.cls[stabilIdx[i]];
       if (ci < 0) continue;
-      var cn = V.CENTROIDS[ci].cls, pe = per[cn] || (per[cn] = { nStable: 0, segments: 0, d34: null, bestSegment: null, scores: [] });
+      var cn = V.CENTROIDS[ci].cls, pe = per[cn] || (per[cn] = { nStable: 0, segments: 0, segmentsAmbiguous: 0, d34: null, bestSegment: null, scores: [] });
       pe.nStable++;
       if (isFinite(series.score[stabilIdx[i]])) pe.scores.push(series.score[stabilIdx[i]]);
     }
     var best = null;
-    for (var pv in per) { per[pv].d34 = stats(per[pv].scores); delete per[pv].scores; if (per[pv].bestSegment && (!best || per[pv].bestSegment.d34Med < best.d34)) best = { cls: pv, d34: per[pv].bestSegment.d34Med, startS: per[pv].bestSegment.startS, lenS: per[pv].bestSegment.lenS }; }
+    for (var pv in per) {
+      per[pv].d34 = stats(per[pv].scores); delete per[pv].scores;
+      var bs = per[pv].bestSegment;
+      if (bs && (!best || bs.d34Med < best.d34)) best = { cls: pv, d34: bs.d34Med, startS: bs.startS, lenS: bs.lenS, ambiguousShare: bs.ambiguousShare };
+    }
     s.perVowel = per; s.best = best; s.segments = segs;
     return s;
   }
@@ -280,6 +296,8 @@
       for (var cls in per) {
         var b = per[cls].bestSegment;
         if (!b || !isFinite(b.d34Med)) continue;
+        // Eine Zusammenfassung von anderswo (Import) kann ein zweideutiges Bestsegment tragen.
+        if (b.ambiguousShare > AMBIG_MAX_SHARE) continue;
         if (refs[cls] && refs[cls].pinned) continue;
         if (!refs[cls] || b.d34Med < refs[cls].d34) refs[cls] = { d34: b.d34Med, takeId: t.id, code: t.code, label: t.label, date: t.createdAt, startS: b.startS, lenS: b.lenS, pinned: false };
       }
@@ -302,7 +320,7 @@
     return m;
   }
 
-  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GATE_CODE: GATE_CODE, analyseTake: analyseTake, applyGate: applyGate,
+  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, analyseTake: analyseTake, applyGate: applyGate,
     indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;

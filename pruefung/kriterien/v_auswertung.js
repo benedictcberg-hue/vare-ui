@@ -160,4 +160,63 @@ module.exports = async function (H) {
     check('V1', 'Live-Gatter, Fenster 0,15–0,60 s, 20 % ausgefallene Bildschirmbilder (60/120/144 Hz): mindestens 95 % der Rahmen stabil und gewertet', minRaf >= 0.95, 'kleinster Anteil ' + (100 * minRaf).toFixed(0) + ' % (' + wRaf + ')');
     check('V1', 'Live-Gatter, Fenster 0,15–0,60 s, Takt 33/42/50 ms, 20 % ganze Takte verloren: überwiegend stabil und gewertet', minVerl > 0.5, 'kleinster Anteil ' + (100 * minVerl).toFixed(0) + ' % (' + wVerl + ')');
   }
+
+  /* ---------- V2: Bestwerte und Referenzen (analysis.js segments, summarise, computeRefs) ---------- */
+  const { A } = H;
+  // Ganzer Take wie in app.js: 0,4 s Raumrauschen, Vokal, 0,4 s Raumrauschen, Boden kalibriert.
+  // 60 dB Abstand: bei 35–55 dB entsteht an diesen /a/-Takes derzeit kaum ein Segment (ΔF3–4 selten
+  // gültig, Rechenkern) — hier geht es um die Zusammenfassung, nicht um den Kern.
+  async function takeAus(id, f0, F, gate, snrDb) {
+    const v = D.synthVowel(f0, F, BW5, 2.0, SR, { gain: 0.3 });
+    let e = 0; for (let i = 0; i < v.length; i++) e += v[i] * v[i];
+    const amp = Math.sqrt(e / v.length) * Math.pow(10, -(snrDb || 60) / 20) * Math.sqrt(3);
+    const pad = Math.round(0.4 * SR), y = new Float64Array(v.length + 2 * pad), nz = noise(y.length, amp, 9);
+    y.set(v, pad); for (let i = 0; i < y.length; i++) y[i] += nz[i];
+    const r = await A.analyseTake(y, SR, { floorDb: 20 * Math.log10(amp / Math.sqrt(3)), gate: gate || {} });
+    const m = r.meta;   // wie app.js analysisMeta
+    return { id, code: id, label: id, createdAt: '2026-10-0' + id.length, summary: r.summary,
+      analysis: { kernelVersion: D.VERSION, hopS: m.hopS, windowsS: m.windowsS, orders: m.orders, yinThresh: m.yinThresh, spreadMaxHz: m.spreadMaxHz, gate: m.gate, floorSource: m.floorSource } };
+  }
+
+  /* V2a: Grenzvokal /a/–/ɐ/ (Bericht 2, Befund 5). Ein gedecktes /a/, dessen Fenstermediane fast gleich
+     weit von /a/ und /ɐ/ liegen, wurde still Bestwert und Referenz für /a/ — mit schmalerem ΔF3–4 als
+     ein eindeutiges /a/. 147 Hz; eindeutig 600/1330 mit ΔF3–4 700, Grenze 525/1310 mit ΔF3–4 600. */
+  const T_EIN = await takeAus('E', 147, [600, 1330, 2650, 3350, 4200]);
+  const T_GRENZ = await takeAus('G', 147, [525, 1310, 2650, 3250, 4200]);
+  {
+    const s = T_GRENZ.summary, seg = s.segments.filter(x => x.ambiguousShare > 0.5);
+    check('V2', 'Grenzvokal /a/–/ɐ/: das Segment trägt seinen Anteil zweideutiger Rahmen (ambiguousShare > 0,5), Vorbedingung',
+      s.vowelAmbiguousShare > 0.5 && seg.length >= 1, 'vowelAmbiguousShare ' + s.vowelAmbiguousShare.toFixed(2) + ', Segmente ' + JSON.stringify(s.segments.map(x => x.cls + ':' + x.d34Med.toFixed(0) + '@' + x.ambiguousShare)));
+    const pv = seg.length ? s.perVowel[seg[0].cls] : null;
+    check('V2', 'Grenzvokal /a/–/ɐ/: zweideutiges Segment wird weder Bestsegment noch Bestwert, bleibt aber gezählt (segmentsAmbiguous)',
+      seg.length >= 1 && pv && !pv.bestSegment && pv.segmentsAmbiguous >= 1 && !(s.best && s.best.cls === seg[0].cls), 'best ' + JSON.stringify(s.best) + ', perVowel ' + JSON.stringify(pv));
+    const be = T_EIN.summary.perVowel.a && T_EIN.summary.perVowel.a.bestSegment;
+    check('V2', 'Eindeutiges /a/: Bestsegment und Bestwert tragen ambiguousShare (≤ 0,5)',
+      be && typeof be.ambiguousShare === 'number' && be.ambiguousShare <= 0.5 && T_EIN.summary.best && T_EIN.summary.best.ambiguousShare === be.ambiguousShare, JSON.stringify(be));
+    const refs = A.computeRefs([T_GRENZ, T_EIN], {});
+    check('V2', 'computeRefs: Referenz /a/ kommt aus dem eindeutigen Take, nicht aus dem schmaleren zweideutigen',
+      refs.a && refs.a.takeId === 'E' && Object.keys(refs).every(k => refs[k].takeId === 'E'), JSON.stringify(refs));
+  }
+  /* V2b: Grenze der Regel an einer konstruierten Rahmenserie. Drei /a/-Läufe zu je 1 s, getrennt durch
+     Pausen: genau 50 % zweideutig (zählt noch), 51 % zweideutig (zählt nicht), eindeutig. */
+  {
+    const n = 3 * 100 + 2 * 20, ser = A.makeSeries(n), ia = V.CLASS_INDEX.a;
+    const lauf = [[0, 600, 50], [120, 550, 51], [240, 650, 0]];
+    for (let i = 0; i < n; i++) { ser.t[i] = 0.01 * i; ser.gate[i] = 0; ser.cls[i] = -1; ser.score[i] = NaN; ser.flags[i] = 0; }
+    for (const [i0, d34, nAmb] of lauf) for (let k = 0; k < 100; k++) {
+      const i = i0 + k; ser.gate[i] = 2; ser.cls[i] = ia; ser.score[i] = d34; ser.d34[i] = d34;
+      ser.flags[i] = A.FLAG.VOICED | A.FLAG.SCORE | A.FLAG.D34VALID | (k < nAmb ? A.FLAG.VOWELAMBIG : 0);
+    }
+    const s = A.summarise(ser, { hopS: 0.01, durationS: n * 0.01, floorDb: -90, floorSource: 'calibration', floorKnown: true });
+    const sh = s.segments.map(x => x.ambiguousShare), b = s.perVowel.a && s.perVowel.a.bestSegment;
+    check('V2', 'Segmente: ambiguousShare je Segment exakt (0,50 / 0,51 / 0); bei 0,51 kein Bestsegment, bei genau 0,50 noch',
+      s.segments.length === 3 && Math.abs(sh[0] - 0.5) < 1e-9 && Math.abs(sh[1] - 0.51) < 1e-9 && sh[2] === 0 && b && b.d34Med === 600 && b.ambiguousShare === 0.5 && s.perVowel.a.segmentsAmbiguous === 1 && s.perVowel.a.segments === 3,
+      'Anteile ' + sh.join('/') + ', Bestsegment ' + JSON.stringify(b));
+  }
+  /* V2c: eine gespeicherte oder importierte Zusammenfassung mit zweideutigem Bestsegment wird keine Referenz. */
+  {
+    const mk = (id, d34, amb) => ({ id, code: id, createdAt: '2026-10-01', summary: { perVowel: { a: { bestSegment: { d34Med: d34, startS: 1, lenS: 1, n: 100, ambiguousShare: amb } } } } });
+    const refs = A.computeRefs([mk('X', 560, 0.8), mk('Y', 680, 0.1)], {});
+    check('V2', 'computeRefs: Bestsegment mit ambiguousShare 0,8 aus einer gespeicherten Zusammenfassung wird keine Referenz', refs.a && refs.a.takeId === 'Y', JSON.stringify(refs));
+  }
 };
