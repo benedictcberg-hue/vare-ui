@@ -237,4 +237,49 @@ module.exports = async function (H) {
     const r = sammle(faelle);
     check('K1c', 'Bruch mit 30–60 ms Rauschen oder aperiodischen Impulsen am Übergang: genau ein gehaltenes Ereignis in Sprungrichtung', r.ok === r.n, r.detail);
   }
+  {
+    // Grenze zum Portamento: langsames Gleiten bleibt Tonbewegung
+    const faelle = [];
+    for (const [ht, d] of [[12, 0.3], [7, 0.2], [5, 0.15]]) for (const a of [110, 147, 196, 220]) for (const v of ['a', 'o', 'i'])
+      faelle.push({ name: ht + ' HT in ' + d * 1000 + ' ms ab ' + a + ' /' + v + '/', sig: tonF(t => t < 0.6 ? a : (t < 0.6 + d ? HT(a, ht * (t - 0.6) / d) : HT(a, ht)), 1.4, v), soll: keins });
+    const r = sammle(faelle);
+    check('K1c', 'Gleiten über eine Oktave in 300 ms, eine Quinte in 200 ms, eine Quarte in 150 ms: kein Sprung', r.ok === r.n, r.detail);
+  }
+
+  /* ---------- K1d: Belegfelder ohne Urteil ---------- */
+  {
+    const kiek = (a, b, v) => concat([ton(a, 1, v), ton(b, 0.05, v), ton(a, 1, v)]);
+    const geh = (a, ht, v) => concat([ton(a, 1, v), ton(HT(a, ht), 0.3, v), ton(a, 1, v)]);
+    const proben = [];
+    for (const v of ['a', 'i']) {
+      for (const [a, b] of [[98, 196], [196, 392], [350, 700], [110, 440]]) proben.push({ name: 'Kiekser ' + a + '→' + b + ' /' + v + '/', sig: kiek(a, b, v), oktave: true, direkt: true });
+      for (const [a, ht] of [[196, 11], [165, 16], [98, 11], [220, 7]]) proben.push({ name: 'gehalten ' + a + '+' + ht + ' /' + v + '/', sig: geh(a, ht, v), oktave: false, direkt: true });
+      for (const g of [0.04, 0.06]) proben.push({ name: 'Lücke ' + g * 1000 + ' ms vor 196+12 /' + v + '/', sig: concat([ton(196, 0.6, v), still(g), ton(392, 0.3, v), ton(196, 0.6, v)]), oktave: true, luecke: g });
+      for (const a of [147, 196]) proben.push({ name: 'Portamento 60 ms ' + a + '+12 /' + v + '/', sig: tonF(t => t < 0.6 ? a : (t < 0.66 ? HT(a, 12 * (t - 0.6) / 0.06) : HT(a, 12)), 1.2, v), oktave: true, gleit: 0.06 });
+    }
+    let felder = 0, okt = 0, ueDirekt = 0, ueLuecke = 0, ueGleit = 0, apGleich = 0, n = 0, nD = 0, nL = 0, nG = 0, urteil = 0;
+    const bad = [], badO = [], badA = [], badU = [];
+    for (const p of proben) {
+      const tr = spur(p.sig), e = D.detectJumps(tr, {});
+      if (e.length !== 1) { bad.push(p.name + ': ' + kurz(e)); continue; }
+      const x = e[0]; n++;
+      if (typeof x.uebergangMs === 'number' && typeof x.apSpitze === 'number' && typeof x.oktave === 'boolean') felder++;
+      if (Object.keys(x).some(k => /bruch|register/i.test(k))) urteil++;
+      if (x.oktave === p.oktave) okt++; else badO.push(p.name + ': oktave ' + x.oktave + ' bei ' + r1(x.halbtoene) + ' HT');
+      let mx = -Infinity; for (let k = 0; k < tr.t.length; k++) if (Math.abs(tr.t[k] - x.startS) <= 0.05 + 1e-9) mx = Math.max(mx, tr.ap[k]);
+      if (x.apSpitze === mx) apGleich++; else badA.push(p.name + ': apSpitze ' + x.apSpitze + ' statt ' + mx);
+      if (p.direkt) { nD++; if (x.uebergangMs <= 25) ueDirekt++; else badU.push(p.name + ': uebergangMs ' + x.uebergangMs); }
+      if (p.luecke) { nL++; if (x.uebergangMs >= 1000 * p.luecke && x.apSpitze >= 1) ueLuecke++; else badU.push(p.name + ': uebergangMs ' + x.uebergangMs + ' apSpitze ' + x.apSpitze); }
+      if (p.gleit) { nG++; if (x.uebergangMs >= 40 && x.uebergangMs <= 90) ueGleit++; else badU.push(p.name + ': uebergangMs ' + x.uebergangMs); }
+    }
+    const det = b => b.length ? ' — ' + b.slice(0, 3).join(' | ') : '';
+    check('K1d', 'jedes Ereignis trägt uebergangMs, apSpitze (Zahl) und oktave (ja/nein), kein Urteilsfeld', n === proben.length && felder === n && urteil === 0, felder + '/' + proben.length + det(bad));
+    check('K1d', 'oktave: Kiekser +12/+24 HT ja, gehaltene +7/+11/+16 HT nein', okt === n && n === proben.length, okt + '/' + proben.length + det(bad.concat(badO)));
+    check('K1d', 'apSpitze = größte Aperiodizität der Feinspur in ±50 ms um den Einsatz', apGleich === n && n === proben.length, apGleich + '/' + proben.length + det(bad.concat(badA)));
+    check('K1d', 'uebergangMs: direkter Sprung ≤ 25 ms; Lücke 40/60 ms davor zählt mit (apSpitze 1); Portamento 60 ms: 40–90 ms', ueDirekt === nD && ueLuecke === nL && ueGleit === nG && n === proben.length,
+      'direkt ' + ueDirekt + '/' + nD + ', Lücke ' + ueLuecke + '/' + nL + ', Portamento ' + ueGleit + '/' + nG + det(bad.concat(badU)));
+    // Der Detektor entscheidet keinen Registerbruch: ein legato gesungener Melodiesprung bleibt ein gehaltenes Ereignis
+    const leg = ereig(concat([ton(220, 0.6), ton(330, 0.6)]));
+    check('K1d', 'legato Melodiesprung +7 HT ohne Pause: ein gehaltenes Ereignis, keine Bruch-Entscheidung im Detektor', leg.length === 1 && leg[0].art === 'gehalten' && Math.abs(leg[0].halbtoene - 7) <= 1, kurz(leg));
+  }
 };

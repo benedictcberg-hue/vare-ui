@@ -845,8 +845,20 @@
   }
 
   /* Sprünge in der kurzen Spur: Läufe, die mindestens minSemitones von der ruhigen Umgebung
-     abweichen. Unterschieden wird nach Dauer — eine Kante (unter 90 ms) ist eine Silbengrenze
-     oder ein Staccato-Ansatz, ein gehaltener Wechsel (ab 90 ms) ist ein Registerwechsel.
+     abweichen. Die Einteilung beschreibt nur Tonhöhe und Dauer, sie urteilt nicht:
+       'kante'    — Tonsprung ≥ minSemitones, kürzer als holdMs (Silbenkante, Staccato, Kiekser)
+       'gehalten' — Tonsprung ≥ minSemitones, gehalten ≥ holdMs
+     Auch ein legato gesungener Melodiesprung (Quarte bis Oktave) ist 'gehalten'. Ob ein Ereignis
+     ein Registerbruch ist, entscheidet der Bericht nach dem Manual (Qualitätseinbruch am Übergang),
+     nicht dieser Detektor. Dafür trägt jedes Ereignis Belege ohne Wertung:
+       uebergangMs — Abstand der Rahmenmitten vom letzten Rahmen am Bezugston (±quietSemitones, höchstens
+                     referenceS vor dem Einsatz) bis zum ersten Rahmen am neuen Ton (±quietSemitones um
+                     nachHz); Auflösung hopS, kurze Lücken eingeschlossen; NaN, wenn einer fehlt
+       apSpitze    — größte Aperiodizität (YIN-dn, kann über 1 liegen) aller Rahmen in ±50 ms um den
+                     Einsatz, stimmlose und Randrahmen eingeschlossen
+       oktave      — |halbtoene| liegt innerhalb 0,7 HT von 12 oder 24
+     An synthetischen Signalen trennen apSpitze und uebergangMs legato Sprünge und Übergänge mit
+     Rauschen nicht sauber: Die Verteilungen überlappen. Sie sind Material, keine Entscheidung.
      Die Grenze 90 ms ist übernommen, nicht gemessen; sie ist über opts.holdMs änderbar. */
   function detectJumps(track, opts) {
     opts = opts || {};
@@ -872,9 +884,9 @@
       for (var k = 0; k < ruhe.length; k++) if (Math.abs(12 * Math.log2(ruhe[k] / m)) < ruheSt) z++;
       return z >= minRef ? m : NaN;
     }
+    function gueltig(k) { return isFinite(track.f0[k]) && track.ap[k] < apMax && !(track.rand && track.rand[k]); }
     for (i = 0; i < n; i++) {
-      var ok = isFinite(track.f0[i]) && track.ap[i] < apMax && !(track.rand && track.rand[i]);
-      if (!ok) {
+      if (!gueltig(i)) {
         /* Eine kurze stimmlose Lücke (Konsonant, Staccato) unterbricht weder den Bezug noch einen
            laufenden Sprung. Erst eine Pause ab pauseMs trennt Phrasen: Der Lauf endet, der Bezug wird
            verworfen — eine neue Phrase auf anderem Ton ist kein Sprung. Gemessen (Feinspur, Rahmen
@@ -899,7 +911,7 @@
 
       if (run) {
         if (drueber) {
-          run.bis = track.t[i]; run.dauerFrames++; run.sts.push(st); run.fs.push(track.f0[i]); run.zurueck = 0;
+          run.bis = track.t[i]; run.iBis = i; run.dauerFrames++; run.sts.push(st); run.fs.push(track.f0[i]); run.zurueck = 0;
         } else if (++run.zurueck >= 2) {
           /* Zurück beim Bezug erst nach zwei Rahmen: Ein einzelner Mischrahmen am Rand eines lauten
              Kieksers beendete den Lauf sonst mittendrin. Ein Lauf aus einem einzigen Rahmen ist ein
@@ -917,14 +929,17 @@
       } else if (drueber) {
         /* Ein Sprung muss schnell einsetzen. Ein Portamento erreicht dieselbe Weite, aber über
            Hunderte Millisekunden — das ist Tonbewegung, kein Wechsel. */
-        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], ref: ref, dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
+        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], iVon: i, iBis: i, ref: ref, dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
       }
       if (!run) {
         /* seitRuhe zählt nur Rahmen mit sicherer Periode (ap unter der YIN-Schwelle 0,15). Unsichere
            Rahmen in einem rauen Übergang sind kein Beleg für ein Gleiten — gemessen: Bei einem
            simulierten Bruch mit 60 ms aperiodischem Übergang hoben sie seitRuhe über maxOnset, der
            neue Ton wurde Bezug, und die Rückkehr erschien als gehaltener Sprung in Gegenrichtung
-           (−15 statt +15 HT, 575 ms). Ein Portamento hat ap ≤ 0,06, auch mit Rauschen bei 5 dB. */
+           (−15 statt +15 HT, 575 ms; ohne diese Regel 7 von 1440 simulierten Brüchen, mit ihr 0).
+           Ein langsames Portamento hat ap ≤ 0,06, auch mit Rauschen bei 5 dB. Preis: Schnelles Gleiten
+           macht die Rahmen im 35-ms-Fenster selbst unsicher und zählt dann häufiger als Sprung
+           (Oktave in 150 ms: 6 von 12 statt 1 von 12; ab 300 ms keiner). uebergangMs zeigt die Dauer. */
         if (isFinite(st) && Math.abs(st) < ruheSt) { ruhe.push(track.f0[i]); seitRuhe = 0; }
         else { ruhe.push(track.f0[i]); if (track.ap[i] < glideAp) seitRuhe++; }
         if (ruhe.length > back) ruhe.shift();
@@ -933,11 +948,22 @@
     if (run && run.dauerFrames >= 2) events.push(run);
 
     return events.map(function (e) {
-      var dauer = e.bis - e.von + track.hopS, kern = kernGruppe(e.sts), hs = [], fz = [];
-      for (var k = 0; k < e.sts.length; k++) if (Math.abs(e.sts[k] - kern) <= 1) { hs.push(e.sts[k]); fz.push(e.fs[k]); }
-      var h = median(hs);
+      var dauer = e.bis - e.von + track.hopS, kern = kernGruppe(e.sts), hs = [], fz = [], k;
+      for (k = 0; k < e.sts.length; k++) if (Math.abs(e.sts[k] - kern) <= 1) { hs.push(e.sts[k]); fz.push(e.fs[k]); }
+      var h = median(hs), ziel = median(fz), ah = Math.abs(h), tB = NaN, tZ = NaN, apS = -Infinity;
+      for (k = e.iVon - 1; k >= 0 && track.t[k] >= e.von - backS - 1e-9; k--) {
+        if (gueltig(k) && Math.abs(12 * Math.log2(track.f0[k] / e.ref)) < ruheSt) { tB = track.t[k]; break; }
+      }
+      for (k = e.iVon; k <= e.iBis; k++) {
+        if (gueltig(k) && Math.abs(12 * Math.log2(track.f0[k] / ziel)) < ruheSt) { tZ = track.t[k]; break; }
+      }
+      for (k = e.iVon; k >= 0 && track.t[k] >= e.von - 0.05 - 1e-9; k--) if (track.ap[k] > apS) apS = track.ap[k];
+      for (k = e.iVon + 1; k < n && track.t[k] <= e.von + 0.05 + 1e-9; k++) if (track.ap[k] > apS) apS = track.ap[k];
       return { startS: e.von, dauerS: dauer, halbtoene: h, richtung: h > 0 ? 'auf' : 'ab',
-        vonHz: e.ref, nachHz: median(fz), art: dauer >= holdS ? 'gehalten' : 'kante' };
+        vonHz: e.ref, nachHz: ziel, art: dauer >= holdS ? 'gehalten' : 'kante',
+        uebergangMs: (isFinite(tB) && isFinite(tZ)) ? Math.round((tZ - tB) * 1e6) / 1e3 : NaN,   // ms, auf µs gerundet (Gleitkommarest)
+        apSpitze: isFinite(apS) ? apS : NaN,
+        oktave: Math.abs(ah - 12) <= 0.7 || Math.abs(ah - 24) <= 0.7 };
     });
   }
 
