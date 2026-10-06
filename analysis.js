@@ -276,19 +276,42 @@
   }
 
   /* Referenzen je Vokal aus allen Takes: engstes bestSegment (Minimum), mit Herkunft. Angepinnte bleiben. */
+  function refAus(t, b, pinned) {
+    var r = { d34: b.d34Med, takeId: t.id, code: t.code, label: t.label, date: t.createdAt, startS: b.startS, lenS: b.lenS, pinned: pinned };
+    if (typeof b.ambiguousShare === 'number') r.ambiguousShare = b.ambiguousShare;
+    return r;
+  }
+  /* Angepinnt, aber nicht mehr aus dem eigenen Take aufzufrischen: Die Referenz bleibt stehen, mit
+     verwaist und Grund, statt still durch das Minimum eines anderen Takes ersetzt zu werden — der
+     Pin war eine Entscheidung des Nutzers. Kein d34, also keine Zielmarke. Nicht NaN: eine
+     JSON-Sicherung macht daraus null, isFinite(null) ist wahr, nach dem Import stünde die Marke bei
+     0 Hz. Der letzte Wert steht nur zur Anzeige in d34Zuletzt. */
+  function verwaist(pr, host, grund) {
+    var r = { takeId: pr.takeId, code: host ? host.code : pr.code, label: host ? host.label : pr.label, date: host ? host.createdAt : pr.date,
+      startS: pr.startS, lenS: pr.lenS, pinned: true, verwaist: true, grund: grund };
+    var alt = (typeof pr.d34 === 'number' && isFinite(pr.d34)) ? pr.d34 : pr.d34Zuletzt;
+    if (typeof alt === 'number' && isFinite(alt)) r.d34Zuletzt = alt;
+    return r;
+  }
+
   function computeRefs(takes, previous) {
     var refs = {};
-    // Eine angepinnte Referenz bleibt nur, solange ihr Take existiert — sonst stünde eine Zielmarke
-    // auf dem Schirm, deren Herkunft gelöscht ist. Nach einer Neu-Analyse wird sie aus dem neuen
-    // Bestsegment desselben Takes aufgefrischt, nicht aus dem alten Wert.
+    /* Eine angepinnte Referenz wird nach einer Neu-Analyse aus dem neuen Bestsegment desselben Takes
+       aufgefrischt, nicht aus dem alten Wert. Geht das nicht — Take gelöscht, kein Bestsegment mehr,
+       Bestsegment zweideutig —, bleibt sie verwaist stehen. Früher wurde sie verworfen und das
+       Minimum der übrigen Takes trat kommentarlos an ihre Stelle. Eine verwaiste Referenz frischt
+       sich wieder auf, sobald ihr Take wieder ein Bestsegment hat (Neu-Analyse, Import). */
     if (previous) for (var p in previous) {
       var pr = previous[p];
       if (!pr || !pr.pinned) continue;
       var host = null;
-      for (var q = 0; q < takes.length; q++) if (takes[q].id === pr.takeId) { host = takes[q]; break; }
-      if (!host) continue;
-      var hb = host.summary && host.summary.perVowel && host.summary.perVowel[p] && host.summary.perVowel[p].bestSegment;
-      if (hb && isFinite(hb.d34Med)) refs[p] = { d34: hb.d34Med, takeId: host.id, code: host.code, label: host.label, date: host.createdAt, startS: hb.startS, lenS: hb.lenS, pinned: true };
+      for (var q = 0; q < takes.length; q++) if (takes[q] && takes[q].id === pr.takeId) { host = takes[q]; break; }
+      var wer = 'Take ' + ((host ? host.code : pr.code) || '?');
+      var pv = host && host.summary && host.summary.perVowel && host.summary.perVowel[p], hb = pv && pv.bestSegment, grund = '';
+      if (!host) grund = wer + ' ist gelöscht.';
+      else if (!hb || !isFinite(hb.d34Med)) grund = wer + ' hat in seiner letzten Auswertung ' + (pv && pv.segmentsAmbiguous ? 'für /' + p + '/ nur zweideutig zugeordnete Segmente, kein Bestsegment.' : 'kein Bestsegment für /' + p + '/.');
+      else if (hb.ambiguousShare > AMBIG_MAX_SHARE) grund = wer + ': das Bestsegment für /' + p + '/ ist zweideutig zugeordnet (' + Math.round(100 * hb.ambiguousShare) + ' % der Rahmen).';
+      refs[p] = grund ? verwaist(pr, host, grund) : refAus(host, hb, true);
     }
     for (var i = 0; i < takes.length; i++) {
       var t = takes[i], per = t.summary && t.summary.perVowel;
@@ -296,10 +319,10 @@
       for (var cls in per) {
         var b = per[cls].bestSegment;
         if (!b || !isFinite(b.d34Med)) continue;
-        // Eine Zusammenfassung von anderswo (Import) kann ein zweideutiges Bestsegment tragen.
+        // Gespeicherte Zusammenfassungen werden nicht neu gerechnet: ein zweideutiges Bestsegment hier noch einmal abweisen.
         if (b.ambiguousShare > AMBIG_MAX_SHARE) continue;
-        if (refs[cls] && refs[cls].pinned) continue;
-        if (!refs[cls] || b.d34Med < refs[cls].d34) refs[cls] = { d34: b.d34Med, takeId: t.id, code: t.code, label: t.label, date: t.createdAt, startS: b.startS, lenS: b.lenS, pinned: false };
+        if (refs[cls] && refs[cls].pinned) continue;   // auch verwaist: der Platz bleibt dem Pin
+        if (!refs[cls] || b.d34Med < refs[cls].d34) refs[cls] = refAus(t, b, false);
       }
     }
     return refs;

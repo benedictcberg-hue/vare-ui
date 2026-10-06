@@ -219,4 +219,42 @@ module.exports = async function (H) {
     const refs = A.computeRefs([mk('X', 560, 0.8), mk('Y', 680, 0.1)], {});
     check('V2', 'computeRefs: Bestsegment mit ambiguousShare 0,8 aus einer gespeicherten Zusammenfassung wird keine Referenz', refs.a && refs.a.takeId === 'Y', JSON.stringify(refs));
   }
+
+  /* V2d–i: angepinnte Referenz, die sich nicht mehr aus ihrem Take auffrischen lässt (Nebenbefund am
+     Ende von Bericht 2, Übersicht B12). Vorher wurde aus der angepinnten 640 kommentarlos 910 aus
+     einem anderen Take. Jetzt bleibt sie verwaist stehen: mit Grund, ohne d34 (keine Zielmarke). */
+  const ohneZiel = r => !!r && r.verwaist === true && r.pinned === true && !isFinite(r.d34) && typeof r.grund === 'string' && r.grund.length > 10;
+  {
+    const T1 = { id: 'T1', code: 'A', createdAt: '1', summary: { perVowel: { a: { nStable: 0, segments: 0, segmentsAmbiguous: 0, bestSegment: null } } } };
+    const T2 = { id: 'T2', code: 'B', createdAt: '2', summary: { perVowel: { a: { bestSegment: { d34Med: 910, startS: 0, lenS: 1, n: 100, ambiguousShare: 0 } } } } };
+    const pin = { a: { d34: 640, takeId: 'T1', code: 'A', date: '1', startS: 2, lenS: 1, pinned: true } };
+    const r = A.computeRefs([T1, T2], pin);
+    check('V2', 'computeRefs: angepinnter Take ohne Bestsegment nach Neu-Analyse → Referenz bleibt verwaist mit Grund, nicht still 910 aus einem anderen Take',
+      ohneZiel(r.a) && r.a.d34Zuletzt === 640 && r.a.takeId === 'T1' && /Take A/.test(r.a.grund) && /kein Bestsegment/.test(r.a.grund), JSON.stringify(r.a));
+    const rj = JSON.parse(JSON.stringify(r)), r2 = A.computeRefs([T1, T2], rj);
+    check('V2', 'Verwaiste Referenz nach JSON-Sicherung und erneuter Berechnung: weiter ohne Zahl (keine Marke bei 0 Hz), letzter Wert erhalten',
+      !isFinite(rj.a.d34) && ohneZiel(r2.a) && r2.a.d34Zuletzt === 640, JSON.stringify(rj.a) + ' → ' + JSON.stringify(r2.a));
+    const T1neu = { id: 'T1', code: 'A', createdAt: '1', summary: { perVowel: { a: { bestSegment: { d34Med: 700, startS: 1, lenS: 1.5, n: 150, ambiguousShare: 0 } } } } };
+    const r3 = A.computeRefs([T1neu, T2], r2);
+    check('V2', 'Verwaiste Referenz frischt sich auf, sobald ihr Take wieder ein Bestsegment hat',
+      r3.a && r3.a.pinned === true && !r3.a.verwaist && r3.a.d34 === 700 && r3.a.takeId === 'T1', JSON.stringify(r3.a));
+    const geloest = JSON.parse(JSON.stringify(r2)); geloest.a.pinned = false;   // wie app.js unpinRef
+    const r4 = A.computeRefs([T1, T2], geloest);
+    check('V2', 'Gelöste verwaiste Referenz: automatische Referenz aus den übrigen Takes', r4.a && r4.a.pinned === false && !r4.a.verwaist && r4.a.d34 === 910, JSON.stringify(r4.a));
+    const r5 = A.computeRefs([T2], pin);
+    check('V2', 'computeRefs: Take der angepinnten Referenz gelöscht → verwaist, nicht still durch einen anderen Take ersetzt',
+      ohneZiel(r5.a) && /gelöscht/.test(r5.a.grund) && r5.a.code === 'A', JSON.stringify(r5.a));
+    const T1amb = { id: 'T1', code: 'A', createdAt: '1', summary: { perVowel: { a: { bestSegment: { d34Med: 600, startS: 1, lenS: 1, n: 100, ambiguousShare: 0.8 } } } } };
+    const r6 = A.computeRefs([T1amb, T2], pin);
+    check('V2', 'computeRefs: angepinnter Take mit zweideutigem Bestsegment (gespeichert) → verwaist', ohneZiel(r6.a) && /zweideutig/.test(r6.a.grund), JSON.stringify(r6.a));
+  }
+  {
+    // Echte Neu-Analyse: angepinnt war das /a/ eines Takes; die neue Auswertung findet dort nur noch
+    // ein zweideutig zugeordnetes Segment (hier: der Grenzvokal unter derselben Id).
+    const pin = A.computeRefs([T_EIN], {}); pin.a.pinned = true;
+    const neu = Object.assign({}, T_GRENZ, { id: 'E', code: 'E' });
+    const r = A.computeRefs([neu], pin);
+    check('V2', 'Neu-Analyse ergibt nur ein zweideutiges Segment → angepinnte Referenz verwaist mit diesem Grund',
+      ohneZiel(r.a) && /zweideutig/.test(r.a.grund) && isFinite(r.a.d34Zuletzt), JSON.stringify(r.a));
+  }
 };
