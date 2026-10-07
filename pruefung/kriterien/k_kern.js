@@ -1,6 +1,6 @@
 /* Kriterien K1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps).
    Kriterien K2: Formant-Nummerierung und Gültigkeit im Fenstersweep (analyseAt).
-   Kriterien K3: Grundton im Fenstersweep (analyseAt): Untergrenze der Teilerkontrolle, Gegenprobe.
+   Kriterien K3: Grundton im Fenstersweep (analyseAt): Untergrenze der Teilerkontrolle, Gegenprobe, Korrektur.
    Testsignale: allgemeine Baritonlage 75–470 Hz, synthetische Vokale mit bekannter Wahrheit.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
 'use strict';
@@ -550,8 +550,8 @@ module.exports = async function (H) {
         for (const c of f.frames) {
           const r = D.analyseAt(ds, TSR, c, opts || {});
           if (!r.voiced) continue;
-          const [lo, hi] = f.wahr ? f.wahr(c) : [NaN, NaN];
-          out.push({ name: f.name + '@' + (c / TSR).toFixed(2) + ' s', r, ok: f.ok ? f.ok(r, c) : (r.f0 >= 0.97 * lo && r.f0 <= 1.03 * hi), lo, hi });
+          const [lo, hi] = f.wahr ? f.wahr(c) : [NaN, NaN], richtig = v => f.ok ? f.ok({ f0: v }, c) : (v >= 0.97 * lo && v <= 1.03 * hi);
+          out.push({ name: f.name + '@' + (c / TSR).toFixed(2) + ' s', r, ok: richtig(r.f0), okYin: richtig(r.f0Yin), lo, hi });
         }
       }
       return out;
@@ -642,5 +642,24 @@ module.exports = async function (H) {
       nG++; if (a.f0 === b.f0 && a.f0Unsure === b.f0Unsure && a.f0Grund === b.f0Grund && (a.f0Cep === b.f0Cep) && a.octaveAmbiguous === b.octaveAmbiguous && a.subFactor === b.subFactor) gleich++;
     }
     check('K3b', 'Grundton, f0Cep, f0Unsure und Teilerkontrolle hängen nicht vom LPC-Ordnungssweep ab (Grundlage der schnellen Prüfsätze)', gleich === nG, gleich + '/' + nG);
+
+    /* K3c: Korrektur. Ein Kandidat ersetzt den YIN-Wert nur, wenn Cepstrum, eigene Teiltonreihe,
+       Teilerkontrolle und Reihenkontrast zusammenpassen; der alte Wert bleibt in f0Yin sichtbar. */
+    const art = R => { const a = {}; for (const x of R) if (x.r.f0Korrektur) a[x.r.f0Korrektur] = (a[x.r.f0Korrektur] || 0) + 1; return Object.keys(a).map(k => k + ' ' + a[k]).join(', ') || 'keine'; };
+    const befOk = R_befund.filter(x => x.ok).length, befKor = R_befund.filter(x => !x.okYin && x.r.f0Korrektur && x.r.f0Yin !== x.r.f0).length, befYinFalsch = R_befund.filter(x => !x.okYin).length;
+    const befBad = R_befund.filter(x => !x.ok).slice(0, 3).map(x => x.name + ' ' + r1(x.r.f0) + ' Hz (YIN ' + r1(x.r.f0Yin) + ', Cepstrum ' + r1(x.r.f0Cep) + ')');
+    check('K3c', 'Befund-Fälle 348/192/121/97 Hz: Grundton in allen 400 Rahmen richtig (±3 %), jeder falsche YIN-Wert sichtbar korrigiert (f0Korrektur, alter Wert in f0Yin)',
+      befOk === 400 && befKor === befYinFalsch && befYinFalsch > 0,
+      'richtig ' + befOk + '/400, YIN falsch ' + befYinFalsch + ', korrigiert ' + befKor + ' (' + art(R_befund) + ')' + (befBad.length ? ' — ' + befBad.join(' | ') : ''));
+    const tiefOk = R_tief.filter(x => x.ok).length;
+    check('K3c', 'tiefe Lage 76–133 Hz, schmaler F1 auf dem 3.–6. Teilton: Grundton in jedem Rahmen richtig', tiefOk === R_tief.length && R_tief.length > 0,
+      tiefOk + '/' + R_tief.length + ', YIN falsch ' + R_tief.filter(x => !x.okYin).length + ' (' + art(R_tief) + ')');
+    const ALLE = R_befund.concat(R_zuf, R_zuf40, R_tief, R_vok, R_vib, R_pd, R_last);
+    const korr = ALLE.filter(x => x.r.f0Korrektur), korrFalsch = korr.filter(x => !x.ok), korrOhneNot = ALLE.filter(x => x.okYin && x.r.f0Korrektur);
+    const yinFalsch = ALLE.filter(x => !x.okYin).length, nachher = ALLE.filter(x => !x.ok).length;
+    check('K3c', 'Korrektur nur, wo der YIN-Wert falsch war, und dann immer richtig (alle K3b-Sätze, auch Periodenverdopplung und Belastung)',
+      korrFalsch.length === 0 && korrOhneNot.length === 0 && korr.length > 0 && ALLE.filter(x => x.r.f0Korrektur && (x.r.f0Unsure || !isFinite(x.r.f0Yin))).length === 0,
+      'Rahmen ' + ALLE.length + ', YIN falsch ' + yinFalsch + ', korrigiert ' + korr.length + ' (' + art(ALLE) + '), danach falsch ' + nachher + ' (alle markiert, siehe K3b); falsch korrigiert ' + korrFalsch.length + ', ohne Not ' + korrOhneNot.length +
+      korrFalsch.concat(korrOhneNot).slice(0, 3).map(x => ' — ' + x.name + ' ' + r1(x.r.f0Yin) + ' → ' + r1(x.r.f0)).join(''));
   }
 };

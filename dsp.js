@@ -546,7 +546,7 @@
        gemeldete Grundton ein Unterton — die eigentliche Teiltonreihe liegt bei subFactor·f0.
        SHR braucht diese Auskunft, um die Subharmonischen vom Raster zu unterscheiden, statt sie
        aus dem Spektrum zu raten (ein Formant auf H2 macht die geraden Teiltöne sonst verdächtig). */
-    return { f0: sr / ti, ap: dn[best], tau: ti, dips: dips, fminEff: sr / tauMax };
+    return { f0: sr / ti, ap: dn[best], tau: ti, dips: dips, fminEff: sr / tauMax, dn: dn };
   }
 
   /* ---------- Spektrum und Spektralmaße ---------- */
@@ -784,6 +784,62 @@
     return out;
   }
 
+  /* Korrektur nach gerissener Gegenprobe. Kandidaten: m·f0, wenn die eigene Teiltonreihe gerissen ist
+     (Oktavfehler nach unten), und der YIN-Dip an der Cepstrum-Periode (Nebendip gewählt). Ein Kandidat
+     ersetzt den YIN-Wert nur, wenn alles zusammenpasst:
+     - das Cepstrum bestätigt ihn direkt (±0,5 HT), er besteht die Gegenprobe selbst, und die
+       Teilerkontrolle teilt ihn nicht und meldet keine Unsicherheit;
+     - nach unten im ganzzahligen Verhältnis (f0/q) nur mit voller Teilerprüfung auf seinem eigenen
+       Raster (8 dB über dem Zwischenrauschen, 20 dB-Grenze) — sonst würde aus einem Cepstrum, das auf
+       einer Rahmonik sitzt, eine falsche Teilung (gemessen: 444 → 89 Hz bei rosa Rauschen 20 dB);
+     - nach oben im ganzzahligen Verhältnis (q·f0) nur, wenn die Teiltonreihe von f0 für genau dieses q
+       gerissen ist;
+     - seine Teiltonreihe hebt sich mindestens F0_KORR_KONTRAST_DB deutlicher vom Zwischenrauschen ab
+       als die des YIN-Werts (gemessen bei allen richtigen Korrekturen: mindestens 8 dB).
+     Sonst bleibt der YIN-Wert stehen, markiert. */
+  var F0_KORR_KONTRAST_DB = 6;
+
+  // mittlere Höhe der Linien k·g, k = 1..8, über dem Zwischenrauschen des Rasters g (dB)
+  function reihenKontrast(spec, g) {
+    var ref = noiseRefDb(spec, g), sum = 0, n = 0;
+    for (var k = 1; k <= 8; k++) { var L = lineLevelDb(spec, k * g); if (isFinite(L)) { sum += L; n++; } }
+    return n ? sum / n - ref : NaN;
+  }
+
+  function f0Korrektur(spec, f0, fCep, gp, p, sr, fmax) {
+    var cand = [], i;
+    if (gp.aufM) cand.push({ f: gp.aufM * f0, art: 'oktave' });
+    if (isFinite(fCep) && p.dn) {
+      var tc = sr / fCep, bi = naechsterDip(p.dips, tc);
+      if (bi >= 0 && Math.abs(p.dips[bi].tau - tc) <= 0.03 * tc + 1 && p.dips[bi].dn < 0.45) {
+        var u = p.dips[bi].tau, A = p.dn[u - 1], B = p.dn[u], C = p.dn[u + 1], den = A - 2 * B + C;
+        cand.push({ f: sr / (u + ((Math.abs(den) > 1e-12) ? Math.max(-1, Math.min(1, 0.5 * (A - C) / den)) : 0)), art: 'cepstrum' });
+      }
+    }
+    var k0 = reihenKontrast(spec, f0);
+    for (i = 0; i < cand.length; i++) {
+      var cf = cand[i].f;
+      if (!(cf >= F0_MIN_HZ && cf <= fmax)) continue;
+      if (!(Math.abs(12 * Math.log2(fCep / cf)) <= F0_CEP_TOL_HT)) continue;
+      var s2 = subMultipleInfo(spec, cf);
+      if (s2.halve || s2.ambiguous) continue;
+      if (f0Gegenprobe(spec, cf, fCep, sr / cf, p.dips, sr).unsure) continue;
+      var ab = 0, auf = 0;
+      for (var q = 2; q <= SUB_MULTIPLE_MAX; q++) {
+        if (Math.abs(12 * Math.log2(q * cf / f0)) <= F0_CEP_TOL_HT) ab = q;
+        if (Math.abs(12 * Math.log2(cf / (q * f0))) <= F0_CEP_TOL_HT) auf = q;
+      }
+      if (ab) {
+        var t = teiltonreihe(spec, cf, ab, 8);
+        if (!(t.newMinusNoise > 8 && t.above >= Math.max(3, Math.ceil(0.6 * t.nNew)) && t.newMinusOld > OCTAVE_ODD_EVEN_DB)) continue;
+      }
+      if (auf && gp.aufM !== auf) continue;
+      if (!(reihenKontrast(spec, cf) >= k0 + F0_KORR_KONTRAST_DB)) continue;
+      return { f0: cf, art: cand[i].art, oddEvenDb: s2.newMinusOld };
+    }
+    return null;
+  }
+
   function h1h2(spec, f0) { return lineLevelDb(spec, f0) - lineLevelDb(spec, 2 * f0); }
 
   /* Betragsgang eines Polpaars (F, B) bei f, auf 0 dB bei f = 0 normiert (Iseli/Alwan). */
@@ -853,7 +909,7 @@
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
-      f0Unsure: false, f0Grund: '', f0Cep: NaN,
+      f0Unsure: false, f0Grund: '', f0Cep: NaN, f0Yin: NaN, f0Korrektur: '',
       harmonicPullHz: NaN, sparseHarmonics: false,
       dips: [], fminEff: NaN, nWindows: 0, spectrumDb: null
     };
@@ -947,7 +1003,13 @@
     var cp = cpp(spec, opts.fmin || 60, opts.fmax || 500);
     out.f0Cep = cp.f0Fein;
     var gp = f0Gegenprobe(spec, f0, out.f0Cep, out.subFactor * p.tau, p.dips, sr);
-    out.f0Unsure = gp.unsure; out.f0Grund = gp.grund;
+    out.f0Yin = f0; out.f0Unsure = gp.unsure; out.f0Grund = gp.grund;
+    var kor = gp.unsure ? f0Korrektur(spec, f0, out.f0Cep, gp, p, sr, opts.fmax || 500) : null;
+    if (kor) {
+      // Korrigierter Wert besteht alle Proben: nicht unsicher, aber sichtbar korrigiert (f0Korrektur, f0Yin)
+      f0 = kor.f0; out.subFactor = 1; out.octaveCorrected = false; out.octaveAmbiguous = false; out.octaveUnterGrenze = false; out.octaveOddEvenDb = kor.oddEvenDb;
+      out.f0Unsure = false; out.f0Grund = ''; out.f0Korrektur = kor.art;
+    }
     out.f0 = f0; out.note = hzToNote(f0);
     // Bei hohem Grundton rastet ein LPC-Gipfel auf dem nächsten Teilton ein: die Lage eines
     // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
@@ -1234,7 +1296,7 @@
     analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
-    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe,
+    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
     F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
