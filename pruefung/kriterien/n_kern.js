@@ -2,8 +2,9 @@
    A1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps) —
      A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0), A1b Mischrahmen, 1,5·F0 und Schwelle am legato Tonwechsel,
      A1c Atempause im Raum und mit Brumm, A1d Naht im Signal (digitale Stille, harter Schnitt).
-   A2: SHR und Grundton an Rändern, Tonwechseln und bei Hauch (analyseAt: Zwischenpegel) —
-     A2d Hauch, A2e Verdopplung bleibt sichtbar, A2f stehende Töne ohne Fehlmarke, A2g Vertrag der Felder.
+   A2: SHR und Grundton an Rändern, Tonwechseln und bei Hauch (analyseAt: Fensterprobe, Zwischenpegel) —
+     A2a Ränder, A2b Tonwechsel, A2c Take mit Melodie, A2d Hauch, A2e Verdopplung bleibt sichtbar,
+     A2f stehende Töne ohne Fehlmarke, A2g Vertrag der Felder.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -307,11 +308,11 @@ module.exports = async function (H) {
      Pegelkante (Einsatz, Aussatz, Pause) oder ein zweiter Ton im Fenster legt Energie auf die halbzahligen
      Linien, ohne dass eine Subharmonische im Signal ist; bei Quarte und Quinte nimmt der Grundton den
      gemeinsamen Unterton an. Hauch (Rauschen in der Anregung) tut dasselbe mitten im Ton. Vorher galten
-     alle diese Werte als sicher: SHR bis −8 dB an Kanten, bis −4 dB an Tonwechseln, bis −9 dB bei Hauch,
+     alle diese Werte als sicher: SHR bis −8 dB an Kanten, bis 0 dB an Tonwechseln, bis −9 dB bei Hauch,
      Gold „über der Warnschwelle“ in der Zusammenfassung. Jetzt trägt der Rahmen shrUnsure mit eigenem
      Grund ('rand', 'wechsel', 'rauschen'), ein Mischwert des Grundtons f0Unsure ('wechsel').
-     A2d Hauch, A2e echte Verdopplung bleibt sichtbar, A2f stehende Töne ohne Fehlmarke, A2g Vertrag der
-     Felder. */
+     A2a Ränder, A2b Tonwechsel, A2c Take mit legato Melodie, A2d Hauch, A2e echte Verdopplung bleibt
+     sichtbar, A2f stehende Töne ohne Fehlmarke, A2g Vertrag der Felder. */
   {
     const { TSR: T12, A } = H;
     let s2 = 20000;   // eigene Saat je Abschnitt: unabhängig davon, wie viele Signale A1 und die Abschnitte davor erzeugen
@@ -379,6 +380,95 @@ module.exports = async function (H) {
     const hat = (r, g) => String(r.shrGrund).split('+').indexOf(g) >= 0;
     const unmarkiert25 = r => r.voiced && !r.shrUnsure && r.shr > -25;
     const zeig = r => 't ' + r.t.toFixed(2) + ' SHR ' + r1_(r.shr) + (r.shrUnsure ? ' [' + r.shrGrund + ']' : '') + ' F0 ' + r1_(r.f0) + (r.f0Unsure ? ' [' + r.f0Grund + ']' : '');
+
+    /* A2a Ränder: harter oder weicher Einsatz und Aussatz nach Stille (Raumrauschen 40 dB). Das Fenster
+       über der Kante zeigt die verbreiterten Linien als halbzahlige Energie (vorher bis −8 dB, sicher). */
+    {
+      s2 = 21000;
+      const L = [], innen = [];
+      for (const v of ['a', 'i']) for (const f0 of [98, 165, 262]) for (const art of ['impuls', 'rosenberg']) for (const rampe of [0, 0.03]) {
+        const ton = art === 'impuls' ? stimme(() => f0, 0.8, v, { art, jit: 0.01, shim: 0.02, seed: s2++ }) : quelle({ f0, dur: 0.8, jit: 0.01, shim: 0.02, seed: s2++ }, v);
+        const x = raum(H.concat([pause(0.4), rampen(ton, rampe, rampe), pause(0.4)]), 40, s2++);
+        // Kanten bei 0,4 s und 1,2 s; Abstand der Rahmenmitte zur Kante (bei Rampen zum inneren Ende der Rampe)
+        for (const r of rahmenBei(x, zeiten(0.3, 0.6).concat(zeiten(1.0, 1.3)))) {
+          if (!r.voiced) continue;
+          const nm = NAME[v] + ' ' + f0 + ' ' + art + (rampe ? ' Rampe 30 ms' : ' hart'), d = Math.min(Math.abs(r.t - 0.4), Math.abs(r.t - 1.2)), dInnen = Math.min(r.t - 0.4 - rampe, 1.2 - rampe - r.t);
+          // Fenster (0,14 s) über der Kante bzw. Rampe
+          if (dInnen < 0.07) L.push({ nm, r, d });
+          if (dInnen >= 0.09) innen.push({ nm, r });
+        }
+      }
+      const bad = L.filter(x => unmarkiert25(x.r)), nah = L.filter(x => x.d <= 0.05), ohneRand = nah.filter(x => !hat(x.r, 'rand')), falsch = innen.filter(x => hat(x.r, 'rand') || hat(x.r, 'wechsel'));
+      check('A2a', 'harter und weicher Ein- und Aussatz (/a/ /i/, 98–262 Hz, Impuls und Rosenberg, Raumrauschen 40 dB): kein stimmhafter Rahmen, dessen Fenster die Kante überdeckt, mit SHR über −25 dB ohne shrUnsure; jeder Rahmen, dessen Mitte bis 50 ms von der Kante liegt, trägt den Grund \'rand\'',
+        L.length >= 300 && bad.length === 0 && nah.length >= 100 && ohneRand.length === 0,
+        'Rahmen ' + L.length + ', unmarkiert über −25 dB ' + bad.length + ', an der Kante ' + nah.length + ' davon ohne \'rand\' ' + ohneRand.length +
+        (bad.length ? ' — ' + bad.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : '') + (ohneRand.length ? ' — ohne rand: ' + ohneRand.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r) + ' Pegelspanne ' + r1_(x.r.fensterPegelDb)).join(' | ') : ''));
+      check('A2a', 'derselbe Satz, Fenster ganz im Ton (Mitte mindestens 90 ms von der Kante): nie \'rand\' oder \'wechsel\'', innen.length >= 100 && falsch.length === 0,
+        'Rahmen ' + innen.length + ', mit Fenstergrund ' + falsch.length + (falsch.length ? ' — ' + falsch.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r) + ' Pegelspanne ' + r1_(x.r.fensterPegelDb)).join(' | ') : ''));
+    }
+
+    /* A2b Tonwechsel legato: Die Teiltöne des zweiten Tons fallen auf halbzahlige Linien des ersten. Fälle
+       aus dem Befund (große Terz, Ganzton abwärts, Quinte 220→330 mit Unterton 110 Hz, 131→196 mit 65,5 Hz,
+       Quarte 220→294, 165→208), dazu Halbton und Oktave. Vorher: SHR bis 0 dB ohne Marke, Unterton als
+       sicherer Grundton. */
+    {
+      s2 = 22000;
+      const PAARE = [[196, 247], [220, 196], [220, 330], [131, 196], [196, 294], [165, 208], [220, 294], [110, 104], [131, 262], [262, 131]];
+      const L = [], kern = [], ruhig = [];
+      for (const [a, b] of PAARE) for (const v of ['a', 'o', 'e']) for (const [gl, vib] of [[0.02, 0], [0.05, 0], [0.05, 40]]) {
+        const fz0 = stufen([a, b], 0.6, gl), fz = vib ? vibrato(fz0, 5.5, vib, a) : fz0;
+        const x = raum(rampen(quelle({ f0: fz, dur: 1.2, jit: 0.008, shim: 0.02, seed: s2++ }, v), 0.05, 0.05), 40, s2++);
+        const nm = NAME[v] + ' ' + a + '→' + b + ' Gleiten ' + gl * 1000 + ' ms' + (vib ? ' Vibrato' : ''), lo = Math.min(a, b), hi = Math.max(a, b), ht = Math.abs(12 * Math.log2(b / a));
+        for (const r of rahmenBei(x, zeiten(0.45, 0.8))) {
+          if (!r.voiced) continue;
+          const d = r.t < 0.6 ? 0.6 - r.t : Math.max(0, r.t - 0.6 - gl);   // Abstand zum Gleiten
+          L.push({ nm, r, lo, hi });
+          if (ht >= 4 && ht <= 7.5 && d <= 0.02) kern.push({ nm, r, gl });
+          if (d >= 0.1) ruhig.push({ nm, r });
+        }
+      }
+      const bad = L.filter(x => unmarkiert25(x.r));
+      const f0aus = L.filter(x => !x.r.f0Unsure && (12 * Math.log2(x.r.f0 / x.lo) < -1 || 12 * Math.log2(x.r.f0 / x.hi) > 1));
+      // Abdeckung bei raschem Gleiten (20 ms); bei 50 ms Gleiten ist ein Teilfenster oft selbst ein Glissando ohne
+      // stehende Periode (YIN aperiodisch) — dort steht die Zahl nur im Bericht, SHR fängt dann der Zwischenpegel
+      const kern20 = kern.filter(x => x.gl === 0.02), kern50 = kern.filter(x => x.gl === 0.05);
+      const ohne = kern20.filter(x => !hat(x.r, 'wechsel')), ohne50 = kern50.filter(x => !hat(x.r, 'wechsel')), falsch = ruhig.filter(x => hat(x.r, 'wechsel') || hat(x.r, 'rand') || x.r.f0Grund === 'wechsel');
+      check('A2b', 'legato Tonwechsel (±1…12 HT aus 104–262 Hz, /a/ /o/ /e/, Gleiten 20/50 ms, mit Vibrato, Rosenberg, 40 dB): kein Rahmen mit SHR über −25 dB ohne shrUnsure, kein Grundton mehr als 1 HT außerhalb der beiden Töne ohne f0Unsure',
+        L.length >= 1500 && bad.length === 0 && f0aus.length === 0,
+        'Rahmen ' + L.length + ', unmarkiert über −25 dB ' + bad.length + ', Grundton außerhalb ohne Marke ' + f0aus.length + ', Mischwert erkannt (f0Grund wechsel) ' + L.filter(x => x.r.f0Grund === 'wechsel').length +
+        (bad.length ? ' — ' + bad.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : '') + (f0aus.length ? ' — ' + f0aus.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : ''));
+      check('A2b', 'Schritte 4–7 HT, Gleiten 20 ms: Rahmen bis 20 ms um den Wechsel tragen zu mindestens 95 % den Grund \'wechsel\'; Rahmen 100 ms und weiter vom Wechsel nie \'wechsel\' oder \'rand\'',
+        kern20.length >= 80 && ohne.length <= 0.05 * kern20.length && ruhig.length >= 500 && falsch.length === 0,
+        'am Wechsel ' + (kern20.length - ohne.length) + '/' + kern20.length + ' (Bericht: Gleiten 50 ms ' + (kern50.length - ohne50.length) + '/' + kern50.length + '), abseits ' + ruhig.length + ' Rahmen, davon mit Fenstergrund ' + falsch.length +
+        (ohne.length ? ' — ohne wechsel z. B. ' + ohne.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r) + ' Teile ' + r1_(x.r.fensterF0Lo) + '–' + r1_(x.r.fensterF0Hi)).join(' | ') : '') +
+        (falsch.length ? ' — abseits markiert: ' + falsch.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : ''));
+    }
+
+    /* A2c Take: legato Melodie wie im Befund (131-147-165-196-165-220-196-147-131 Hz, je 0,35 s, 40 ms
+       Gleiten, Wobble, rosa Raumrauschen 40 dB) durch analyseTake. Vorher meldete die Zusammenfassung „SHR
+       max“ −6 dB aus Rahmen, die als sicher galten — in Gold „über der Warnschwelle“. */
+    {
+      s2 = 23000;
+      const toene = [131, 147, 165, 196, 165, 220, 196, 147, 131], F = A.FLAG, zeilen = [];
+      let gut = true;
+      for (const v of ['a', 'o']) {
+        const fz = vibrato(stufen(toene, 0.35, 0.04), 3.5, 25, 1);
+        const x = raum(H.concat([pause(0.2), rampen(quelle({ f0: fz, dur: toene.length * 0.35, jit: 0.008, shim: 0.02, seed: s2++ }, v), 0.06, 0.06), pause(0.2)]), 40, s2++);
+        const res = await A.analyseTake(x, SR, {}), s = res.series;
+        let n = 0, bad = 0, f0aus = 0, mx = -Infinity;
+        for (let i = 0; i < s.t.length; i++) {
+          if (!(s.flags[i] & F.VOICED)) continue;
+          n++;
+          if (!(s.flags[i] & F.SHRUNSURE) && s.shr[i] > -25) { bad++; mx = Math.max(mx, s.shr[i]); }
+          if (!(s.flags[i] & F.F0UNSURE) && (12 * Math.log2(s.f0[i] / 131) < -1 || 12 * Math.log2(s.f0[i] / 220) > 1)) f0aus++;
+        }
+        const smax = res.summary.shr.max, ok = n > 200 && bad === 0 && f0aus === 0 && !(smax > -15);
+        gut = gut && ok;
+        zeilen.push(NAME[v] + ': stimmhaft ' + n + ', unmarkiert über −25 dB ' + bad + (bad ? ' (höchster ' + r1_(mx) + ')' : '') + ', Grundton außerhalb ohne Marke ' + f0aus + ', summary.shr.max ' + r1_(smax) + ' dB, shrUnsureShare ' + r1_(100 * res.summary.shrUnsureShare) + ' %');
+      }
+      check('A2c', 'Take mit legato Melodie (/a/ /o/, Wobble, 40 dB) durch analyseTake: kein stimmhafter Rahmen mit SHR über −25 dB ohne SHRUNSURE, kein Grundton außerhalb der Melodie ohne F0UNSURE, summary.shr.max höchstens −15 dB (keine Warnung in Gold)',
+        gut, zeilen.join(' | '));
+    }
 
     /* A2d Hauch: Rauschen in der Anregung legt Energie auf die halbzahligen Positionen wie überall
        zwischen den Linien. Vorher bei HNR 8 dB SHR bis −12 dB als sichere Warnung. Gezählt werden Rahmen
@@ -461,7 +551,7 @@ module.exports = async function (H) {
     }
 
     /* A2g Vertrag der neuen Felder und Gründe (dsp.js analyseAt), nachgerechnet aus Spektrum und Signal:
-       Zwischenpegel (shrBoden, 'rauschen'). */
+       Zwischenpegel (shrBoden, 'rauschen') und Fensterprobe (fenster*, 'rand', 'wechsel', Mischwert). */
     {
       s2 = 27000;
       const ORD = ['kamm', 'zweitpuls', 'grundton', 'rand', 'wechsel', 'rauschen'];
@@ -495,6 +585,29 @@ module.exports = async function (H) {
         }
         check('A2g', 'Vertrag Zwischenpegel: shrBoden = Pegel an den Viertelpositionen des Rasters shrGrid gegen die ganzzahligen Linien; \'rauschen\' ⇔ SHR über −25 dB und weniger als 8 dB über shrBoden; Gründe in fester Reihenfolge, shrUnsure ⇔ Grund; stimmlos leer',
           !fehler.length && z.rauschen > 0 && z.stimmlos > 0 && z.sicher > 0, R.length + ' Rahmen, ' + JSON.stringify(z) + (fehler.length ? ' — ' + fehler.length + ' Fehler: ' + fehler.slice(0, 4).join(' | ') : ''));
+      }
+      {
+        const fehler = [], z = { rand: 0, wechsel: 0, mischwert: 0, stimmlos: 0 };
+        const fn = ['fensterProbe', 'fensterMischwert'].filter(k => typeof D[k] !== 'function');
+        if (fn.length) fehler.push('fehlt: ' + fn.join(', '));
+        else for (const { c, ds, r } of R) {
+          const e = [];
+          if (!r.voiced) { z.stimmlos++; if (!(Number.isNaN(r.fensterPegelDb) && Number.isNaN(r.fensterF0Lo) && Number.isNaN(r.fensterF0Hi))) e.push('stimmlos nicht leer'); }
+          else {
+            const fp = D.fensterProbe(ds.subarray(c - 840, c + 840), T12, 60, 500);
+            if (!Object.is(r.fensterPegelDb, fp.pegelDb) || !Object.is(r.fensterF0Lo, fp.f0Lo) || !Object.is(r.fensterF0Hi, fp.f0Hi)) e.push('Fensterfelder');
+            if (hat(r, 'rand') !== (fp.pegelDb >= D.FENSTER_RAND_DB)) e.push('rand');
+            if (hat(r, 'wechsel') !== fp.wechsel) e.push('wechsel');
+            if (r.f0Grund === 'wechsel' && !(fp.wechsel && D.fensterMischwert(fp, r.f0))) e.push('f0Grund wechsel ohne Mischwert');
+            if (r.f0Grund === 'wechsel' && r.f0Korrektur) e.push('Mischwert und Korrektur');
+            if (!r.f0Unsure && fp.wechsel && D.fensterMischwert(fp, r.f0)) e.push('Mischwert ohne f0Unsure');
+            for (const k of ['rand', 'wechsel']) if (hat(r, k)) z[k]++;
+            if (r.f0Grund === 'wechsel') z.mischwert++;
+          }
+          if (e.length) fehler.push('c ' + c + ': ' + e.join(', '));
+        }
+        check('A2g', 'Vertrag Fensterprobe: fensterPegelDb/fensterF0Lo/fensterF0Hi aus dem längsten Fenster; \'rand\' ⇔ Pegelspanne ab 12 dB; \'wechsel\' ⇔ Teilfenster (Hälften oder äußere 45 ms) unverträglich; f0Grund \'wechsel\' genau beim Mischwert, nie zusammen mit einer Korrektur; stimmlos leer',
+          !fehler.length && z.rand > 0 && z.wechsel > 0 && z.mischwert > 0 && z.stimmlos > 0, R.length + ' Rahmen, ' + JSON.stringify(z) + (fehler.length ? ' — ' + fehler.length + ' Fehler: ' + fehler.slice(0, 4).join(' | ') : ''));
       }
     }
   }

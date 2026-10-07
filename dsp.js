@@ -10,8 +10,8 @@
    - F0 über YIN (Schwelle 0,15, 60–500 Hz), Oktavkontrolle über das Spektrum.
    - SFR = 2400–3200 Hz minus 0–2000 Hz. SHR halbzahlige gegen ganzzahlige Teiltöne, k = 1..8,
      auf dem Raster F0 oder 2·F0; ist das Raster zweifelhaft, stehen beide Werte da (shrUnsure).
-     Unsicher ist SHR auch, wenn die halbzahligen Linien sich nicht vom Pegel zwischen den Linien abheben
-     (Hauch, Rauschen). */
+     Unsicher ist SHR auch, wenn das Fenster keinen einzelnen stehenden Ton enthält (Rand, Tonwechsel)
+     oder die halbzahligen Linien sich nicht vom Pegel zwischen den Linien abheben (Hauch, Rauschen). */
 (function (root) {
   'use strict';
 
@@ -802,6 +802,115 @@
     return out;
   }
 
+  /* ---------- Fensterprobe: steht im längsten Fenster eine einzige Periode? ----------
+     SHR und die Gegenprobe des Grundtons rechnen auf dem Spektrum des längsten Fensters (0,14 s).
+     physik.md §7.5: spektral ist Verdopplung allein nicht entscheidbar; ein SHR-Befund setzt voraus, dass
+     das Fenster einen einzigen stehenden Ton enthält. Zwei Fälle verletzen das, ohne dass Kamm oder
+     zweite Anregung anschlagen:
+     - Rand (Einsatz, Aussatz, Pause): Eine Pegelkante im Fenster verbreitert jede Linie; die Flanken
+       reichen bis auf die halbzahligen Positionen. Gemessen an harten Kanten bis −8 dB SHR.
+     - Tonwechsel: Die Teiltöne des zweiten Tons fallen auf halbzahlige Linien des ersten (k·r ≈ k ± ½);
+       schon ein Halbton trifft so den 8. Teilton. Gemessen bis 0 dB. Bei Quarte und Quinte nimmt der
+       Grundton dazu den gemeinsamen Unterton an (220→330 Hz: 110 Hz), und die Gegenprobe besteht, weil
+       der zweite Ton die „ungeraden“ Linien des Untertons liefert.
+     Erkannt wird beides im Zeitbereich, unabhängig vom Spektrum:
+     - Pegelverlauf: Pegel der 20-ms-Blöcke über das ganze Fenster; eine Spanne ab FENSTER_RAND_DB heißt
+       Rand. Gemessen mitten in stehenden Tönen (Vibrato bis ±50 Cent, Jitter, Shimmer, Hauch HNR 5 dB,
+       Verdopplung) höchstens 7,2 dB; an harten und weichen Kanten (bis 60 ms Rampe) jeder Rahmen, dessen
+       Mitte bis 50 ms von der Kante liegt. Ein Decrescendo um mehr als 12 dB in 0,12 s gilt ebenfalls
+       als Rand.
+     - Teilfenster: YIN auf beiden Hälften (70 ms) und beiden äußeren 45 ms. Zwei periodische Teile
+       gehören zum selben Ton, wenn sie höchstens FENSTER_TON_HT auseinanderliegen oder Vielfache derselben
+       Periode sind (teileVertraeglich) — so zählt eine Oktavwahl von YIN in nur einem Teil, etwa bei
+       Verdopplung, Rauschen oder F1 ≈ 2·F0, nicht als Wechsel. Sonst: Tonwechsel. 1,5 HT liegt über dem,
+       was Vibrato ±50 Cent zwischen den Teilen erreicht (gemessen bis 0,8 HT); kleinere Schritte und
+       Glissandi, in denen ein Teil keine stehende Periode hat, bleiben unerkannt — ihr SHR fängt der
+       Zwischenpegel (shrBoden), denn ihre Linien liegen auch auf den Viertelpositionen.
+     Ein Wechsel in den äußeren gut 20 ms des Fensters bleibt unerkannt; dort ist das Hann-Gewicht unter
+     0,2 und der Einfluss auf das Spektrum gering. */
+  var FENSTER_BLOCK_S = 0.02, FENSTER_RAND_DB = 12, FENSTER_KANTE_S = 0.045, FENSTER_TON_HT = 1.5, FENSTER_F0_HT = 1;
+  var AP_STIMMHAFT = 0.45;        // wie die Stimmhaftigkeit in analyseAt
+  /* Kreuzprüfung bei ganzzahligem Periodenverhältnis (YIN nahm in einem Teil ein Vielfaches): Der Teil mit
+     der längeren Periode muss auch bei der kürzeren einen Dip haben. Unter 0,6 statt 0,45, weil YIN diesen
+     Dip übersprungen hat (er lag über der Schwelle 0,15); gemessen in stehenden Tönen mit Jitter 2 %, Hauch
+     und Verdopplung in 61 von 971 Paaren über 0,45, in 7 über 0,6. Ein echter Oktavsprung hat bei der
+     halben Periode keinen Dip. */
+  var FENSTER_KREUZ_MAX = 0.6;
+
+  // kleinster echter Dip der YIN-Funktion dn in ±FENSTER_TON_HT um tau, sonst Infinity
+  function dipNahe(dn, tau) {
+    var lo = Math.max(2, Math.floor(tau * Math.pow(2, -FENSTER_TON_HT / 12))), hi = Math.min(dn.length - 2, Math.ceil(tau * Math.pow(2, FENSTER_TON_HT / 12))), m = Infinity;
+    for (var u = lo; u <= hi; u++) if (dn[u] < dn[u - 1] && dn[u] <= dn[u + 1] && dn[u] < m) m = dn[u];
+    return m;
+  }
+  /* true: derselbe Ton; false: verschiedene Töne; null: einer der Teile ist nicht periodisch.
+     - Ganzzahliges Verhältnis m der Perioden (±1,5 HT): YIN kann im längeren Teil ein Vielfaches gewählt
+       haben (Verdopplung, Rauschen, ein Formant zwischen den Teiltönen) — dann hat dieser Teil auch bei der
+       kürzeren Periode einen Dip.
+     - Verhältnis p/q mit q = 2 oder 3 (±0,5 HT), etwa 3/2: Beide Teile können Vielfache derselben kürzeren
+       Periode τ/q sein (YIN nahm 2T und 3T). Dann sind beide bei τ/q periodisch. Bei einer echten Quinte
+       ist τ/q die Periode eines gemeinsamen Teiltons (220 und 330 Hz: 660 Hz), keine Periode der Töne:
+       Grundton und zweiter Teilton stehen dort quer, dn liegt darüber. Die Gegenrichtung (jeder Teil bei
+       der Periode des anderen) entscheidet das nicht, sie besteht bei /a/ mit F1 nahe dem gemeinsamen
+       Teilton auch für die Quinte.
+     - Sonst: verschiedene Töne. */
+  function teileVertraeglich(a, b) {
+    if (!(a.ap < AP_STIMMHAFT && b.ap < AP_STIMMHAFT)) return null;
+    if (Math.abs(12 * Math.log2(a.f0 / b.f0)) <= FENSTER_TON_HT) return true;
+    var lang = a.tau > b.tau ? a : b, kurz = lang === a ? b : a, rho = lang.tau / kurz.tau, m = Math.round(rho);
+    if (m >= 2 && Math.abs(12 * Math.log2(rho / m)) <= FENSTER_TON_HT) return dipNahe(lang.dn, kurz.tau) < FENSTER_KREUZ_MAX;
+    for (var q = 2; q <= 3; q++) {
+      var pz = Math.round(rho * q);
+      if (pz % q === 0 || Math.abs(12 * Math.log2(rho * q / pz)) > 0.5) continue;
+      var tc = kurz.tau / q;
+      if (dipNahe(lang.dn, tc) < AP_STIMMHAFT && dipNahe(kurz.dn, tc) < AP_STIMMHAFT) return true;
+    }
+    return false;
+  }
+  function fensterProbe(seg, sr, fmin, fmax, thresh) {
+    var n = seg.length, B = Math.round(FENSTER_BLOCK_S * sr), nb = Math.floor(n / B), off = (n - nb * B) >> 1, lo = Infinity, hi = -Infinity, k;
+    var out = { pegelDb: NaN, rand: false, wechsel: false, f0Lo: NaN, f0Hi: NaN, toene: [] };
+    for (k = 0; k < nb; k++) { var L = rmsDb(seg.subarray(off + k * B, off + (k + 1) * B)); if (L < lo) lo = L; if (L > hi) hi = L; }
+    if (nb >= 2) out.pegelDb = hi - lo;
+    out.rand = out.pegelDb >= FENSTER_RAND_DB;
+    var h = n >> 1, q = Math.round(FENSTER_KANTE_S * sr), teile = [];
+    function teil(a, b) { var s = seg.subarray(a, b), p = detectF0(s, sr, fmin, fmax, thresh); p.db = rmsDb(s); teile.push(p); return p; }
+    if (n >= 2 * q) {
+      var hL = teil(0, h), hR = teil(n - h, n), eL = teil(0, q), eR = teil(n - q, n);
+      out.wechsel = teileVertraeglich(hL, hR) === false || teileVertraeglich(eL, eR) === false;
+    }
+    /* Tonhöhen der Teile, die einen Ton tragen: periodisch und nicht viel leiser als der lauteste (ein leiser
+       Teil am Rand trägt Rauschen oder Ausklang). Vorrang haben die äußeren 45 ms: Liegt der Wechsel nahe
+       der Fenstermitte, enthält eine Hälfte beide Töne, und YIN findet dort die gemeinsame Periode — bei
+       der Quinte 220→330 Hz genau den Unterton 110 Hz, der als Mischwert erkannt werden soll. */
+    var top = -Infinity, ton = function (t) { return t.ap < AP_STIMMHAFT && t.db >= top - FENSTER_RAND_DB; };
+    for (k = 0; k < teile.length; k++) if (teile[k].db > top) top = teile[k].db;
+    var wahl = (teile.length === 4 && ton(teile[2]) && ton(teile[3])) ? [teile[2], teile[3]] : teile;
+    for (k = 0; k < wahl.length; k++) {
+      var t = wahl[k];
+      if (!ton(t)) continue;
+      out.toene.push(t.f0);
+      if (!(t.f0 >= out.f0Lo)) out.f0Lo = t.f0;
+      if (!(t.f0 <= out.f0Hi)) out.f0Hi = t.f0;
+    }
+    return out;
+  }
+  /* Grundton als Mischwert: Im Fenster stehen zwei Töne, und f0 liegt mehr als FENSTER_F0_HT außerhalb
+     ihrer Spanne, ohne bei jedem Teil als dessen Oktave (YIN-Wahl T/2, T, 2T) erklärbar zu sein. So bleibt
+     ein Wert zwischen den Tönen (Glissando) stehen, und eine Oktavwahl von YIN in einem Teil macht einen
+     richtigen Grundton nicht unsicher; der gemeinsame Unterton (220→330 Hz: 110 Hz ist Oktave von 220,
+     aber nicht von 330) wird erkannt. */
+  function fensterMischwert(fp, f0) {
+    if (!fp.wechsel || !fp.toene.length) return false;
+    if (!(12 * Math.log2(f0 / fp.f0Lo) < -FENSTER_F0_HT || 12 * Math.log2(f0 / fp.f0Hi) > FENSTER_F0_HT)) return false;
+    for (var i = 0; i < fp.toene.length; i++) {
+      var erklaert = false;
+      for (var o = -1; o <= 1; o++) if (Math.abs(12 * Math.log2(f0 / (fp.toene[i] * Math.pow(2, o)))) <= FENSTER_TON_HT) erklaert = true;
+      if (!erklaert) return true;
+    }
+    return false;
+  }
+
   function bandPow(spec, fLo, fHi) {
     var lo = Math.max(1, Math.ceil(fLo / spec.df)), hi = Math.min(spec.pow.length - 1, Math.ceil(fHi / spec.df) - 1), s = 0;
     for (var k = lo; k <= hi; k++) s += spec.pow[k];
@@ -1012,7 +1121,8 @@
       slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
-      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, shrBoden: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, shrBoden: NaN,
+      fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
       f0Unsure: false, f0Grund: '', f0Cep: NaN, f0Yin: NaN, f0Korrektur: '',
       harmonicPullHz: NaN, sparseHarmonics: false,
@@ -1100,6 +1210,10 @@
     out.d34 = out.F[3] - out.F[2]; out.d45 = out.F[4] - out.F[3];
     out.d34valid = out.valid[2] && out.valid[3]; out.d45valid = out.valid[3] && out.valid[4];
 
+    // Steht im längsten Fenster (Spektrum für SHR und Gegenprobe) ein einziger Ton? Rand oder Tonwechsel?
+    var fp = fensterProbe(longest.seg, sr, opts.fmin || 60, opts.fmax || 500, opts.yinThresh);
+    out.fensterPegelDb = fp.pegelDb; out.fensterF0Lo = fp.f0Lo; out.fensterF0Hi = fp.f0Hi;
+
     var f0 = p.f0;
     var sub = subMultipleInfo(spec, f0);
     out.octaveCorrected = sub.halve; out.octaveAmbiguous = sub.ambiguous; out.octaveUnterGrenze = sub.unterGrenze; out.octaveOddEvenDb = sub.newMinusOld;
@@ -1110,11 +1224,16 @@
     var gp = f0Gegenprobe(spec, f0, out.f0Cep, out.subFactor * p.tau, p.dips, sr);
     out.f0Yin = f0; out.f0Unsure = gp.unsure; out.f0Grund = gp.grund;
     var kor = gp.unsure ? f0Korrektur(spec, f0, out.f0Cep, gp, p, sr, opts.fmax || 500) : null;
+    // Die Korrektur stützt sich auf dasselbe gemischte Spektrum; ein Mischwert ist keine Korrektur.
+    if (kor && fensterMischwert(fp, kor.f0)) kor = null;
     if (kor) {
       // Korrigierter Wert besteht alle Proben: nicht unsicher, aber sichtbar korrigiert (f0Korrektur, f0Yin)
       f0 = kor.f0; out.subFactor = 1; out.octaveCorrected = false; out.octaveAmbiguous = false; out.octaveUnterGrenze = false; out.octaveOddEvenDb = kor.oddEvenDb;
       out.f0Unsure = false; out.f0Grund = ''; out.f0Korrektur = kor.art;
     }
+    // Mischwert am Tonwechsel: die Gegenprobe kann bestehen (der zweite Ton liefert die Linien des
+    // gemeinsamen Untertons). Ein schon gerissener Grundton behält seinen ersten Grund.
+    if (!out.f0Unsure && fensterMischwert(fp, f0)) { out.f0Unsure = true; out.f0Grund = 'wechsel'; }
     out.f0 = f0; out.note = hzToNote(f0);
     // Bei hohem Grundton rastet ein LPC-Gipfel auf dem nächsten Teilton ein: die Lage eines
     // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
@@ -1123,9 +1242,11 @@
     // SHR-Raster F0 oder 2·F0 aus eigenen Belegen (shr); ein unsicherer Grundton macht auch SHR unsicher
     var sh = shr(spec, f0, main.seg, sr, opts.fmax || 500);
     out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm; out.shrZweitpuls = sh.zweitpuls; out.shrBoden = sh.boden;
-    // Gründe in fester Reihenfolge: Raster (kamm, zweitpuls), Grundton, Zwischenpegel (rauschen)
+    // Gründe in fester Reihenfolge: Raster (kamm, zweitpuls), Grundton, Fenster (rand, wechsel), Zwischenpegel (rauschen)
     var gr = sh.grund ? [sh.grund] : [];
     if (out.f0Unsure) gr.push('grundton');
+    if (fp.rand) gr.push('rand');
+    if (fp.wechsel) gr.push('wechsel');
     if (sh.rauschen) gr.push('rauschen');
     out.shrGrund = gr.join('+');
     out.shrUnsure = gr.length > 0;
@@ -1606,7 +1727,8 @@
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
     F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
     SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG,
-    shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, fensterProbe: fensterProbe, fensterMischwert: fensterMischwert,
+    FENSTER_BLOCK_S: FENSTER_BLOCK_S, FENSTER_RAND_DB: FENSTER_RAND_DB, FENSTER_KANTE_S: FENSTER_KANTE_S, FENSTER_TON_HT: FENSTER_TON_HT, FENSTER_F0_HT: FENSTER_F0_HT, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,
