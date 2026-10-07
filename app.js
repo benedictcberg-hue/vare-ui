@@ -1035,41 +1035,63 @@
     }).catch(function (e) { el.innerHTML = '<p class="rust">' + CH.esc(e && e.message || e) + '</p>'; });
   }
   function exportCsv() { if (gesperrtImLauf()) return; S.allTakes().then(function (takes) { download('vare-chronik-' + stamp(new Date()) + '.csv', new Blob([C.takesToCsv(takes, st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); }); }
+  /* Sicherung als Blob, wenn sie in einen String passt und unter der Grenze bleibt (C.SICHERUNG_MAX_BYTES: darüber
+     ließe sie sich nicht wieder einlesen). Sonst { blob: null, grund } in Klartext — statt „Invalid string length“. */
+  function sicherungsBlob(bundle) {
+    var text;
+    try { text = C.serializeBackup(bundle); } catch (e) {
+      if (e && e.name === 'RangeError') return { blob: null, grund: 'mehr als ' + Math.round(536870888 / 1e6) + ' Mio. Zeichen, mehr als der Browser in einer Datei halten kann' };
+      throw e;
+    }
+    var blob = new Blob([text], { type: 'application/json' });
+    return blob.size > C.SICHERUNG_MAX_BYTES ? { blob: null, grund: bytesText(blob.size) + ', mehr als die ' + bytesText(C.SICHERUNG_MAX_BYTES) + ', die sich wieder einlesen lassen' } : { blob: blob, groesse: blob.size };
+  }
+  // Base64 eines WAV in der Sicherung: 4 Zeichen je 3 Byte, dazu die Anführungszeichen statt null.
+  function audioZeichen(bytes) { return Math.ceil(bytes / 3) * 4 - 2; }
   function exportJson() {
     if (gesperrtImLauf()) return;
-    var offenZahl = 0;
+    var offenZahl = 0, name = 'vare-sicherung-' + stamp(new Date()) + '.json';
+    function fertig(blob, hinweis) {
+      download(name, blob);
+      var t = [hinweis || '', offenZahl ? 'Sicherung ohne ' + offenZahl + (offenZahl === 1 ? ' unvollendete Aufnahme' : ' unvollendete Aufnahmen') + ' (oben unter „Unvollendete Analyse“): erst fortsetzen oder das WAV einzeln sichern.' : ''].filter(Boolean).join(' ');
+      if (t) status(t, true);
+    }
     Promise.all([S.allTakes(), S.allCalibrations(), S.getMeta('refs', {}), S.audioIds(), S.allPending()]).then(function (r) {
       /* Nur das WAV von Takes: Unvollendete Aufnahmen (pending) liegen mit ihrem WAV im selben Laden, gehören
          aber nicht in die Sicherung der Chronik. Dass sie fehlen, wird nach dem Sichern gesagt. */
-      var takes = r[0], withAudio = false, takeIds = {};
+      var takes = r[0], takeIds = {};
       takes.forEach(function (t) { takeIds[t.id] = true; });
       var ids = (r[3] || []).filter(function (id) { return takeIds[id]; });
       offenZahl = (r[4] || []).length;
-      var seriesP = Promise.all(takes.map(function (t) { return S.getSeries(t.id); }));
-      var audioP = Promise.resolve({});
-      if (ids.length) {
+      return Promise.all(takes.map(function (t) { return S.getSeries(t.id); })).then(function (sers) {
+        var series = {}; takes.forEach(function (t, i) { if (sers[i]) series[t.id] = sers[i]; });
+        var bundle = { takes: takes, series: series, refs: r[2], calibrations: r[1], settings: st.settings, kernelVersion: D.VERSION, exportedAt: new Date().toISOString(), audio: null };
+        /* Gezählt wird die ganze Datei, zuerst die Messwerte allein. Früher prüfte die Seite nur das Base64 des Audios
+           gegen 450 Mio. Zeichen und baute danach alles in einem String: Mit den Rahmenverläufen (rund 1,4 Mio. Zeichen
+           je Minute bei 10 ms, doppelt so viel bei 5 ms) kam „Invalid string length“, und es gab keine Sicherung —
+           auch keine ohne Audio (Befund N19). */
+        var ohne = sicherungsBlob(bundle);
+        if (!ohne.blob) { status('Keine Sicherung möglich: Schon die Messwerte allein (Takes und Rahmenverläufe) ergeben ' + ohne.grund + '. Die Chronik bleibt in diesem Browser; als CSV lässt sie sich weiter exportieren.', true); return; }
+        if (!ids.length) { fertig(ohne.blob); return; }
         return Promise.all(ids.map(function (id) { return S.getAudio(id); })).then(function (auds) {
-          var bytes = auds.reduce(function (a, b) { return a + (b ? b.bytes : 0); }, 0);
-          /* Die ganze Sicherung entsteht in einem einzigen JSON.stringify. Chrome und Edge können
-             höchstens 2^29−24 ≈ 537 Mio. Zeichen in einem String halten; Base64 braucht 4 Zeichen
-             je 3 Byte, also ist bei etwa 70 Minuten 16-Bit-Audio Schluss. Vorher sagen, statt
-             hinterher mit „Invalid string length“ zu scheitern. */
-          var b64Chars = Math.ceil(bytes / 3) * 4, MAXCHARS = 450e6;
-          if (b64Chars > MAXCHARS) {
-            withAudio = false;
-            status('Audio kann nicht mitgesichert werden: ' + bytesText(bytes) + ' ergeben ' + Math.round(b64Chars / 1e6) + ' Mio. Zeichen, der Browser hält höchstens ' + Math.round(MAXCHARS / 1e6) + ' Mio. in einer Datei (etwa 70 min 16-Bit-Audio). Die Sicherung enthält nur die Messwerte; die WAVs einzeln über die Chronik sichern.', true);
-          } else withAudio = window.confirm('Audio mitsichern? ' + ids.length + ' WAV-Dateien, etwa ' + bytesText(bytes * 1.37) + ' zusätzlich. (Abbrechen = nur Messwerte)');
-          if (withAudio) audioP = Promise.all(auds.map(function (a) { return a.blob.arrayBuffer().then(function (buf) { return [a.takeId, b64FromBuffer(buf)]; }); })).then(function (pairs) { var o = {}; pairs.forEach(function (p) { o[p[0]] = p[1]; }); return o; });
-          return [takes, r[1], r[2], seriesP, audioP];
+          auds = auds.filter(Boolean);
+          var bytes = 0, zeichen = 0;
+          auds.forEach(function (a) { bytes += a.bytes; zeichen += audioZeichen(a.bytes); });
+          var gesamt = ohne.groesse + zeichen, frei = Math.max(0, C.SICHERUNG_MAX_BYTES - ohne.groesse);
+          if (gesamt > C.SICHERUNG_MAX_BYTES) {
+            fertig(ohne.blob, 'Audio nicht mitgesichert: Messwerte ' + bytesText(ohne.groesse) + ' und ' + auds.length + ' WAV-Dateien (' + bytesText(bytes) + ', als Base64 ' + bytesText(zeichen) + ') ergäben ' + bytesText(gesamt)
+              + '; eine Sicherung darf höchstens ' + bytesText(C.SICHERUNG_MAX_BYTES) + ' groß sein, sonst lässt sie sich nicht wieder einlesen. Platz bliebe für ' + bytesText(frei) + ' Base64, etwa ' + dauerText(frei / (48000 * 2 * 4 / 3))
+              + ' 16-Bit-Audio bei 48 kHz. Die Sicherung enthält nur die Messwerte; die WAVs einzeln über die Chronik sichern.');
+            return;
+          }
+          if (!window.confirm('Audio mitsichern? ' + auds.length + ' WAV-Dateien, ' + bytesText(zeichen) + ' zusätzlich, Sicherung dann ' + bytesText(gesamt) + '. (Abbrechen = nur Messwerte)')) { fertig(ohne.blob); return; }
+          return Promise.all(auds.map(function (a) { return a.blob.arrayBuffer().then(function (buf) { return [a.takeId, b64FromBuffer(buf)]; }); })).then(function (pairs) {
+            var o = {}; pairs.forEach(function (p) { o[p[0]] = p[1]; }); bundle.audio = o;
+            var mit = sicherungsBlob(bundle);
+            if (mit.blob) fertig(mit.blob);
+            else fertig(ohne.blob, 'Audio nicht mitgesichert: mit Audio ' + mit.grund + '. Die Sicherung enthält nur die Messwerte; die WAVs einzeln über die Chronik sichern.');
+          });
         });
-      }
-      return [takes, r[1], r[2], seriesP, audioP];
-    }).then(function (x) {
-      return Promise.all([x[3], x[4]]).then(function (sa) {
-        var series = {}; x[0].forEach(function (t, i) { if (sa[0][i]) series[t.id] = sa[0][i]; });
-        var text = C.serializeBackup({ takes: x[0], series: series, refs: x[2], calibrations: x[1], settings: st.settings, kernelVersion: D.VERSION, exportedAt: new Date().toISOString(), audio: sa[1] });
-        download('vare-sicherung-' + stamp(new Date()) + '.json', new Blob([text], { type: 'application/json' }));
-        if (offenZahl) status('Sicherung ohne ' + offenZahl + (offenZahl === 1 ? ' unvollendete Aufnahme' : ' unvollendete Aufnahmen') + ' (oben unter „Unvollendete Analyse“): erst fortsetzen oder das WAV einzeln sichern.', true);
       });
     }).catch(function (e) { status('Sicherung fehlgeschlagen: ' + (e && e.message || e), true); });
   }

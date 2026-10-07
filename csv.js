@@ -360,6 +360,12 @@
     }
     return out;
   }
+  /* Größte Sicherungsdatei in Byte. Chrome und Edge halten höchstens 2^29 − 24 = 536 870 888 Zeichen in einem String;
+     serializeBackup baut die Sicherung in einem, und der Import liest sie mit file.text() in einen zurück (Blob.text()
+     lehnt 536 870 888 Byte ab). Was darüber liegt, lässt sich nicht schreiben oder nicht wieder einlesen. 500 Mio.
+     lassen Reserve, auch für Zeichen, die in UTF-8 mehr als ein Byte belegen. app.js exportJson prüft gegen diese
+     Grenze die ganze Datei, nicht nur das Audio (Befund N19). */
+  var SICHERUNG_MAX_BYTES = 500e6;
   /* bundle = { takes: [take], series: { takeId: series }, refs, calibrations, settings, kernelVersion, exportedAt, audio?: {takeId: base64} } */
   /* Version 2 schreibt nicht endliche Zahlen aus (nfSchreiben), Version 3 die Serien als Bytes. Eine ältere
      Seite lehnt beides als unbekannt ab, statt {"$nf":…} als Wert zu übernehmen oder Serien ohne data zu
@@ -392,7 +398,7 @@
     return { takes: takes, series: series, audio: audio, refs: lies(o.refs || null), calibrations: lies(o.calibrations || []), settings: lies(o.settings || null), exportedAt: o.exportedAt, kernelVersion: o.kernelVersion };
   }
 
-  var api = { SENTINEL: SENTINEL, BACKUP_VERSION: BACKUP_VERSION, DIALECTS: DIALECTS, TAKE_COLUMNS: TAKE_COLUMNS, FRAME_COLUMNS: FRAME_COLUMNS, takesToCsv: takesToCsv, framesToCsv: framesToCsv, fmtCell: fmtCell, serializeBackup: serializeBackup, parseBackup: parseBackup, packSeries: packSeries, unpackSeries: unpackSeries };
+  var api = { SENTINEL: SENTINEL, BACKUP_VERSION: BACKUP_VERSION, SICHERUNG_MAX_BYTES: SICHERUNG_MAX_BYTES, DIALECTS: DIALECTS, TAKE_COLUMNS: TAKE_COLUMNS, FRAME_COLUMNS: FRAME_COLUMNS, takesToCsv: takesToCsv, framesToCsv: framesToCsv, fmtCell: fmtCell, serializeBackup: serializeBackup, parseBackup: parseBackup, packSeries: packSeries, unpackSeries: unpackSeries };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VARECSV = api;
 })(typeof self !== 'undefined' ? self : this);

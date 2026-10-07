@@ -338,6 +338,12 @@ Version 3 als unbekannt ab, statt sie falsch zu lesen. Unvollendete Analysen (Au
 noch nicht gespeichert ist) gehören nicht zur Sicherung; liegen welche vor, sagt die Seite es nach dem
 Sichern.
 
+Eine Sicherung ist höchstens 500 MB groß: Chrome und Edge halten höchstens 2^29 − 24 Zeichen in einem String,
+und der Import liest die Datei in einen. Geprüft wird vorher die ganze Datei — Takes, Rahmenverläufe (rund
+1,4 MB je Minute Take bei 10 ms Rahmenabstand, doppelt so viel bei 5 ms) und Audio (Base64, 7,7 MB je Minute
+16 Bit bei 48 kHz). Passt das Audio nicht mehr, entsteht die Sicherung ohne Audio, und die Seite sagt, wie
+viel Platz bliebe; passen schon die Messwerte nicht, entsteht keine Datei, und die Seite sagt es.
+
 ## Dateien
 
 | Datei | Zweck | unter Node testbar |

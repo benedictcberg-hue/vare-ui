@@ -687,7 +687,8 @@ module.exports = async function (H) {
 /* Kriterien B2 — Anzeige, CSV und Doku sagen dasselbe wie die Messung.
    B2a: Das Take-Ergebnis zeigt schwach belegte Formanten und ein zweideutiges Bestsegment wie das Detail (N8).
    B2b: Die Neu-Analyse nennt jede geänderte Rechenweise und sperrt währenddessen den Take-Knopf (N20).
-   B2c: Kein Take-Code, den pandas oder Excel als fehlend, Zahl oder Wahrheitswert lesen (N18). */
+   B2c: Kein Take-Code, den pandas oder Excel als fehlend, Zahl oder Wahrheitswert lesen (N18).
+   B2d: Die Sicherung zählt die ganze Datei und scheitert nie mit „Invalid string length“ (N19). */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -830,6 +831,60 @@ async function kriterienB2(H) {
     check('B2c', 'Take-Codes: nie NA, NULL, INF, INFINITY, TRUE, FALSE, WAHR, FALSCH, NAN, NONE (pandas liest sie als fehlend, Zahl oder Wahrheitswert), auch nicht über die Seite; README nennt das Lesebeispiel (N18)',
       !bad.length && vergeben === 12000, bad.length ? bad.slice(0, 5).join(' | ') : vergeben + ' Codes fortlaufend vergeben bis ' + code(n - 1) + ', Seite: ' + t1.code + ' → ' + t2.code);
   } catch (e) { check('B2c', 'Ablauf Take-Codes läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2d · Sicherung: die ganze Datei zählt, nie „Invalid string length“ ---------- */
+  try {
+    const C = H.C;
+    const SIGd = H.concat([noise(Math.round(0.1 * SR), 2e-4, 81), D.synthVowel(147, [700, 1200, 2500, 3300, 4200], H.BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 82)]);
+    const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(SIGd), sampleRate: SR, durationS: SIGd.length / SR }), SR);
+    p.kalibriert('cal-d'); await p.mikrofon();
+    await p.take(); await p.take(); await p.take();
+    const CC = p.sb.VARECSV, grenzeVorgabe = CC.SICHERUNG_MAX_BYTES, echtSer = CC.serializeBackup;
+    let fragen = 0, antwort = true;
+    p.sb.confirm = () => { fragen++; return antwort; };
+    // Eine Sicherung auslösen; geliefert werden Datei (oder null), Statuszeile und Zahl der Rückfragen.
+    const sichern = async () => {
+      const n0 = p.downloads.length, f0 = fragen; p.sb.VAREAPP.state.statusEl && (p.sb.VAREAPP.state.statusEl.textContent = '');
+      p.klick('btn-export-json');
+      await p.warte(() => p.downloads.length > n0 || /Sicherung|Audio/.test(p.status()), 10000);
+      await new Promise(r => setTimeout(r, 20));
+      const blob = p.downloads.length > n0 ? p.downloads[p.downloads.length - 1] : null, text = blob ? await blob.text() : '';
+      let back = null; try { back = text ? C.parseBackup(text) : null; } catch (e) { back = null; }
+      return { blob, groesse: blob ? blob.size : 0, back, status: p.status(), fragen: fragen - f0 };
+    };
+    // Größen messen: nur Messwerte (Rückfrage verneint), dann mit Audio.
+    antwort = false; const ohne = await sichern();
+    antwort = true; const mit = await sichern();
+    const audioZeichen = mit.groesse - ohne.groesse;
+    const z = r => (r.blob ? bytes(r.groesse) + ', ' + (r.back ? r.back.takes.length + ' Takes, ' + Object.keys(r.back.series).length + ' Verläufe, ' + Object.keys(r.back.audio).length + ' WAV' : 'nicht lesbar') : 'keine Datei') + ', Rückfragen ' + r.fragen + ', „' + r.status.slice(0, 150) + '“';
+    const bytes = n => (n / 1e3).toFixed(0) + ' kB';
+    const kein = r => !/Invalid string length|fehlgeschlagen/.test(r.status);
+    // A: Grenze zwischen Messwerten und Messwerten mit Audio. Erwartet: Sicherung ohne Audio unter der Grenze, mit Grund.
+    CC.SICHERUNG_MAX_BYTES = ohne.groesse + Math.round(audioZeichen / 2);
+    const a = await sichern();
+    const okA = !!a.back && a.groesse <= CC.SICHERUNG_MAX_BYTES && a.back.takes.length === 3 && Object.keys(a.back.series).length === 3 && Object.keys(a.back.audio).length === 0
+      && a.fragen === 0 && /Audio nicht mitgesichert/.test(a.status) && /höchstens/.test(a.status) && kein(a);
+    // B: Grenze unter den Messwerten allein. Erwartet: keine Datei, Klartext.
+    CC.SICHERUNG_MAX_BYTES = ohne.groesse - 1000;
+    const b = await sichern();
+    const okB = !b.blob && /Keine Sicherung möglich/.test(b.status) && /Messwerte allein/.test(b.status) && kein(b);
+    // C: Vorgabegrenze, aber der String mit Audio passt nicht in den Speicher (RangeError wie bei 2^29 Zeichen).
+    CC.SICHERUNG_MAX_BYTES = grenzeVorgabe;
+    CC.serializeBackup = function (bundle) { if (bundle.audio) throw new RangeError('Invalid string length'); return echtSer.apply(this, arguments); };
+    const c = await sichern();
+    const okC = !!c.back && Object.keys(c.back.audio).length === 0 && c.back.takes.length === 3 && /Audio nicht mitgesichert/.test(c.status) && kein(c);
+    // D: schon die Messwerte passen nicht in einen String.
+    CC.serializeBackup = function () { throw new RangeError('Invalid string length'); };
+    const d = await sichern();
+    const okD = !d.blob && /Keine Sicherung möglich/.test(d.status) && kein(d);
+    CC.serializeBackup = echtSer;
+    // Die Vorgabe selbst liegt unter dem, was Chrome und Edge beim Import lesen (2^29 − 24 Byte).
+    const okGrenze = grenzeVorgabe > 0 && grenzeVorgabe <= 536870888;
+    check('B2d', 'Sicherung: geprüft wird die ganze Datei gegen die Grenze, die sich wieder einlesen lässt; passt Audio nicht, entsteht die Sicherung ohne Audio mit Grund, passen schon die Messwerte nicht, keine Datei mit Klartext; nie „Invalid string length“ (N19)',
+      !!ohne.back && !!mit.back && Object.keys(mit.back.audio).length === 3 && okA && okB && okC && okD && okGrenze,
+      'Grenze ' + grenzeVorgabe + ' | nur Messwerte ' + z(ohne) + ' | mit Audio ' + z(mit) + ' || A (Grenze dazwischen) ' + z(a) + ' || B (unter den Messwerten) ' + z(b) + ' || C (RangeError mit Audio) ' + z(c) + ' || D (RangeError ohne Audio) ' + z(d));
+    p.schliessen();
+  } catch (e) { check('B2d', 'Ablauf Sicherung läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
