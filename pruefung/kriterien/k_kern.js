@@ -1,6 +1,7 @@
 /* Kriterien K1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps).
    Kriterien K2: Formant-Nummerierung und Gültigkeit im Fenstersweep (analyseAt).
    Kriterien K3: Grundton im Fenstersweep (analyseAt): Untergrenze der Teilerkontrolle, Gegenprobe, Korrektur.
+   Kriterien K4: SHR-Raster F0 oder 2·F0 (analyseAt): Zweifel sichtbar, beide Werte ausgewiesen.
    Testsignale: allgemeine Baritonlage 75–470 Hz, synthetische Vokale mit bekannter Wahrheit.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
 'use strict';
@@ -666,5 +667,170 @@ module.exports = async function (H) {
     const faktor = {}; for (const x of korr) if (x.r.f0Korrektur === 'teiltonreihe') { const k = '×' + Math.round(x.r.f0 / x.r.f0Yin); faktor[k] = (faktor[k] || 0) + 1; }
     check('K3c', 'f0Korrektur ist \'teiltonreihe\' (neuer Wert genau 2× oder 3× f0Yin) oder \'cepstrum\' (YIN-Dip an der Cepstrum-Periode), nichts anderes',
       artBad.length === 0 && korr.length > 0, korr.length + ' Korrekturen, Art ' + art(ALLE) + ', Faktor ' + JSON.stringify(faktor) + (artBad.length ? ' — ' + artBad.slice(0, 3).map(x => x.name + ' ' + x.r.f0Korrektur + ' ' + r1(x.r.f0Yin) + ' → ' + r1(x.r.f0)).join(' | ') : ''));
+  }
+
+  /* ---------- K4: SHR-Raster (analyseAt) ---------- */
+  {
+    const BW5 = [80, 90, 120, 150, 200];
+    const VOK5 = [['a', [700, 1200, 2500, 3300, 4200], BW5], ['i', [300, 2200, 2900, 3500, 4300], [60, 100, 130, 160, 200]],
+      ['u', [320, 800, 2400, 3300, 4200], [60, 90, 120, 150, 200]], ['o', [450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200]],
+      ['e', [400, 1900, 2600, 3400, 4300], [60, 100, 130, 160, 200]]];
+    const VOK6 = VOK5.concat([['eng', [500, 1500, 2450, 2800, 3150], [70, 90, 90, 90, 100]]]);
+    const SCHNELL = { orders: [14] };
+    const ds = x => D.resample(x, SR, TSR);
+    const effW = x => { let p = 0; for (let i = 0; i < x.length; i++) p += x[i] * x[i]; return Math.sqrt(p / x.length); };
+    const mitSnr = (x, snr, seed) => { const nz = noise(x.length, 1, seed), g = effW(x) * Math.pow(10, -snr / 20) / effW(nz), y = new Float64Array(x.length); for (let i = 0; i < x.length; i++) y[i] = x[i] + g * nz[i]; return y; };
+    const lcg = seed => { let z = seed >>> 0; return () => { z = (z * 1664525 + 1013904223) >>> 0; return z / 4294967296; }; };
+    function pulse(times, amps, s, F, B) {
+      const n = Math.round(s * SR), src = new Float64Array(n);
+      for (let k = 0; k < times.length; k++) {
+        const pos = times[k] * SR, i0 = Math.floor(pos), q = pos - i0;
+        for (let j = 0; j < 6; j++) { const w = amps[k] * Math.cos(Math.PI * j / 12); if (i0 + j < n) src[i0 + j] += w * (1 - q); if (i0 + j + 1 < n) src[i0 + j + 1] += w * q; }
+      }
+      let y = src; for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
+      let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+      for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+      return y;
+    }
+    // F0-Verlauf fHz(t), Jitter j (relativ, gleichverteilt je Periode)
+    function verlauf(fHz, s, F, B, j, seed) {
+      const rnd = lcg(seed || 1), times = [], amps = []; let t = 0;
+      while (t < s) { times.push(t); amps.push(1); t += (1 + (j || 0) * (2 * rnd() - 1)) / fHz(t); }
+      return pulse(times, amps, s, F, B);
+    }
+    function rosenberg(f0, F, B, s) {
+      const n = Math.round(s * SR), g = new Float64Array(n), T = SR / f0, Tp = 0.6 * T * 2 / 3, Tn = 0.6 * T / 3;
+      for (let i = 0; i < n; i++) { const t = i % T; g[i] = t < Tp ? 0.5 * (1 - Math.cos(Math.PI * t / Tp)) : (t < Tp + Tn ? Math.cos(Math.PI * (t - Tp) / (2 * Tn)) : 0); }
+      let y = new Float64Array(n); for (let i = 1; i < n; i++) y[i] = g[i] - g[i - 1];
+      for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
+      let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+      for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+      return y;
+    }
+    const zeig = r => r1(r.shr) + ' dB (Raster ' + r0(r.shrGrid) + ', F0 ' + r1(r.f0) + ')' + (r.shrUnsure ? ' unsicher [' + r.shrGrund + '], anderes Raster ' + r1(r.shrOther) : '') + ', Kamm ' + r1(r.shrKamm);
+    // höherer der ausgewiesenen Werte: bei Rasterzweifel der Wert auf dem Raster mit Subharmonischen
+    const hoch = r => (r.shrUnsure && isFinite(r.shrOther)) ? Math.max(r.shr, r.shrOther) : r.shr;
+    const unaufUnmarkiert = r => !r.shrUnsure && r.shr < -25, warnUnmarkiert = r => !r.shrUnsure && r.shr > -15;
+
+    /* K4a: Starke Periodenverdopplung (jeder zweite Impuls schwächer) erscheint nie ungekennzeichnet als
+       unauffällig. Vorher folgte das Raster der Periodenwahl: nahm YIN direkt die doppelte Periode, stand
+       SHR auf dem Raster der halben Impulsrate (150 Hz, altRatio 0,5: −48,7 statt −10,0 dB). */
+    {
+      const r = D.analyseAt(ds(D.synthVowel(150, VOK5[0][1], BW5, 0.5, SR, { altRatio: 0.5 })), TSR, 3000, {});
+      check('K4a', 'Befund 3: /a/ 150 Hz, jeder zweite Impuls halb so stark: SHR über −15 dB oder unsicher mit anderem Raster über −15 dB (vorher −48,7 dB unauffällig)',
+        r.shr > -15 || (r.shrUnsure === true && r.shrOther > -15), zeig(r));
+      let nR = 0, okR = 0, stumm = 0; const badR = [], aReihen = [];
+      for (const [v, F, B] of VOK5) for (const f0 of [100, 150, 196, 247]) {
+        const w = [0.9, 0.7, 0.5, 0.3].map(a => ({ a, r: D.analyseAt(ds(D.synthVowel(f0, F, B, 0.5, SR, { altRatio: a })), TSR, 3000, {}) })).filter(x => { if (!x.r.voiced) stumm++; return x.r.voiced; });
+        nR++;
+        if (v === 'a') aReihen.push(f0 + ' Hz: ' + w.map(x => r1(x.r.shr) + (x.r.shrUnsure ? '(' + r1(x.r.shrOther) + ')' : '')).join(' '));
+        const steigt = w.length >= 3 && w.every((x, i) => i === 0 || hoch(x.r) > hoch(w[i - 1].r)), stark = w.every(x => x.a > 0.6 || !unaufUnmarkiert(x.r));
+        if (steigt && stark) okR++; else badR.push('/' + v + '/ ' + f0 + ': ' + w.map(x => x.a + '→' + r1(x.r.shr) + (x.r.shrUnsure ? '(' + r1(x.r.shrOther) + ')' : '')).join(' '));
+      }
+      check('K4a', 'Alternation 0,9/0,7/0,5/0,3 bei 100/150/196/247 Hz, Vokale a/i/u/o/e: der höhere ausgewiesene SHR steigt mit der Alternation, starke Alternation (≤ 0,6) nie unmarkiert unter −25 dB',
+        okR === nR, okR + '/' + nR + ' Reihen' + (stumm ? ', stimmlose Rahmen ausgelassen ' + stumm : '') + '; /a/ shr (anderes Raster): ' + aReihen.join(' | ') + (badR.length ? ' — ' + badR.slice(0, 4).join(' | ') : ''));
+      const L = []; let i = 0;
+      for (const [v, F, B] of VOK5) for (let f0 = 100; f0 <= 260; f0 += 12.6) for (const a of [0.3, 0.4, 0.5, 0.6]) {
+        const x = D.synthVowel(f0, F, B, 0.35, SR, { altRatio: a }), nm = '/' + v + '/ ' + f0.toFixed(1) + ' a ' + a;
+        for (const [sig, zus] of [[x, ''], [mitSnr(x, (i++) % 2 ? 30 : 40, 500 + i), (i % 2 ? ' SNR 30' : ' SNR 40')]]) {
+          const r = D.analyseAt(ds(sig), TSR, 2100, SCHNELL);
+          if (r.voiced) L.push({ nm: nm + zus, r });
+        }
+      }
+      const bad = L.filter(x => unaufUnmarkiert(x.r));
+      check('K4a', 'Alternation 0,3–0,6, Vokale a/i/u/o/e, 100–260 Hz, rauschfrei und mit Rauschen 30/40 dB: kein Rahmen unmarkiert unter −25 dB',
+        L.length >= 500 && bad.length === 0, 'Rahmen ' + L.length + ', markiert ' + L.filter(x => x.r.shrUnsure).length + ', unmarkiert unauffällig ' + bad.length +
+        (bad.length ? ' — ' + bad.slice(0, 3).map(x => x.nm + ': ' + zeig(x.r)).join(' | ') : ''));
+    }
+
+    /* K4b: Sauberer Ton mit F1 auf dem 2. Teilton warnt nicht unmarkiert. Vorher galt jede Teilung der
+       Teilerkontrolle als Verdopplung: 175 Hz, F1 350 Hz → −12,4 dB statt −72,3 dB. Und Gegenprobe gegen
+       „alles unsicher“: saubere Töne tragen den Zweifel fast nie. */
+    const SAUBER = [];
+    {
+      const r = D.analyseAt(ds(D.synthVowel(175, [350, 1400, 2500, 3300, 4200], [50, 90, 120, 150, 200], 0.5, SR)), TSR, 3000, {});
+      check('K4b', 'Befund 4: 175 Hz sauber, F1 = 350 Hz (B1 50): SHR unter −25 dB oder unsicher (vorher −12,4 dB Warnung)',
+        r.shr <= -25 || r.shrUnsure === true, zeig(r));
+      const L = [];
+      for (const B1 of [50, 60, 70, 90]) for (let f0 = 150; f0 <= 360; f0 += 10) for (const off of [-20, 0, 20]) {
+        const r2 = D.analyseAt(ds(D.synthVowel(f0, [2 * f0 + off, 1400, 2500, 3300, 4200], [B1, 90, 120, 150, 200], 0.35, SR)), TSR, 2100, SCHNELL);
+        if (r2.voiced) L.push({ nm: f0 + ' Hz F1 ' + (2 * f0 + off) + ' B1 ' + B1, r: r2, f0 });
+      }
+      const bad = L.filter(x => warnUnmarkiert(x.r));
+      check('K4b', 'F1 = 2·F0 (±20 Hz), F0 150–360 Hz, B1 50–90 Hz, sauber: kein Rahmen mit SHR über −15 dB ohne shrUnsure',
+        L.length === 264 && bad.length === 0, 'Rahmen ' + L.length + ', Teilerkorrektur ' + L.filter(x => x.r.subFactor === 2).length + ', unmarkierte Warnung ' + bad.length +
+        (bad.length ? ' — ' + bad.slice(0, 3).map(x => x.nm + ': ' + zeig(x.r)).join(' | ') : ''));
+      for (const x of L) SAUBER.push(x);
+      const add = (nm, sig, f0, c) => { const r2 = D.analyseAt(ds(sig), TSR, c || 2100, SCHNELL); if (r2.voiced) SAUBER.push({ nm, r: r2, f0 }); };
+      for (const [v, F, B] of VOK6) for (let f0 = 75; f0 <= 450; f0 += 7.4) add('/' + v + '/ ' + f0.toFixed(1), D.synthVowel(f0, F, B, 0.35, SR), f0);
+      for (const [v, F, B] of VOK6) for (let f0 = 77; f0 <= 450; f0 += 19.9) {
+        const sv = () => D.synthVowel(f0, F, B, 0.35, SR), nm = '/' + v + '/ ' + f0.toFixed(1);
+        add(nm + ' weiß 30 dB', mitSnr(sv(), 30, Math.round(f0 * 7)), f0);
+        add(nm + ' weiß 40 dB', mitSnr(sv(), 40, Math.round(f0 * 5)), f0);
+        add(nm + ' Rosenberg', rosenberg(f0, F, B, 0.35), f0);
+        add(nm + ' Jitter 1 %', verlauf(() => f0, 0.35, F, B, 0.01, Math.round(f0 * 13)), f0);
+        add(nm + ' Jitter 2 %', verlauf(() => f0, 0.35, F, B, 0.02, Math.round(f0 * 17)), f0);
+        add(nm + ' Vibrato 6 Hz ±50 c', verlauf(t => f0 * Math.pow(2, 50 / 1200 * Math.sin(2 * Math.PI * 6 * t + f0)), 0.35, F, B), f0);
+        add(nm + ' Wobble 3,5 Hz ±30 c', verlauf(t => f0 * Math.pow(2, 30 / 1200 * Math.sin(2 * Math.PI * 3.5 * t + f0)), 0.35, F, B), f0);
+      }
+      const rnd = lcg(4712), U = (a, b) => a + (b - a) * rnd();
+      for (let t = 0; t < 200; t++) {
+        const f0 = U(75, 450), F1 = U(280, 800), F2 = U(Math.max(F1 + 250, 750), 2300), F3 = U(Math.max(F2 + 200, 1800), 3000), F4 = F3 + U(150, 1000), F5 = U(F4 + 250, Math.max(F4 + 300, 4500));
+        const sig = D.synthVowel(f0, [F1, F2, F3, F4, F5], [U(35, 100), U(50, 130), U(70, 200), U(90, 220), U(120, 300)], 0.4, SR, { gain: 0.3 });
+        add('Zufall ' + t + ' ' + f0.toFixed(1), t % 2 ? sig : mitSnr(sig, 35, 900 + t), f0, 2400);
+      }
+      const recht = SAUBER.filter(x => Math.abs(x.r.f0 / x.f0 - 1) < 0.03 && !x.r.f0Unsure), warn = SAUBER.filter(x => warnUnmarkiert(x.r)), zw = recht.filter(x => x.r.shrUnsure);
+      check('K4b', 'saubere Töne (6 Vokale 75–450 Hz, F1 = 2·F0, Rauschen 30/40 dB, Rosenberg, Jitter 1/2 %, Vibrato, Wobble, 200 Zufallsvokale): keine unmarkierte Warnung, Rasterzweifel in höchstens 1 % der Rahmen mit richtigem Grundton',
+        SAUBER.length >= 1500 && warn.length === 0 && zw.length <= 0.01 * recht.length,
+        'Rahmen ' + SAUBER.length + ', unmarkierte Warnung ' + warn.length + ', Rasterzweifel ' + zw.length + '/' + recht.length +
+        (zw.length ? ' (' + zw.slice(0, 4).map(x => x.nm + ' [' + x.r.shrGrund + ']').join(', ') + ')' : '') + (warn.length ? ' — ' + warn.slice(0, 3).map(x => x.nm + ': ' + zeig(x.r)).join(' | ') : ''));
+    }
+
+    /* K4d: Vertrag der SHR-Felder. shr steht auf shrGrid (F0 oder 2·F0); shrOther ist genau dann eine Zahl,
+       wenn das Raster zweifelhaft ist, und steht auf dem anderen Raster; shrUnsure = Rasterzweifel oder
+       unsicherer Grundton; Hauptwert 2·F0 nur mit Kammbeleg, bei deutlichem Kamm immer. */
+    {
+      const proben = [];
+      const nimm = (nm, sig, c, opts) => { const x = ds(sig); proben.push({ nm, x, c, r: D.analyseAt(x, TSR, c, Object.assign({ wantSpectrum: true }, opts || {})) }); };
+      for (const [v, F, B] of VOK5) for (const f0 of [100, 150, 196, 247, 330]) for (const a of [1, 0.7, 0.5, 0.3]) nimm('/' + v + '/ ' + f0 + ' a ' + a, D.synthVowel(f0, F, B, 0.35, SR, { altRatio: a }), 2100);
+      for (const f0 of [175, 230]) nimm('F1 = 2·F0 ' + f0, D.synthVowel(f0, [2 * f0, 1400, 2500, 3300, 4200], [50, 90, 120, 150, 200], 0.35, SR), 2100);
+      nimm('eng 246 Hz', D.synthVowel(246, VOK6[5][1], VOK6[5][2], 0.35, SR), 2100);
+      nimm('Pause', noise(Math.round(0.35 * SR), 3e-4, 5), 2100, { floorDb: -80 });
+      const fehler = [];
+      let nZw = 0, n2 = 0, nG = 0;
+      for (const p of proben) {
+        const r = p.r, e = [];
+        if (!r.voiced) {
+          if (!(Number.isNaN(r.shr) && r.shrUnsure === false && Number.isNaN(r.shrOther) && r.shrGrund === '' && Number.isNaN(r.shrKamm))) e.push('stimmlos nicht leer');
+        } else {
+          const db = r.spectrumDb, sp = { db, sr: TSR, df: TSR / (2 * (db.length - 1)), N: 2 * (db.length - 1) }, f0 = r.f0, in2 = 2 * f0 <= 500;
+          const zweifel = isFinite(r.shrOther), aufZwei = r.shrGrid === 2 * f0;
+          if (!(r.shrGrid === f0 || aufZwei)) e.push('Raster ' + r.shrGrid);
+          if (!(Math.abs(r.shr - D.shrAgainst(sp, r.shrGrid)) < 1e-9)) e.push('shr nicht auf shrGrid');
+          if (zweifel && !(Math.abs(r.shrOther - D.shrAgainst(sp, aufZwei ? f0 : 2 * f0)) < 1e-9)) e.push('shrOther nicht auf dem anderen Raster');
+          if (!zweifel && aufZwei) e.push('2·F0 ohne Zweifel');
+          if (r.shrUnsure !== (zweifel || r.f0Unsure)) e.push('shrUnsure ' + r.shrUnsure);
+          if ((r.shrGrund.indexOf('grundton') >= 0) !== r.f0Unsure) e.push('Grund ' + r.shrGrund);
+          if (in2) {
+            const k = D.kammKontrast(sp, 2 * f0);
+            if (!(Math.abs(r.shrKamm - k) < 1e-9)) e.push('shrKamm ' + r1(r.shrKamm) + ' statt ' + r1(k));
+            if (k <= D.SHR_KAMM_RASTER_DB && !aufZwei) e.push('deutlicher Kamm ohne Raster 2·F0');
+            if (aufZwei && !(k <= D.SHR_KAMM_ZWEIFEL_DB)) e.push('Raster 2·F0 ohne Kamm');
+            if ((r.shrGrund.indexOf('kamm') >= 0) !== (k <= D.SHR_KAMM_ZWEIFEL_DB)) e.push('Grund kamm ' + r.shrGrund);
+          } else if (zweifel || aufZwei || !Number.isNaN(r.shrKamm)) e.push('2·F0 über fmax, trotzdem Raster 2·F0 erwogen');
+          if (zweifel) nZw++; if (aufZwei) n2++; if (!in2) nG++;
+        }
+        if (e.length) fehler.push(p.nm + ': ' + e.join(', '));
+      }
+      check('K4d', 'Vertrag: shr auf shrGrid ∈ {F0, 2·F0}; shrOther nur bei Rasterzweifel, dann auf dem anderen Raster; shrUnsure = Zweifel oder f0Unsure; Kamm ≤ ' + D.SHR_KAMM_RASTER_DB + ' dB → Raster 2·F0, Raster 2·F0 nur mit Kamm ≤ ' + D.SHR_KAMM_ZWEIFEL_DB + ' dB; 2·F0 über 500 Hz → kein Zweifel; stimmlos leer',
+        fehler.length === 0 && nZw > 0 && n2 > 0 && nG > 0, proben.length + ' Proben, Zweifel ' + nZw + ', Raster 2·F0 ' + n2 + ', 2·F0 über 500 Hz ' + nG + (fehler.length ? ' — ' + fehler.slice(0, 4).join(' | ') : ''));
+      // Prüfgrundlage der schnellen Sätze: SHR-Felder hängen nicht vom LPC-Ordnungssweep ab
+      let gleich = 0;
+      for (const p of proben.slice(0, 40)) {
+        const b = D.analyseAt(p.x, TSR, p.c, SCHNELL), a = p.r;
+        if (['shr', 'shrGrid', 'shrUnsure', 'shrOther', 'shrGrund', 'shrKamm'].every(k => Object.is(a[k], b[k]))) gleich++;
+      }
+      check('K4d', 'SHR-Felder hängen nicht vom LPC-Ordnungssweep ab (Grundlage der schnellen Prüfsätze)', gleich === 40, gleich + '/40');
+    }
   }
 };

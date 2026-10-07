@@ -8,7 +8,8 @@
    - Analysefrequenz 12000 Hz, Preemphase 0,97, Hann, Burg-LPC, Ordnungssweep 12/14/16.
    - Fensterlängensweep 0,06/0,08/0,10/0,14 s; gültig nur, wenn beide Sweeps unter 130 Hz streuen.
    - F0 über YIN (Schwelle 0,15, 60–500 Hz), Oktavkontrolle über das Spektrum.
-   - SFR = 2400–3200 Hz minus 0–2000 Hz. SHR halbzahlige gegen ganzzahlige Teiltöne, k = 1..8. */
+   - SFR = 2400–3200 Hz minus 0–2000 Hz. SHR halbzahlige gegen ganzzahlige Teiltöne, k = 1..8,
+     auf dem Raster F0 oder 2·F0; ist das Raster zweifelhaft, stehen beide Werte da (shrUnsure). */
 (function (root) {
   'use strict';
 
@@ -542,10 +543,9 @@
       var A = dn[best - 1], B = dn[best], C = dn[best + 1], den = A - 2 * B + C;
       if (Math.abs(den) > 1e-12) ti = best + Math.max(-1, Math.min(1, 0.5 * (A - C) / den));
     }
-    /* subFactor: Hat die Dip-Regel eine Vielfache der ersten Kandidatenperiode gewählt, ist der
-       gemeldete Grundton ein Unterton — die eigentliche Teiltonreihe liegt bei subFactor·f0.
-       SHR braucht diese Auskunft, um die Subharmonischen vom Raster zu unterscheiden, statt sie
-       aus dem Spektrum zu raten (ein Formant auf H2 macht die geraden Teiltöne sonst verdächtig). */
+    /* detectF0 sagt nicht, ob die gefundene Periode zwei Anregungen enthält: bei starker
+       Periodenverdopplung liegt dn(T) über der Schwelle, und YIN nimmt direkt 2T. Das SHR-Raster
+       entscheidet deshalb shr() aus eigenen Belegen, nicht aus der Periodenwahl. */
     return { f0: sr / ti, ap: dn[best], tau: ti, dips: dips, fminEff: sr / tauMax, dn: dn };
   }
 
@@ -685,17 +685,49 @@
     for (var k = 1; k <= 8; k++) { ps += linePow(spec, (k - 0.5) * g); ph += linePow(spec, k * g); }
     return 10 * Math.log10((ps + 1e-20) / (ph + 1e-20));
   }
-  /* SHR mit Regime-Erkennung. Liefert die Periodenmessung bereits einen Unterton (Oktavkontrolle
-     oder Dip-Regel haben eine Vielfache der ersten Kandidatenperiode gewählt), sind die ungeraden
-     Vielfachen von f0 die Subharmonischen — dann ist das Raster subFactor·f0.
-     Diese Auskunft kommt aus der Periodenmessung, NICHT aus dem Spektrum: die frühere Regel
-     „gerade Teiltöne mehr als 6 dB stärker ⇒ Subharmonik“ hielt einen Formanten auf H2 für
-     Ventrikularfaltenschwingung und warnte ausgerechnet an der Registergrenze (f4 modal:
-     gemeldet −10,5 dB statt der tatsächlichen −36,8 dB). */
-  function shr(spec, f0, subMultiple) {
-    var k = (subMultiple === true) ? 2 : (subMultiple >= 2 ? Math.round(subMultiple) : 1);
-    if (k >= 2) return { shr: shrAgainst(spec, k * f0), grid: k * f0 };
-    return { shr: shrAgainst(spec, f0), grid: f0 };
+  /* SHR-Raster: F0 oder 2·F0. Bei Periodenverdopplung ist F0 die halbe Impulsrate (die wahre
+     Periode enthält zwei Anregungen); die Subharmonischen sind dann die ungeraden Teiltöne von F0,
+     das Raster ist 2·F0. Dasselbe Linienbild entsteht bei einem sauberen Ton, dessen F1 auf H2 liegt
+     (physik.md §7.5: spektral allein nicht entscheidbar). Das frühere Raster subFactor·F0 folgte
+     der Periodenwahl und war in beide Richtungen falsch: nahm YIN direkt 2T, galt die stärkste
+     Verdopplung als unauffällig (150 Hz, jeder zweite Impuls halb so stark: −48,7 statt −10,0 dB);
+     korrigierte die Teilerkontrolle einen Oktavfehler bei F1 = 2·F0, warnte ein sauberer Ton
+     (175 Hz: −12,4 statt −72,3 dB).
+     Beleg für eine Impulsrate 2·F0, unabhängig von der Periodenwahl, ist der Kamm: Bei
+     Amplitudenwechsel liegt jede ungerade Linie gleich weit unter ihren geraden Nachbarn
+     (20·log10((1−a)/(1+a))). Ein Formant hebt nur einzelne Linien, der Median über acht Linien bleibt
+     fast unberührt — anders als die Leistungssumme des SHR, die eine einzige Formantlinie beherrscht.
+     Gemessen auf sauberen Vokalen (auch F1 = 2·F0, drei Formanten auf geraden Teiltönen, Rauschen
+     30 dB, Rosenberg, Jitter, Vibrato, Zufallsformanten): höchstens −5,5 dB tief; Amplitudenwechsel
+     0,3: −5,7 bis −6,6 dB, 0,4: ab −7,6 dB.
+     Liegt der Beleg vor, ist das Raster zweifelhaft: beide Werte werden ausgewiesen (zweifel, other).
+     Hauptwert ist das Raster 2·F0 nur bei deutlichem Kamm, sonst F0. Ohne Beleg gilt F0 ohne Zweifel.
+     Ist 2·F0 > fmax, gibt es keine Impulsrate 2·F0 im Messbereich. Die Zyklusalternation selbst
+     (physik.md §6) misst der Kern nicht; er entscheidet deshalb nie sicher auf Verdopplung. */
+  var SHR_KAMM_ZWEIFEL_DB = -4, SHR_KAMM_RASTER_DB = -6;
+
+  // Median über k = 1..8 von L((k−½)·g) − Mittel(L((k−1)·g), L(k·g)) in dB; für k = 1 nur L(g)
+  function kammKontrast(spec, g) {
+    var d = [];
+    for (var k = 1; k <= 8; k++) {
+      var Ls = lineLevelDb(spec, (k - 0.5) * g), Lh = lineLevelDb(spec, k * g), Ll = (k > 1) ? lineLevelDb(spec, (k - 1) * g) : NaN;
+      if (!isFinite(Ls) || !isFinite(Lh)) continue;
+      d.push(Ls - (isFinite(Ll) ? (Ll + Lh) / 2 : Lh));
+    }
+    return d.length >= 4 ? median(d) : NaN;
+  }
+
+  // fmax: obere Grenze der Impulsrate
+  function shr(spec, f0, fmax) {
+    var sF = shrAgainst(spec, f0), out = { shr: sF, grid: f0, other: NaN, zweifel: false, grund: '', kamm: NaN };
+    if (!(2 * f0 <= (fmax || 500))) return out;
+    out.kamm = kammKontrast(spec, 2 * f0);
+    if (!(out.kamm <= SHR_KAMM_ZWEIFEL_DB)) return out;
+    var s2 = shrAgainst(spec, 2 * f0);
+    out.zweifel = true; out.grund = 'kamm';
+    if (out.kamm <= SHR_KAMM_RASTER_DB) { out.shr = s2; out.grid = 2 * f0; out.other = sF; }
+    else out.other = s2;
+    return out;
   }
 
   function bandPow(spec, fLo, fHi) {
@@ -908,7 +940,7 @@
       slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
-      sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
       f0Unsure: false, f0Grund: '', f0Cep: NaN, f0Yin: NaN, f0Korrektur: '',
       harmonicPullHz: NaN, sparseHarmonics: false,
@@ -1016,8 +1048,11 @@
     // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
     out.harmonicPullHz = f0 / 2;
     out.sparseHarmonics = f0 > 250;
-    var sh = shr(spec, f0, out.subFactor);
-    out.shr = sh.shr; out.shrGrid = sh.grid;
+    // SHR-Raster F0 oder 2·F0 aus eigenen Belegen (shr); ein unsicherer Grundton macht auch SHR unsicher
+    var sh = shr(spec, f0, opts.fmax || 500);
+    out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm;
+    out.shrUnsure = sh.zweifel || out.f0Unsure;
+    out.shrGrund = out.f0Unsure ? (sh.grund ? sh.grund + '+' : '') + 'grundton' : sh.grund;
     out.sfr = sfr(spec);
     out.cpp = cp.cpp;
     out.h1h2 = h1h2(spec, f0);
@@ -1038,7 +1073,9 @@
        gerader zu ungeraden Teiltönen erreicht bei sauberen Vokalen bis +87 dB (ungerade Teiltöne
        fallen in Spektraltäler) und bei echter Alternation nur +0,8 dB — die Verteilungen überlappen
        vollständig. Das Physik-Skript sagt es (§7.5): spektral allein gibt es Fehlalarme, sicher ist
-       nur die Zyklusalternation. Die wird hier nicht gemessen; der Kern verspricht sie auch nicht. */
+       nur die Zyklusalternation. Die wird hier nicht gemessen; der Kern verspricht sie auch nicht.
+       Der Kamm (shr) entscheidet deshalb nur, ob das SHR-Raster zweifelhaft ist und welcher der
+       beiden ausgewiesenen Werte vorn steht, nie sicher auf Verdopplung. */
     return out;
   }
 
@@ -1298,7 +1335,8 @@
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
-    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast,
+    SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,
