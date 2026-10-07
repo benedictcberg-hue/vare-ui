@@ -63,8 +63,11 @@ const WAV = path.join(SP, 'fake.wav');
     check('Huelle nennt das private Repo', (await page.textContent('#korpus-repo')).includes('vare-tools'), await page.textContent('#korpus-repo'));
     // Die Seite nennt ihre Adresse (#origin-name). Der freie Port kann selbst 404 oder 1111 enthalten
     // und täuschte dann ein Leck vor; geprüft wird deshalb der Inhalt ohne die Portnummer.
-    const port = String(server.address().port), ohnePort = (await page.content()).split(port).join('');
-    check('Huelle enthaelt die Marken nicht im Quelltext', !ohnePort.includes('404') && !ohnePort.includes('1111'), 'Port ' + port);
+    // Ebenso die Geräte-IDs im Mikrofonmenü: Chromium vergibt je Profil zufällige 64 Hexziffern, die in etwa jedem
+    // 20. Lauf „404“ enthalten (Sonde: 2 von 40 Ladevorgängen). Eine Marke stünde als Text da, nicht als solche ID.
+    const port = String(server.address().port), ohnePort = (await page.content()).split(port).join('').replace(/\b[0-9a-f]{64}\b/g, '<Geräte-ID>');
+    const markeBei = ['404', '1111'].map(m => ohnePort.indexOf(m) >= 0 ? m + ': …' + ohnePort.slice(Math.max(0, ohnePort.indexOf(m) - 60), ohnePort.indexOf(m) + 20).replace(/\s+/g, ' ') + '…' : '').filter(Boolean);
+    check('Huelle enthaelt die Marken nicht im Quelltext', !markeBei.length, 'Port ' + port + (markeBei.length ? ' | ' + markeBei.join(' | ') : ''));
     await page.fill('#token', 'falsches-token-mit-genug-zeichen');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => (document.getElementById('anmeldung-fehler').textContent || '').length > 0, null, { timeout: 10000 });
@@ -302,39 +305,47 @@ const WAV = path.join(SP, 'fake.wav');
       'vor dem Löschen ' + codesVorher.join(',') + ' | neuer Take ' + (tD && tD.code) + ' | nach dem Import ' + codesNachher.join(',') + ' | ' + await statusText());
 
     // ---------- „Alle neu analysieren“: D hat Audio, der importierte A nicht. Beide gelten als „Kern 3.0.0“. ----------
-    const tAimp = (await page.evaluate(() => VARESTORE.allTakes())).find(t => t.code === 'A');
-    await page.evaluate(async () => { for (const t of await VARESTORE.allTakes()) { t.analysis.kernelVersion = '3.0.0'; await VARESTORE.putTake(t); } VAREAPP.refreshChronik(); });
-    await page.waitForFunction(() => document.querySelectorAll('#takes-list tr[data-id]').length === 2, null, { timeout: 10000 });
-    // Fortschritt mitschreiben; im ersten Lauf nach dem ersten Block abbrechen (im selben Schritt wie die Anzeige, also sicher mitten im Take).
-    await page.evaluate(() => {
-      window.__fortschritt = []; window.__abbrechenBei = true;
-      new MutationObserver(() => {
-        const t = document.getElementById('reanalyse-all-text').textContent, m = /— (\d+) \/ (\d+) Rahmen$/.exec(t);
-        window.__fortschritt.push({ t, abbrechenSichtbar: !document.getElementById('btn-reanalyse-abbruch').hidden });
-        if (window.__abbrechenBei && m && +m[1] < +m[2]) { window.__abbrechenBei = false; document.getElementById('btn-reanalyse-abbruch').click(); }
-      }).observe(document.getElementById('reanalyse-all'), { childList: true, characterData: true, subtree: true });
-    });
-    const reText = () => page.textContent('#reanalyse-all-text');
-    dialogAntwort = true;
-    await page.click('#btn-reanalyse-all');
-    await page.waitForFunction(() => !VAREAPP.state.busy && /^Neu-Analyse abgebrochen/.test(document.getElementById('reanalyse-all-text').textContent), null, { timeout: 120000 });
-    const nachAbbruch = await page.evaluate(id => VARESTORE.getTake(id).then(t => ({ kern: t.analysis.kernelVersion, hist: (t.history || []).length })), tD.id);
-    check('Alle neu analysieren im Browser: Abbrechen mitten im Take lässt ihn unverändert und sagt es',
-      nachAbbruch.kern === '3.0.0' && nachAbbruch.hist === (tD.history || []).length && /0 von 1 Takes/.test(await reText()) && /1 unverändert: D /.test(await reText()),
-      JSON.stringify(nachAbbruch) + ' | „' + await reText() + '“');
-    await page.click('#btn-reanalyse-all');
-    await page.waitForFunction(() => !VAREAPP.state.busy && /^Alle neu analysiert/.test(document.getElementById('reanalyse-all-text').textContent), null, { timeout: 120000 });
+    // Fehlt der Knopf oder wirft ein Schritt, reißen beide Prüfungen, und der Durchgang läuft weiter.
+    const ALLE_NAMEN = ['Alle neu analysieren im Browser: Abbrechen mitten im Take lässt ihn unverändert und sagt es',
+      'Alle neu analysieren im Browser: Take mit Audio mit dem jetzigen Kern, Historie „3.0.0“; Take ohne Audio genannt und weiter anders gerechnet; Fortschritt mit Rahmen und Abbrechen-Knopf sichtbar'];
+    const alleErledigt = [], alleCheck = (k, ok, d) => { alleErledigt.push(k); check(ALLE_NAMEN[k], ok, d); };
+    try {
+      if (!(await page.$('#btn-reanalyse-all'))) throw new Error('Knopf „Alle neu analysieren“ fehlt');
+      const tAimp = (await page.evaluate(() => VARESTORE.allTakes())).find(t => t.code === 'A');
+      await page.evaluate(async () => { for (const t of await VARESTORE.allTakes()) { t.analysis.kernelVersion = '3.0.0'; await VARESTORE.putTake(t); } VAREAPP.refreshChronik(); });
+      await page.waitForFunction(() => document.querySelectorAll('#takes-list tr[data-id]').length === 2, null, { timeout: 10000 });
+      // Fortschritt mitschreiben; im ersten Lauf nach dem ersten Block abbrechen (im selben Schritt wie die Anzeige, also sicher mitten im Take).
+      await page.evaluate(() => {
+        window.__fortschritt = []; window.__abbrechenBei = true;
+        new MutationObserver(() => {
+          const t = document.getElementById('reanalyse-all-text').textContent, m = /— (\d+) \/ (\d+) Rahmen$/.exec(t);
+          window.__fortschritt.push({ t, abbrechenSichtbar: !document.getElementById('btn-reanalyse-abbruch').hidden });
+          if (window.__abbrechenBei && m && +m[1] < +m[2]) { window.__abbrechenBei = false; document.getElementById('btn-reanalyse-abbruch').click(); }
+        }).observe(document.getElementById('reanalyse-all'), { childList: true, characterData: true, subtree: true });
+      });
+      const reText = () => page.textContent('#reanalyse-all-text');
+      dialogAntwort = true;
+      await page.click('#btn-reanalyse-all');
+      await page.waitForFunction(() => !VAREAPP.state.busy && /^Neu-Analyse abgebrochen/.test(document.getElementById('reanalyse-all-text').textContent), null, { timeout: 120000 });
+      const nachAbbruch = await page.evaluate(id => VARESTORE.getTake(id).then(t => ({ kern: t.analysis.kernelVersion, hist: (t.history || []).length })), tD.id);
+      alleCheck(0,
+        nachAbbruch.kern === '3.0.0' && nachAbbruch.hist === (tD.history || []).length && /0 von 1 Takes/.test(await reText()) && /1 unverändert: D /.test(await reText()),
+        JSON.stringify(nachAbbruch) + ' | „' + await reText() + '“');
+      await page.click('#btn-reanalyse-all');
+      await page.waitForFunction(() => !VAREAPP.state.busy && /^Alle neu analysiert/.test(document.getElementById('reanalyse-all-text').textContent), null, { timeout: 120000 });
+      dialogAntwort = false;
+      const nachLauf = await page.evaluate(() => VARESTORE.allTakes().then(ts => ts.map(t => ({ code: t.code, kern: t.analysis.kernelVersion, hist: (t.history || []).map(h => h.analysis && h.analysis.kernelVersion) }))));
+      const fortschritt = await page.evaluate(() => window.__fortschritt);
+      await page.waitForFunction(() => /Alle neu analysiert/.test(document.getElementById('reanalyse-all-text').textContent) && document.querySelectorAll('#takes-list tr[data-id]').length === 2, null, { timeout: 10000 });
+      const zeilenUv = await page.$$eval('#takes-list tr[data-id]', trs => trs.map(tr => tr.querySelector('strong').textContent + (/anders gerechnet/.test(tr.textContent) ? ':anders' : ':gleich')).sort().join(' '));
+      const dNeu = nachLauf.find(t => t.code === 'D') || {}, aNeu = nachLauf.find(t => t.code === 'A') || {};
+      alleCheck(1,
+        dNeu.kern === D.VERSION && dNeu.hist && dNeu.hist[dNeu.hist.length - 1] === '3.0.0' && aNeu.kern === '3.0.0' && !!tAimp && aNeu.hist.length === (tAimp.history || []).length
+        && new RegExp('Ohne Audio, nicht neu zu rechnen: A .*bleiben anders gerechnet: A .*Kern 3\\.0\\.0 statt').test(await reText()) && zeilenUv === 'A:anders D:gleich'
+        && fortschritt.some(f => /^Neu-Analyse 1 von 1: D .* — \d+ \/ \d+ Rahmen$/.test(f.t) && f.abbrechenSichtbar) && await page.isHidden('#btn-reanalyse-abbruch') && await page.isEnabled('#btn-reanalyse-all'),
+        JSON.stringify(nachLauf) + ' | Liste ' + zeilenUv + ' | „' + await reText() + '“ | ' + fortschritt.length + ' Fortschrittszeilen');
+    } catch (e) { ALLE_NAMEN.forEach((n, k) => { if (alleErledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
     dialogAntwort = false;
-    const nachLauf = await page.evaluate(() => VARESTORE.allTakes().then(ts => ts.map(t => ({ code: t.code, kern: t.analysis.kernelVersion, hist: (t.history || []).map(h => h.analysis && h.analysis.kernelVersion) }))));
-    const fortschritt = await page.evaluate(() => window.__fortschritt);
-    await page.waitForFunction(() => /Alle neu analysiert/.test(document.getElementById('reanalyse-all-text').textContent) && document.querySelectorAll('#takes-list tr[data-id]').length === 2, null, { timeout: 10000 });
-    const zeilenUv = await page.$$eval('#takes-list tr[data-id]', trs => trs.map(tr => tr.querySelector('strong').textContent + (/anders gerechnet/.test(tr.textContent) ? ':anders' : ':gleich')).sort().join(' '));
-    const dNeu = nachLauf.find(t => t.code === 'D') || {}, aNeu = nachLauf.find(t => t.code === 'A') || {};
-    check('Alle neu analysieren im Browser: Take mit Audio mit dem jetzigen Kern, Historie „3.0.0“; Take ohne Audio genannt und weiter anders gerechnet; Fortschritt mit Rahmen und Abbrechen-Knopf sichtbar',
-      dNeu.kern === D.VERSION && dNeu.hist && dNeu.hist[dNeu.hist.length - 1] === '3.0.0' && aNeu.kern === '3.0.0' && !!tAimp && aNeu.hist.length === (tAimp.history || []).length
-      && new RegExp('Ohne Audio, nicht neu zu rechnen: A .*bleiben anders gerechnet: A .*Kern 3\\.0\\.0 statt').test(await reText()) && zeilenUv === 'A:anders D:gleich'
-      && fortschritt.some(f => /^Neu-Analyse 1 von 1: D .* — \d+ \/ \d+ Rahmen$/.test(f.t) && f.abbrechenSichtbar) && await page.isHidden('#btn-reanalyse-abbruch') && await page.isEnabled('#btn-reanalyse-all'),
-      JSON.stringify(nachLauf) + ' | Liste ' + zeilenUv + ' | „' + await reText() + '“ | ' + fortschritt.length + ' Fortschrittszeilen');
 
     // ---------- Gerätewechsel nach der Kalibrierung ----------
     await page.evaluate(() => { location.hash = '#/aufnahme'; });
