@@ -4,7 +4,9 @@
         überspringt Kommentare, Zeichenketten und reguläre Ausdrücke und meldet Schlüsselwörter und
         Zeichen, die es erst ab ES2015 gibt. Er ist ein Stolperdraht, kein vollständiger Parser.
    I5b: Der Hilfetext zu Schritt 0 (index.html) nennt die Platzhalter, die die CSV wirklich schreibt.
-   I5c: Der Browser-Test läuft auch unter Windows: kein fest eingetragener Linux-Pfad. */
+   I5c: Der Browser-Test läuft auch unter Windows: kein fest eingetragener Linux-Pfad.
+   I5d/I5e: Das öffentliche README nennt den Stand des Codes (Kern, Feinspur, Gültigkeitsregeln, Spalten,
+        Sicherung), jeden Grund für „ungültig“ und jedes Kriterienmodul. */
 'use strict';
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
@@ -59,7 +61,7 @@ function es5Funde(src) {
 }
 
 module.exports = async function (H) {
-  const { check, C } = H;
+  const { check, C, D } = H;
   {
     const dateien = fs.readdirSync(ROOT).filter(f => /\.js$/.test(f) && f !== 'test_dsp.js').sort();
     const bad = [];
@@ -102,6 +104,40 @@ module.exports = async function (H) {
     if (!/VARE_CHROMIUM/.test(bt)) bad.push('Chromium-Pfad nicht über VARE_CHROMIUM wählbar');
     check('I5c', 'Browser-Test ohne festen Linux-Pfad: Chromium aus VARE_CHROMIUM, einem vorhandenen Prüfpfad oder der Playwright-Installation; playwright-core oder playwright',
       !bad.length, bad.join(' | ') || 'ok');
+  }
+  {
+    /* README gegen den Code: Zahlen, die dort stehen, kommen aus den Konstanten des Kerns und aus csv.js.
+       Früher nannte es ein 30-ms-Fenster (Kern: 35 ms), 177 Kriterien und „nur N Resonanzen“. */
+    const md = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'), bad = [];
+    const soll = ['Kern ' + D.VERSION,
+      'Fenster ' + Math.round(D.FINE_WINDOW_S * 1000) + ' ms', 'Raster ' + Math.round(D.FINE_HOP_S * 1000) + ' ms',
+      'Untergrenze ' + D.FINE_FMIN + ' Hz', 'Tiefpass ' + D.FINE_LOWPASS_HZ + ' Hz',
+      D.WINDOWS.map(w => String(w.toFixed(2)).replace('.', ',')).join(' / ') + ' s', D.ORDERS.join(' / '),
+      'unter ' + D.SPREAD_MAX_HZ + ' Hz', 'mindestens ' + D.DROP_MIN_DB + ' dB', 'bis ' + D.F_PEAK_MAX_HZ + ' Hz',
+      'nie unter ' + D.F0_MIN_HZ + ' Hz', C.TAKE_COLUMNS.length + ' Spalten je Take, ' + C.FRAME_COLUMNS.length + ' je Rahmen'];
+    for (const s of soll) if (md.indexOf(s) < 0) bad.push('fehlt „' + s + '“');
+    const sich = /## JSON-Sicherung\s+Version (\d+)/.exec(md);
+    if (!sich || +sich[1] !== C.BACKUP_VERSION) bad.push('JSON-Sicherung: README Version ' + (sich ? sich[1] : '?') + ', csv.js ' + C.BACKUP_VERSION);
+    check('I5d', 'README nennt den Stand des Codes: Kernversion, Feinspur (Fenster, Raster, Untergrenze, Tiefpass), Gültigkeitsregeln, Spaltenzahl, Sicherungsversion',
+      !bad.length, bad.join(' | ') || soll.join(' · '));
+  }
+  {
+    /* Jeder Grund, den die Anzeige für einen ungültigen Formanten nennen kann (chronik.js formantGruende,
+       live und im Hover), und jedes Kriterienmodul steht im README; Tonsprünge heißen dort neutral. */
+    const md = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'), bad = [];
+    const CH = require(path.join(ROOT, 'chronik.js')).VARECHRONIK, gruende = new Set();
+    for (const F of [NaN, 500]) for (const grund of [undefined, '', 'nummer', 'verschmolzen', '?']) for (const rauschBoden of [undefined, false, true])
+      for (const sdWin of [undefined, 0, 200]) for (const sdOrder of [undefined, 0, 200]) for (const nWin of [undefined, 1, 2, 4]) for (const nOrders of [undefined, 1, 3]) for (const smax of [undefined, 130])
+        for (const g of CH.formantGruende({ F, grund, rauschBoden, sdWin, sdOrder, nWin, nOrders, smax })) gruende.add(g.replace(/ [\d.,−-]+ Hz$/, ''));
+    gruende.add(CH.BANDBREITE_TEXT);
+    for (const g of gruende) if (md.indexOf(g) < 0) bad.push('Grund „' + g + '“ fehlt');
+    const module = fs.readdirSync(__dirname).filter(f => /\.js$/.test(f)).sort();
+    for (const f of module) if (md.indexOf('`' + f + '`') < 0) bad.push('Modul ' + f + ' fehlt');
+    const register = (md.match(/.?Registerwechsel/g) || []).filter(s => s[0] !== '„');
+    if (register.length) bad.push(register.length + '× „Registerwechsel“ als Begriff');
+    for (const k of ['Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms', 'kurze Kanten unter 90 ms']) if (md.indexOf(k) < 0) bad.push('Kachelname „' + k + '“ fehlt');
+    check('I5e', 'README erklärt jeden Grund für „ungültig“, den die Anzeige nennen kann, nennt jedes Kriterienmodul und die Tonsprünge mit den neutralen Namen der Anzeige',
+      gruende.size >= 10 && module.length >= 10 && !bad.length, bad.length ? bad.join(' | ') : gruende.size + ' Gründe, ' + module.length + ' Module');
   }
 };
 module.exports.es5Funde = es5Funde;
