@@ -82,6 +82,14 @@ FRAME_SOLL.push(
   ['shr_kamm_db', 'feld', 'shrKamm', 2], ['shr_zweitpuls', 'feld', 'shrZweitpuls', 3],
   ['flags', 'feld', 'flags', 0]
 );
+/* Spalten, die nur für einen stimmhaften (gemessenen) Rahmen etwas aussagen: In stimmlosen Zeilen stehen sie als
+   fehlend (Zahl −99, Text leer), nie als 0 = „sicher“ (B2). Früher erwartete dieses Kriterium dort die Bits der
+   Serie und schrieb damit fest, dass f0_unsure 0 in einer Pause „Grundton sicher“ heißt. valid1…5 gehört nicht
+   dazu: 0 heißt „nicht gültig“ und stimmt auch ohne Messung. */
+const STIMMHAFT_SPALTEN = ['slot_unsure', 'n_peaks', 'octave_corrected', 'octave_ambiguous', 'h1h2_unsure', 'f0_unsure', 'f0_grund', 'f0_korrektur',
+  'octave_unter_grenze', 'shr_unsure', 'shr_grund'];
+for (let k = 1; k <= 5; k++) STIMMHAFT_SPALTEN.push('slot_grund' + k, 'rauschboden' + k, 'n_win' + k);
+
 /* Gründe je Zeile, Texte aus den Verträgen K3 (f0Grund, f0Korrektur) und K4 (shrGrund). In jeder Zeile
    tragen die drei Spalten verschiedene Texte, damit vertauschte Spalten auffallen. */
 const GRUND_ZEILEN = {
@@ -206,7 +214,8 @@ function buildSeries(A) {
   return s;
 }
 function expectFrame(entry, s, r, dialect, A, V) {
-  const [, kind, src, dec] = entry;
+  const [name, kind, src, dec] = entry;
+  if (STIMMHAFT_SPALTEN.indexOf(name) >= 0 && !(s.flags[r] & A.FLAG.VOICED)) return (kind === 'grund' || kind === 'slotgrund') ? '' : expectCell(0, null, dialect);
   if (kind === 'feld') return expectCell(dec, s[src][r], dialect);
   // Fehlt das Serienfeld, reißt die Zelle (P2f/P2g) statt einer Ausnahme, die die übrigen Kriterien verdeckt.
   if (kind === 'bit') { const mask = typeof src[1] === 'number' ? src[1] : A.FLAG[src[1]]; return s[src[0]] ? ((s[src[0]][r] & mask) ? '1' : '0') : '(Serienfeld ' + src[0] + ' fehlt)'; }
@@ -289,6 +298,9 @@ module.exports = async function (H) {
 
   /* ---------- Rahmen-CSV ---------- */
   const S = buildSeries(A);
+  /* Dieselbe Serie mit jeder Zeile stimmhaft: Dort trägt jede Spalte ihr Bit bzw. ihren Grund in allen sechs Zeilen,
+     so dass vertauschte Spalten weiter auffallen; in S stehen die stimmlosen Zeilen als fehlend. */
+  const SV = Object.assign({}, S, { flags: S.flags.map(f => f | A.FLAG.VOICED) });
   {
     const keys = C.FRAME_COLUMNS.map(c => c[0]), soll = FRAME_SOLL.map(e => e[0]);
     const ohneSoll = keys.filter(k => soll.indexOf(k) < 0), fehlt = soll.filter(k => keys.indexOf(k) < 0);
@@ -297,23 +309,26 @@ module.exports = async function (H) {
       keys.length + ' Spalten' + (ohneSoll.length ? ', ohne Sollquelle: ' + ohneSoll.join(',') : '') + (fehlt.length ? ', fehlen: ' + fehlt.join(',') : '') + (doppelt.length ? ', doppelt: ' + doppelt.join(',') : ''));
   }
   for (const [dialect, sep, id] of [['standard', ',', 'P2f'], ['excelde', ';', 'P2g']]) {
-    const text = C.framesToCsv(S, dialect, V), bom = text.charCodeAt(0) === 0xFEFF;
-    const { rows, errors } = parseCsv(bom ? text.slice(1) : text, sep), head = rows[0] || [];
-    const bad = [];
-    if (bom !== (dialect === 'excelde')) bad.push('BOM ' + (bom ? 'vorhanden' : 'fehlt'));
-    if (rows.length !== 7) bad.push(rows.length + ' Zeilen statt 7');
-    rows.forEach((r, i) => { if (r.length !== head.length) bad.push('Zeile ' + i + ': ' + r.length + ' statt ' + head.length + ' Felder'); });
+    const bad = [], errors = [];
     let geprueft = 0;
-    for (const e of FRAME_SOLL) {
-      const c = head.indexOf(e[0]);
-      if (c < 0) { bad.push(e[0] + ' fehlt im Kopf'); continue; }
-      for (let r = 0; r < 6; r++) {
-        const want = expectFrame(e, S, r, dialect, A, V), got = rows[r + 1] && rows[r + 1][c];
-        if (got !== want) bad.push(e[0] + '[' + r + '] ' + JSON.stringify(got) + ' statt ' + JSON.stringify(want)); else geprueft++;
+    for (const [serie, art] of [[S, ''], [SV, 'alle stimmhaft ']]) {
+      const text = C.framesToCsv(serie, dialect, V), bom = text.charCodeAt(0) === 0xFEFF;
+      const p = parseCsv(bom ? text.slice(1) : text, sep), rows = p.rows, head = rows[0] || [];
+      errors.push(...p.errors);
+      if (bom !== (dialect === 'excelde')) bad.push(art + 'BOM ' + (bom ? 'vorhanden' : 'fehlt'));
+      if (rows.length !== 7) bad.push(art + rows.length + ' Zeilen statt 7');
+      rows.forEach((r, i) => { if (r.length !== head.length) bad.push(art + 'Zeile ' + i + ': ' + r.length + ' statt ' + head.length + ' Felder'); });
+      for (const e of FRAME_SOLL) {
+        const c = head.indexOf(e[0]);
+        if (c < 0) { bad.push(e[0] + ' fehlt im Kopf'); continue; }
+        for (let r = 0; r < 6; r++) {
+          const want = expectFrame(e, serie, r, dialect, A, V), got = rows[r + 1] && rows[r + 1][c];
+          if (got !== want) bad.push(art + e[0] + '[' + r + '] ' + JSON.stringify(got) + ' statt ' + JSON.stringify(want)); else geprueft++;
+        }
       }
     }
-    check(id, 'Rahmen-CSV ' + dialect + ': jede Spalte trägt ihr Feld bzw. Bit, NaN → −99 (6 Zeilen)', !errors.length && !bad.length && geprueft === 6 * FRAME_SOLL.length,
-      geprueft + '/' + 6 * FRAME_SOLL.length + ' Zellen' + (errors.length ? '; Form: ' + errors.slice(0, 2).join('; ') : '') + (bad.length ? '; ' + bad.length + ' falsch: ' + bad.slice(0, 4).join('; ') : ''));
+    check(id, 'Rahmen-CSV ' + dialect + ': jede Spalte trägt ihr Feld bzw. Bit, NaN → −99; Marken und Gründe in stimmlosen Zeilen −99 bzw. leer (6 Zeilen, dazu dieselben 6 stimmhaft)', !errors.length && !bad.length && geprueft === 12 * FRAME_SOLL.length,
+      geprueft + '/' + 12 * FRAME_SOLL.length + ' Zellen' + (errors.length ? '; Form: ' + errors.slice(0, 2).join('; ') : '') + (bad.length ? '; ' + bad.length + ' falsch: ' + bad.slice(0, 4).join('; ') : ''));
   }
 
   /* ---------- SFR normiert je Halbton (Physik §7.1: SFR − median(SFR | gleicher Halbton, gleicher Take)) ---------- */

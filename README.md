@@ -329,6 +329,11 @@ Stand Kern 4.0.0: 102 Spalten je Take, 74 je Rahmen. Neu mit Kern 4.0.0:
   `sdw1…5`, `sdo1…5`; `n_win1…5` sagt, in wie vielen der 4 Analysefenster der Formant stand (unter 3 ungültig;
   −99 in stimmlosen Rahmen und in älteren Verläufen). Die Streuungsgrenze,
   gegen die `sdw` und `sdo` geprüft wurden, steht je Take in `spread_max_hz` (Vorgabe 130 Hz).
+- **Stimmlose Rahmen** (Pausen, Rahmen an einer Naht): Der Kern misst dort nichts. Marken und Gründe, die nur für
+  einen gemessenen Rahmen etwas sagen (`f0_unsure`, `octave_corrected`, `octave_ambiguous`, `octave_unter_grenze`,
+  `h1h2_unsure`, `shr_unsure`, `slot_unsure`, `rauschboden1…5`, `n_win1…5`, `n_peaks`), stehen dort als −99, die
+  Gründe (`f0_grund`, `f0_korrektur`, `shr_grund`, `slot_grund1…5`) leer — nie 0, das sich als „sicher“ läse.
+  `valid1…5` bleibt 0: „nicht gültig“ stimmt auch ohne Messung.
 - **Ältere Rahmenverläufe** ohne diese Felder: Marken und Zahlen −99, Slot-Grund `?`, übrige Gründe
   leer — nie still „sicher“.
 

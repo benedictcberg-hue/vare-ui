@@ -81,7 +81,8 @@ module.exports = async function (H) {
     let geprueft = 0;
     const texte = new Set();
     for (let k = 0; k < 5; k++) {
-      for (const [name, f] of [['slot_grund' + (k + 1), r => r.slotGrund[k]], ['rauschboden' + (k + 1), r => r.rauschBoden[k] ? '1' : '0']]) {
+      // In stimmlosen Rahmen fehlen Grund und Marke (leer bzw. −99, B2), statt 0 = „über dem Boden“ zu sagen.
+      for (const [name, f] of [['slot_grund' + (k + 1), r => r.voiced ? r.slotGrund[k] : ''], ['rauschboden' + (k + 1), r => !r.voiced ? '-99' : r.rauschBoden[k] ? '1' : '0']]) {
         const c = kopf.indexOf(name);
         if (c < 0) { bad.push(name + ' fehlt'); continue; }
         for (let i = 0; i < R.length; i++) {

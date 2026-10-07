@@ -172,6 +172,15 @@
      neben anderen Gründen. In stimmlosen Rahmen ist nichts analysiert, in älteren Serien fehlt das Feld: −99. */
   function fensterSpalte(k) { return function (s, i) { return (s.nWin && (s.flags[i] & 1)) ? (s.nWin[i] >> (3 * k)) & 7 : null; }; }
 
+  /* Marken und Gründe gibt es nur für einen gemessenen, also stimmhaften Rahmen: In einem stimmlosen Rahmen kehrt der
+     Kern vorher zurück (dsp.js analyseAt, leere Marken), ebenso an einer Naht. Eine 0 läse sich dort als Aussage —
+     f0_unsure 0 als „Grundton sicher“, rauschboden 0 als „über dem Boden“, slot_unsure 0 als „Nummer eindeutig“ —, wo
+     nichts gemessen ist. Deshalb stehen diese Spalten in stimmlosen Rahmen wie jeder nicht gemessene Wert: Zahl −99,
+     Text leer. valid1…5 bleibt 0: „nicht gültig“ stimmt auch ohne Messung (README: 0 heißt ungültig). */
+  function stimmhaft(fn) { return function (s, i, V) { return (s.flags[i] & 1) ? fn(s, i, V) : null; }; }
+  function feld(name) { return function (s, i) { return s[name] ? s[name][i] : null; }; }
+  function flagBit(bit) { return function (s, i) { return (s.flags[i] & bit) ? 1 : 0; }; }
+
   // Rahmenweise Spalten: Name → Serienfeld (oder Funktion) und Nachkommastellen.
   var FRAME_COLUMNS = [
     ['t_s', 't', 3], ['voiced', function (s, i) { return (s.flags[i] & 1) ? 1 : 0; }, 0],
@@ -187,19 +196,19 @@
     ['bw1', 'bw1', 1], ['bw2', 'bw2', 1], ['bw3', 'bw3', 1], ['bw4', 'bw4', 1], ['bw5', 'bw5', 1],
     ['d34', 'd34', 1], ['d45', 'd45', 1], ['score_d34', 'score', 1],
     ['sfr_db', 'sfr', 2], ['sfr_norm_db', 'sfrn', 2], ['shr_db', 'shr', 2], ['cpp_db', 'cpp', 2], ['h1h2_db', 'h1h2', 2], ['h1h2c_db', 'h1h2c', 2],
-    ['slot_unsure', 'slotUnsure', 0], ['n_peaks', 'nPeaks', 0],
-    ['slot_grund1', slotGrundSpalte(0)], ['slot_grund2', slotGrundSpalte(1)], ['slot_grund3', slotGrundSpalte(2)], ['slot_grund4', slotGrundSpalte(3)], ['slot_grund5', slotGrundSpalte(4)],
-    ['rauschboden1', maskenSpalte('rauschBoden', 0), 0], ['rauschboden2', maskenSpalte('rauschBoden', 1), 0], ['rauschboden3', maskenSpalte('rauschBoden', 2), 0],
-    ['rauschboden4', maskenSpalte('rauschBoden', 3), 0], ['rauschboden5', maskenSpalte('rauschBoden', 4), 0],
+    ['slot_unsure', stimmhaft(feld('slotUnsure')), 0], ['n_peaks', stimmhaft(feld('nPeaks')), 0],
+    ['slot_grund1', stimmhaft(slotGrundSpalte(0))], ['slot_grund2', stimmhaft(slotGrundSpalte(1))], ['slot_grund3', stimmhaft(slotGrundSpalte(2))], ['slot_grund4', stimmhaft(slotGrundSpalte(3))], ['slot_grund5', stimmhaft(slotGrundSpalte(4))],
+    ['rauschboden1', stimmhaft(maskenSpalte('rauschBoden', 0)), 0], ['rauschboden2', stimmhaft(maskenSpalte('rauschBoden', 1)), 0], ['rauschboden3', stimmhaft(maskenSpalte('rauschBoden', 2)), 0],
+    ['rauschboden4', stimmhaft(maskenSpalte('rauschBoden', 3)), 0], ['rauschboden5', stimmhaft(maskenSpalte('rauschBoden', 4)), 0],
     ['n_win1', fensterSpalte(0), 0], ['n_win2', fensterSpalte(1), 0], ['n_win3', fensterSpalte(2), 0], ['n_win4', fensterSpalte(3), 0], ['n_win5', fensterSpalte(4), 0],
-    ['octave_corrected', function (s, i) { return (s.flags[i] & 2) ? 1 : 0; }, 0],
-    ['octave_ambiguous', function (s, i) { return (s.flags[i] & 128) ? 1 : 0; }, 0],
-    ['h1h2_unsure', function (s, i) { return (s.flags[i] & 8) ? 1 : 0; }, 0],
+    ['octave_corrected', stimmhaft(flagBit(2)), 0],
+    ['octave_ambiguous', stimmhaft(flagBit(128)), 0],
+    ['h1h2_unsure', stimmhaft(flagBit(8)), 0],
     // Grundton: Gegenprobe gerissen (gilt für alles aus F0 Abgeleitete), Grund, Korrektur, Cepstrum- und YIN-Wert
-    ['f0_unsure', bitMit('f0Grund', 512), 0], ['f0_grund', grundSpalte('f0Grund')], ['f0_korrektur', grundSpalte('f0Korrektur')],
-    ['f0_cep', 'f0Cep', 2], ['f0_yin', 'f0Yin', 2], ['octave_unter_grenze', bitMit('f0Grund', 4096), 0],
+    ['f0_unsure', stimmhaft(bitMit('f0Grund', 512)), 0], ['f0_grund', stimmhaft(grundSpalte('f0Grund'))], ['f0_korrektur', stimmhaft(grundSpalte('f0Korrektur'))],
+    ['f0_cep', 'f0Cep', 2], ['f0_yin', 'f0Yin', 2], ['octave_unter_grenze', stimmhaft(bitMit('f0Grund', 4096)), 0],
     // SHR: Raster des Hauptwerts, Wert auf dem anderen Raster (nur bei Zweifel), Zweifel und Belege
-    ['shr_grid_hz', 'shrGrid', 2], ['shr_other_db', 'shrOther', 2], ['shr_unsure', bitMit('shrGrund', 2048), 0], ['shr_grund', grundSpalte('shrGrund')],
+    ['shr_grid_hz', 'shrGrid', 2], ['shr_other_db', 'shrOther', 2], ['shr_unsure', stimmhaft(bitMit('shrGrund', 2048)), 0], ['shr_grund', stimmhaft(grundSpalte('shrGrund'))],
     ['shr_kamm_db', 'shrKamm', 2], ['shr_zweitpuls', 'shrZweitpuls', 3],
     ['flags', 'flags', 0]
   ];

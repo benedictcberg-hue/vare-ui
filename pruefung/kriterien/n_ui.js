@@ -693,7 +693,8 @@ module.exports = async function (H) {
    B2f: Ohne Grundton steht „–“ statt der Note „--“.
    B2g: Die Take-CSV nennt die Streuungsgrenze des Takes (spread_max_hz).
    B2h: Die Serie trägt die Fensterzahl je Formant: „nur in 2 Fenstern“ auch neben anderen Gründen (Hover, CSV).
-   B2i: H1*−H2* mit einer Artefakt-Bandbreite (unter 40 Hz) steht live, im Hover, im Detail und in der CSV da. */
+   B2i: H1*−H2* mit einer Artefakt-Bandbreite (unter 40 Hz) steht live, im Hover, im Detail und in der CSV da.
+   B2j: In stimmlosen Rahmen stehen Marken und Gründe der Rahmen-CSV als fehlend (−99, leer), nie als 0 = „sicher“. */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -1057,6 +1058,45 @@ async function kriterienB2(H) {
       (bad.length ? bad.join(' | ') + ' || ' : '') + 'Anteil ' + art + '/' + n + ', Hover mit/ohne ' + hMit + '/' + hOhne + ', CSV ' + csv + ' | Detail „' + dNeu.slice(dNeu.indexOf(')') + 1).trim() + '“ | live „' + (live[0] || '').slice(0, 120) + '“');
     p.schliessen();
   } catch (e) { check('B2i', 'Ablauf H1*−H2*-Bandbreite läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2j · Rahmen-CSV: in stimmlosen Rahmen keine 0, die sich als „sicher“ liest ---------- */
+  try {
+    const A = H.A, C = H.C, F = A.FLAG;
+    // Raumrauschen, /a/ auf G3, Atempause, /o/ auf D3 mit einer Naht darin, Raumrauschen.
+    const SIGj = H.concat([noise(Math.round(0.3 * SR), 3e-4, 121), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], H.BW5, 0.8, SR, { gain: 0.3 }),
+      noise(Math.round(0.3 * SR), 3e-4, 122), D.synthVowel(147, [500, 850, 2450, 3200, 4100], H.BW5, 0.8, SR, { gain: 0.3 }), noise(Math.round(0.3 * SR), 3e-4, 123)]);
+    const res = await A.analyseTake(SIGj, SR, { hopS: 0.02, naehteS: [1.8] }), ser = res.series;
+    // Soll unabhängig von csv.js: Spalten, die nur für einen gemessenen Rahmen etwas sagen.
+    const BITS = ['f0_unsure', 'octave_corrected', 'octave_ambiguous', 'octave_unter_grenze', 'h1h2_unsure', 'shr_unsure', 'slot_unsure', 'n_peaks'];
+    const TEXTE = ['f0_grund', 'f0_korrektur', 'shr_grund'];
+    for (let k = 1; k <= 5; k++) { BITS.push('rauschboden' + k, 'n_win' + k); TEXTE.push('slot_grund' + k); }
+    const FLAGBIT = { f0_unsure: F.F0UNSURE, octave_corrected: F.OCTAVE, octave_ambiguous: F.OCTAMBIG, octave_unter_grenze: F.OCTUNTER, h1h2_unsure: F.H1H2UNSURE, shr_unsure: F.SHRUNSURE };
+    const bad = [];
+    let stimmlos = 0, naht = 0, stimmhaft = 0;
+    for (const [d, sep] of [['standard', ','], ['excelde', ';']]) {
+      const z = C.framesToCsv(ser, d, H.V).replace(/^\uFEFF/, '').split('\r\n').filter(Boolean).map(x => x.split(sep)), kopf = z[0];
+      for (const sp of BITS.concat(TEXTE, ['valid1'])) if (kopf.indexOf(sp) < 0) bad.push(sp + ' fehlt');
+      for (let i = 0; i < ser.t.length && bad.length < 6; i++) {
+        const zeile = z[i + 1], w = sp => zeile[kopf.indexOf(sp)];
+        if (!(ser.flags[i] & F.VOICED)) {
+          if (d === 'standard') { stimmlos++; if (ser.flags[i] & F.NAHT) naht++; }
+          for (const sp of BITS) if (!/^-99$/.test(w(sp))) bad.push(d + ' t ' + i + ' stimmlos: ' + sp + ' ' + w(sp) + ' statt −99');
+          for (const sp of TEXTE) if (w(sp) !== '') bad.push(d + ' t ' + i + ' stimmlos: ' + sp + ' „' + w(sp) + '“ statt leer');
+          if (w('valid1') !== '0') bad.push(d + ' t ' + i + ' stimmlos: valid1 ' + w('valid1') + ' statt 0');
+        } else {
+          if (d === 'standard') stimmhaft++;
+          for (const sp in FLAGBIT) if (w(sp) !== ((ser.flags[i] & FLAGBIT[sp]) ? '1' : '0')) bad.push(d + ' t ' + i + ' stimmhaft: ' + sp + ' ' + w(sp));
+          for (let k = 1; k <= 5; k++) if (w('rauschboden' + k) !== ((ser.rauschBoden[i] & (1 << (k - 1))) ? '1' : '0')) bad.push(d + ' t ' + i + ' stimmhaft: rauschboden' + k + ' ' + w('rauschboden' + k));
+          if (w('n_peaks') !== String(ser.nPeaks[i]) || w('slot_unsure') !== String(ser.slotUnsure[i])) bad.push(d + ' t ' + i + ' stimmhaft: n_peaks ' + w('n_peaks') + ', slot_unsure ' + w('slot_unsure'));
+        }
+      }
+    }
+    const readme = quelle('README.md');
+    if (!/Stimmlose Rahmen/.test(readme) || !/nie 0, das sich als „sicher“ läse/.test(readme)) bad.push('README nennt die Regel nicht');
+    check('B2j', 'Rahmen-CSV: In stimmlosen Rahmen (auch an einer Naht) stehen Marken und Gründe als −99 bzw. leer, nie 0 = „sicher“; valid bleibt 0; in stimmhaften Rahmen die Bits der Serie (beide Dialekte)',
+      !bad.length && stimmlos >= 10 && naht >= 1 && stimmhaft >= 10,
+      (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + 'stimmlos ' + stimmlos + ' (davon an der Naht ' + naht + '), stimmhaft ' + stimmhaft + ', Spalten ' + BITS.length + ' Marken, ' + TEXTE.length + ' Gründe');
+  } catch (e) { check('B2j', 'Ablauf Rahmen-CSV stimmlos läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
