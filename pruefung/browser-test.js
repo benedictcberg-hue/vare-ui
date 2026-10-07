@@ -61,7 +61,10 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForFunction(() => document.getElementById('anmeldung') && !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
     check('Oeffentliche Huelle: vor der Verbindung nur die Token-Eingabe', await page.isHidden('#app') && await page.isHidden('#nav') && await page.isVisible('#token'));
     check('Huelle nennt das private Repo', (await page.textContent('#korpus-repo')).includes('vare-tools'), await page.textContent('#korpus-repo'));
-    check('Huelle enthaelt die Marken nicht im Quelltext', !(await page.content()).includes('404') && !(await page.content()).includes('1111'));
+    // Die Seite nennt ihre Adresse (#origin-name). Der freie Port kann selbst 404 oder 1111 enthalten
+    // und täuschte dann ein Leck vor; geprüft wird deshalb der Inhalt ohne die Portnummer.
+    const port = String(server.address().port), ohnePort = (await page.content()).split(port).join('');
+    check('Huelle enthaelt die Marken nicht im Quelltext', !ohnePort.includes('404') && !ohnePort.includes('1111'), 'Port ' + port);
     await page.fill('#token', 'falsches-token-mit-genug-zeichen');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => (document.getElementById('anmeldung-fehler').textContent || '').length > 0, null, { timeout: 10000 });
@@ -170,7 +173,11 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForFunction(() => /Neu analysiert/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 180000 });
     await page.waitForTimeout(500);
     const t2 = await page.evaluate(() => VARESTORE.allTakes());
-    check('Neu-Analyse: Historie hat einen Eintrag', t2[0].history && t2[0].history.length === 1, JSON.stringify(t2[0].history && t2[0].history.map(h => h.kernelVersion)));
+    // Die Historie trägt { analysis, summary }; der Kern steht in analysis.
+    check('Neu-Analyse: Historie hat einen Eintrag', t2[0].history && t2[0].history.length === 1, JSON.stringify(t2[0].history && t2[0].history.map(h => h.analysis && h.analysis.kernelVersion)));
+    await page.waitForFunction(() => /Frühere Auswertungen/.test(document.getElementById('take-detail').textContent), null, { timeout: 10000 }).catch(() => { });
+    const frueher = ((await page.textContent('#take-detail')).match(/Frühere Auswertungen:[^\n]*/) || [''])[0].trim();
+    check('Neu-Analyse: Detail nennt die frühere Auswertung mit Kern und Zeitpunkt', /^Frühere Auswertungen: \d+\.\d+\.\d+ \(\d+\.\d+\. \d\d:\d\d\)/.test(frueher), frueher);
     await page.screenshot({ path: path.join(SP, 'shot-detail.png'), fullPage: true });
     // Einstellungen: Regler ändern und Reload
     await page.goto(BASE + '/index.html#/aufnahme');
@@ -330,6 +337,61 @@ const WAV = path.join(SP, 'fake.wav');
     check('Erneut verbunden, Haken nicht angefasst: Token nicht im localStorage; Mikrofon aus, Knopf sagt „Mikrofon starten“',
       neu.lokal === null && neu.knopf === 'Mikrofon starten' && !neu.mic && neu.kalibrieren, JSON.stringify(neu));
     await ctx2.close();
+
+    // ---------- Sicherung mit nie Gemessenem, Befund statt Rost, Sprünge, verwaiste Referenz ----------
+    const C = require(path.join(ROOT, 'csv.js'));
+    const stat = (med, extra) => Object.assign({ med, q1: med - 10, q3: med + 10, n: 400, share: 0.95 }, extra);
+    // Erfundener Take: F3 stabil 2400 unter dem Mindestwert 2500, SHR max −12 dB, ein gehaltener Sprung — alles sicher
+    // gemessen. F4 und SNR nie gemessen (NaN).
+    const befund = { id: 'e2e-befund', code: 'Q', label: 'Befund', createdAt: '2026-03-02T09:00:00.000Z', durationS: 5, sampleRate: 48000, deviceLabel: 'Prüfgerät',
+      analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 }, analysedAt: '2026-03-02T09:00:00.000Z' }, history: [],
+      summary: { nFrames: 500, voicedShare: 0.9, validShare: 0.95, stableShare: 0.8, f0: stat(110, { note: 'A2' }), F: [600, 1100, 2400, NaN, 4000].map(f => stat(f)),
+        d34: stat(800), d34stable: { med: NaN, q1: NaN, q3: NaN, n: 0 }, d45: stat(800), f3stable: stat(2400, { n: 380 }), sfr: stat(-20), shr: stat(-30, { max: -12 }), cpp: stat(30),
+        h1h2: stat(1, { unsureShare: 0 }), h1h2c: stat(1), rms: stat(-20, { max: -10 }), floorDb: -80, floorSource: 'calibration', snrDb: NaN, tube: stat(17.5, { n: 100 }), tubeCm: 17.5,
+        perVowel: {}, octaveCorrectedShare: 0, octaveAmbiguousShare: 0, slotUnsureShare: 0, spruenge: { gehalten: 1, kante: 2, lambdaGehalten: 0.02, lambdaKante: 0.04, liste: [] } } };
+    befund.summary.F[3] = { med: NaN, q1: NaN, q3: NaN, n: 0, share: 0 };
+    fs.writeFileSync(path.join(SP, 'befund.json'), C.serializeBackup({ takes: [befund], series: {}, refs: { u: { d34: 600, takeId: 'fehlt', code: 'X', pinned: true } }, calibrations: [], settings: null, kernelVersion: D.VERSION }));
+    const ctx3 = await browser.newContext({ viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
+    await ctx3.route('https://api.github.com/**', korpusRoute);
+    const p3 = await ctx3.newPage();
+    p3.on('pageerror', e => errors.push(String(e && e.stack || e)));
+    p3.on('dialog', d => d.dismiss());
+    await p3.goto(BASE + '/index.html#/chronik');
+    await p3.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+    await p3.fill('#token', TOKEN); await p3.uncheck('#token-merken'); await p3.click('#btn-verbinden');
+    await p3.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 10000 });
+    // Nach dem Verbinden bestimmt die Seite die Referenzen neu (Gatterwerte aus dem Korpus); das abwarten.
+    await p3.waitForTimeout(600);
+    await p3.waitForSelector('#btn-import-json', { state: 'visible' });
+    const [fc3] = await Promise.all([p3.waitForEvent('filechooser'), p3.click('#btn-import-json')]);
+    await fc3.setFiles(path.join(SP, 'befund.json'));
+    await p3.waitForFunction(() => /Import:/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 10000 });
+    const imp = await p3.evaluate(() => VARESTORE.getTake('e2e-befund').then(t => ({ f4NaN: Number.isNaN(t.summary.F[3].med), snrNaN: Number.isNaN(t.summary.snrDb), f4: String(t.summary.F[3].med), meldung: document.querySelector('[role=status]').textContent })));
+    check('Sicherung → Import: nie gemessene Werte bleiben NaN in IndexedDB (nicht null)', imp.f4NaN && imp.snrNaN, JSON.stringify({ F4: imp.f4, snrNaN: imp.snrNaN }));
+    check('Import: angepinnte Referenz ohne ihren Take wird nicht ungeprüft Zielmarke', /angepinnte Referenz/.test(imp.meldung) && /(nicht übernommen|verwaist)/.test(imp.meldung), imp.meldung);
+    await p3.waitForSelector('#takes-list tr[data-id="e2e-befund"]', { timeout: 10000 });
+    const GOLD = 'rgb(201, 162, 39)', ROST = 'rgb(168, 90, 60)';
+    const zeile = await p3.$eval('#takes-list tr[data-id="e2e-befund"]', tr => { const td = tr.querySelectorAll('td'); const farbe = i => { const sp = td[i].querySelector('span'); return sp ? { klasse: sp.className, farbe: getComputedStyle(sp).color, text: sp.textContent } : null; }; return { f3: farbe(5), shr: farbe(7), rost: tr.querySelectorAll('.rust').length }; });
+    check('Chronik-Liste im Browser: F3 unter dem Mindestwert und SHR über −15 dB in Gold (Befund), kein Rost in der Zeile',
+      zeile.f3 && zeile.f3.klasse === 'befund' && zeile.f3.farbe === GOLD && zeile.shr && zeile.shr.farbe === GOLD && zeile.rost === 0, JSON.stringify(zeile));
+    const legende = await p3.textContent('#view-chronik');
+    check('Chronik nennt, was Rost und was Gold heißt', /Rost = Messwert unsicher/.test(legende) && /Gold ohne Strich = sicher gemessen, aber Befund/.test(legende));
+    // Verwaiste Referenz, wie analysis.js sie nach dem Vertrag liefert: sichtbar mit Grund, ohne Wert.
+    await p3.evaluate(() => VARESTORE.setMeta('refs', { a: { takeId: 'weg', code: 'Q', date: '2026-03-02T09:00:00.000Z', startS: 1, lenS: 0.8, pinned: true, verwaist: true, grund: 'Take Q ist gelöscht.', d34Zuletzt: 612.4 } }).then(() => VAREAPP.refreshChronik()));
+    await p3.waitForFunction(() => /verwaist/.test(document.getElementById('refs-table').textContent), null, { timeout: 5000 }).catch(() => { });
+    const refZeile = await p3.$eval('#refs-table', el => { const tr = el.querySelector('tbody tr'); return tr ? { wert: tr.querySelectorAll('td')[1].textContent.trim(), text: tr.textContent.replace(/\s+/g, ' ').trim(), loesen: !!tr.querySelector('button[data-act="unpin"]') } : null; });
+    check('Verwaiste Referenz: Grund sichtbar, kein Wert in der ΔF3–4-Spalte, Lösen-Knopf',
+      !!refZeile && refZeile.wert === '–' && /verwaist: Take Q ist gelöscht\./.test(refZeile.text) && /zuletzt 612 Hz/.test(refZeile.text) && refZeile.loesen, JSON.stringify(refZeile));
+    await p3.evaluate(() => { location.hash = '#/take/e2e-befund'; });
+    await p3.waitForFunction(() => document.querySelector('#take-detail .grid'), null, { timeout: 10000 });
+    const det = await p3.$$eval('#take-detail .stat', els => els.map(e => ({ k: e.querySelector('.k').textContent, klasse: e.className, farbe: getComputedStyle(e.querySelector('.v')).color, v: e.querySelector('.v').textContent })));
+    const dk = re => det.find(x => re.test(x.k)) || {};
+    const seite = await p3.textContent('#take-detail');
+    check('Detail im Browser: SHR, Tonsprünge und „nicht gewertet, F3 unter dem Mindestwert“ in Gold; nirgends „Register“; SNR „nicht messbar“',
+      dk(/^SHR/).farbe === GOLD && dk(/^Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms$/).farbe === GOLD && dk(/^kurze Kanten unter 90 ms$/).v.startsWith('2') && dk(/ΔF3–4 stabil/).farbe === GOLD
+      && dk(/^F4$/).farbe !== GOLD && !/Register/.test(seite) && /nicht messbar/.test(dk(/SNR/).v || ''),
+      ['SHR', 'Tonsprünge', 'kurze Kanten', 'ΔF3–4 stabil', 'SNR'].map(n => n + ': ' + JSON.stringify(dk(new RegExp(n)))).join(' | ').replace(new RegExp(ROST.replace(/[()]/g, '\\$&'), 'g'), 'ROST').replace(new RegExp(GOLD.replace(/[()]/g, '\\$&'), 'g'), 'GOLD'));
+    await ctx3.close();
   } catch (e) { fails.push('AUSNAHME ' + (e && e.stack || e)); console.log('AUSNAHME', e); }
   check('Keine JavaScript-Fehler auf der Seite', errors.length === 0, errors.join(' | '));
   if (logs.length) console.log('Konsole:', logs.slice(0, 10).join('\n'));
