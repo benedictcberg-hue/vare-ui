@@ -1170,10 +1170,16 @@
      legato Ganzton wurde zum gehaltenen Sprung von +14 HT, und ein Kiekser in die Oktave blieb
      unsichtbar. Der Tiefpass ist nicht die Ursache: Mit Rosenberg-Quelle bleibt der Fehler auch ohne
      ihn und mit 2500 Hz. Deshalb dieselbe Teilerkontrolle wie in der Hauptspur (subMultipleTest,
-     Teiler 3, dann 2), auf dem Spektrum des ungefilterten Fensters. Teiler 3: /ø/ mit F1 nahe 3·F0
-     (um 165 Hz) gab mit Impulsquelle Rahmen auf 3·F0; dort nimmt YIN auch 2/3 der Periode (Rahmen auf
-     1,5·F0, nur 61 % richtig) — deshalb zuletzt die Teiltonreihe bei 2f/3 (Teiler 3 von 2f). Bei einem
-     richtigen f liegen dort keine Linien. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
+     Teiler 4 bis 2, nicht unter fmin), auf dem Spektrum des ungefilterten Fensters. Teiler 5 nicht: Mit
+     rosa Raumrauschen (40 dB) bestand bei 35 ms Fenster die Reihe bei f/5, und 196/294 Hz wurden zu
+     78 Hz (gehalten −22,8 HT).
+     Teiler 3: /ø/ mit F1 nahe 3·F0 (um 165 Hz) gab mit Impulsquelle Rahmen auf 3·F0. Teiler 4: Im Raum
+     (Nachhall färbt die Teiltöne) stand /a/ 165–175 Hz mit F1 nahe 4·F0 in bis zu 151 von 170 Rahmen
+     auf 4·F0; zweimal halbieren scheitert, weil bei f/2 die neuen Linien zu schwach sind. Zuletzt die
+     Teiltonreihe bei 2f/3 (Teiler 3 von 2f): Bei F1 nahe 3·F0 nimmt YIN auch 2/3 der Periode (Rahmen
+     auf 1,5·F0, nur 61 % richtig); bei einem richtigen f liegen dort keine Linien.
+     pegel: Pegel des gefilterten Fensters in dB (mittlere Leistung, 0 dB = Vollaussteuerung); ihn
+     braucht detectJumps, um Ausklang und Brumm von Gesang zu trennen. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
      Hann-Fenster Linien erst ab etwa 60 Hz Abstand, mehr Stützstellen ändern daran nichts; mit 2048
      rechnete die Feinspur rund 1,5-mal so lange wie mit 1024. */
   var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1, FINE_FFT_N = 1024;
@@ -1202,21 +1208,22 @@
     for (k = 0; k < x.length; k++) cs[k + 1] = cs[k] + x[k] * x[k];
     var m = 0, c;
     for (c = n >> 1; c + (n >> 1) <= ds.length; c += hop) m++;
-    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), rand = new Uint8Array(m), i = 0;
+    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), rand = new Uint8Array(m), pegel = new Float64Array(m), i = 0;
     for (c = n >> 1; c + (n >> 1) <= ds.length && i < m; c += hop, i++) {
       var s0 = c - (n >> 1), p = detectF0(x.subarray(s0, s0 + n), sr, fmin, fmax, opts.yinThresh);
       var e1 = cs[s0 + h2] - cs[s0], e2 = cs[s0 + n] - cs[s0 + h2];
       var fx = p.f0;
       if (okt && isFinite(fx) && fx / 2 >= fmin) {
         var spk = spectrum(ds.subarray(s0, s0 + n), sr, FINE_FFT_N);
-        if (fx / 3 >= fmin && subMultipleTest(spk, fx, 3, 8, OCTAVE_ODD_EVEN_DB).pass) fx /= 3;
-        else if (subMultipleTest(spk, fx, 2, 8, OCTAVE_ODD_EVEN_DB).pass) fx /= 2;
+        var tl = subMultipleInfo(spk, fx, 8, OCTAVE_ODD_EVEN_DB, Math.min(4, Math.floor(fx / fmin)));
+        if (tl.halve) fx /= tl.m;
         else if (2 * fx / 3 >= fmin && subMultipleTest(spk, 2 * fx, 3, 8, OCTAVE_ODD_EVEN_DB).pass) fx = 2 * fx / 3;
       }
       t[i] = c / sr; f0[i] = fx; ap[i] = p.ap;
       rand[i] = (randR > 0 && Math.min(e1, e2) < randR * Math.max(e1, e2)) ? 1 : 0;
+      pegel[i] = 10 * Math.log10((e1 + e2) / n + 1e-20);
     }
-    return { t: t, f0: f0, ap: ap, rand: rand, hopS: hopS, windowS: winS, fmin: fmin, lowpassHz: lpHz };
+    return { t: t, f0: f0, ap: ap, rand: rand, pegel: pegel, hopS: hopS, windowS: winS, fmin: fmin, lowpassHz: lpHz };
   }
 
   /* Weite eines Laufs: Median der größten Gruppe von Rahmen, die auf ±1 HT übereinstimmen.
@@ -1303,9 +1310,15 @@
     var pauseS = (opts.pauseMs == null ? 120 : opts.pauseMs) / 1000;
     var glideAp = (opts.glideApMax == null) ? 0.15 : opts.glideApMax;
     var minLauf = (opts.minRunFrames == null) ? 3 : opts.minRunFrames;
+    var ausklangDb = (opts.ausklangDb == null) ? 6 : opts.ausklangDb;
+    var pauseTiefDb = (opts.pauseTiefDb == null) ? 17 : opts.pauseTiefDb;
+    var sperrDb = (opts.sperrDb == null) ? 20 : opts.sperrDb;
+    var einsatzDb = (opts.einsatzDb == null) ? 20 : opts.einsatzDb;
+    var phraseS = (opts.phraseS == null) ? 0.5 : opts.phraseS;
     var n = track.t.length, back = Math.max(3, Math.round(backS / track.hopS));
     var pauseFr = Math.max(1, Math.round(pauseS / track.hopS));
-    var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, i;
+    var w = Math.max(1, Math.round((track.windowS || FINE_WINDOW_S) / track.hopS));
+    var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, stumm = 0, tiefe = false, i, ref, st;
 
     /* Der Bezug gilt erst, wenn mindestens minRef Rahmen auf ±quietSemitones um ihren Median
        übereinstimmen. Sonst wird ein einzelner Fehlrahmen am Toneinsatz (Oktavfehler im ersten
@@ -1347,8 +1360,103 @@
       for (k = r.iBis + 1; k < n && k <= r.iBis + plateauMax; k++) { s = nah(k); if (!isFinite(s)) break; sum += s; z++; }
       return z > 0 && Math.abs(sum / z) >= minSt;
     }
+    /* Atempause im Raum (Befund N4). Nachhall setzt den alten Ton periodisch fort, bis tief unter den
+       Stimmpegel (ap < 0,45, kein Randrahmen); Brumm über fmin ist ebenso periodisch. Die 120-ms-Lücke
+       entstand so nie, der Bezug überdauerte die Pause, und die neue Phrase zählte als gehaltener
+       Sprung — gemessen in 144 von 160 Raumfällen (RT60 0,3–0,8 s, DRR 0–20 dB, Pause 0,2–0,5 s).
+       Eine Pause wird deshalb an drei Zeichen erkannt:
+       - Pegel relativ zum eigenen Ton (Ausklang): Ein gültiger Rahmen am Bezugston (±quietSemitones),
+         der ausklangDb unter dem lautesten Rahmen desselben Tons der letzten phraseS liegt, zählt zur
+         Lücke wie ein stimmloser. Verglichen wird mit demselben Ton, nicht mit dem lautesten Rahmen
+         überhaupt: Sonst galt ein leiserer anderer Ton nach einem lauten als Ausklang, er wurde nie
+         Bezug, und ein kurzer Ausflug wurde es an seiner Stelle (gemessen: −12 HT über 430 ms).
+         Leisere Töne ab quietSemitones neben dem Bezug bleiben Gesang.
+       - Tiefe: Die Lücke trennt Phrasen erst nach pauseMs und nur, wenn sie ganz stimmlos war (wie
+         bisher) oder ein gültiger Rahmen darin pauseTiefDb unter dem Phrasenpegel lag. Ohne die Tiefe
+         wären Decrescendo plus Konsonant schon eine Pause. 17 dB liegt zwischen den Messungen: Ein
+         Decrescendo um 14 dB in 150 ms vor 40–80 ms Konsonant erreicht 16 dB (mit 16 ging der Sprung
+         danach verloren); Nachhall RT60 0,8 s / DRR 0 dB nach nur 0,2 s Pause erreicht 17–18 dB und
+         wird damit nicht sicher getrennt (je nach Raumantwort bleibt ein gehaltener Scheinsprung).
+       - Neueinsatz: Ein Lauf beginnt nicht, wo der Pegel in den 100 ms ab dem Rahmen einsatzDb über
+         allem liegt, was in den pauseMs vor dem Einsatzfenster zu hören war; dann beginnt eine Phrase
+         und der Bezug wird neu aufgebaut. Das trennt Brumm (Vorlauf, lange Pausen), der sonst Bezug
+         wird. Ein Konsonant davor ändert nichts: In jenen pauseMs klingt noch der alte Ton.
+       Fehlrahmen des Ausklangs (Oktave, Duodezime des alten Tons) sind leise und liegen auf einem
+       Oberton des Bezugs. Ein Lauf darf nicht sperrDb unter dem Phrasenpegel beginnen; ein Lauf, der
+       überwiegend leise ist, harmonisch zum Bezug liegt und in Ausklang oder Pause endet statt in
+       lauten Gesang, wird verworfen. Ohne Pegel (ältere Spur) gilt die alte Regel. */
+    var pegel = track.pegel, mitPegel = !!pegel && ausklangDb > 0;
+    var pv = new Float64Array(n), pvTon = new Float64Array(n), phraseFr = Math.round(phraseS / track.hopS), q, q2;
+    if (mitPegel) for (q = 0; q < n; q++) {
+      var mx = -Infinity, mt = -Infinity;
+      for (q2 = Math.max(0, q - phraseFr); q2 <= q; q2++) if (gueltig(q2)) {
+        if (pegel[q2] > mx) mx = pegel[q2];
+        if (pegel[q2] > mt && isFinite(track.f0[q]) && Math.abs(12 * Math.log2(track.f0[q2] / track.f0[q])) < ruheSt) mt = pegel[q2];
+      }
+      pv[q] = mx; pvTon[q] = mt;
+    }
+    function neueinsatz(k) {
+      if (!mitPegel || k - w - pauseFr < 0) return false;
+      var vor = -Infinity, nach = -Infinity, j;
+      for (j = k - w - pauseFr; j < k - w; j++) if (pegel[j] > vor) vor = pegel[j];
+      for (j = k; j < n && j <= k + 4 * w; j++) if (pegel[j] > nach) nach = pegel[j];
+      return nach - vor >= einsatzDb;
+    }
+    function harmonisch(r) {
+      var c = kernGruppe(r.sts), h;
+      for (h = 2; h <= 5; h++) if (Math.abs(c - 12 * Math.log2(h)) <= 0.7) return true;
+      return Math.abs(c + 12) <= 0.7 || Math.abs(c + 12 * Math.log2(3)) <= 0.7;
+    }
+    function beende(r, still) {
+      if (still && 2 * r.leiseN >= r.dauerFrames && harmonisch(r)) return false;
+      if (!zaehlt(r)) return false;
+      events.push(r);
+      return true;
+    }
+    function pause() {
+      if (run) { beende(run, true); run = null; }
+      ruhe = []; seitRuhe = 0;
+    }
+    /* Zurück beim Bezug erst nach zwei Rahmen: Ein einzelner Mischrahmen am Rand eines lauten
+       Kieksers beendete den Lauf sonst mittendrin. Ein Lauf, der nicht zählt (zaehlt), ist ein
+       Messfehler am Übergang und wird verworfen, ohne den Bezug zu löschen. Nach einer Kante ist
+       die Stimme zurück am Bezugston, der Bezug bleibt; erst nach einem gehaltenen Wechsel wird
+       er neu aufgebaut. Gemessen: Wurde der Bezug nach jedem Lauf gelöscht, machte ein
+       Fehlrahmen am Übergang den neuen Ton zum Bezug, und die Rückkehr erschien als gehaltener
+       Sprung in Gegenrichtung (+16 HT gesungen, −16 HT über 580 ms gemeldet). */
+    function zurueckBeimBezug(still) {
+      if (++run.zurueck < 2) return;
+      if (beende(run, still) && run.bis - run.von + track.hopS >= holdS) { ruhe = []; seitRuhe = 0; }
+      run = null;
+    }
+    function verlaengere(leise) {
+      run.bis = track.t[i]; run.iBis = i; run.dauerFrames++; run.sts.push(st); run.fs.push(track.f0[i]); run.zurueck = 0;
+      if (leise) run.leiseN++;
+    }
+    /* Ein Sprung muss schnell einsetzen. Ein Portamento erreicht dieselbe Weite, aber über
+       Hunderte Millisekunden — das ist Tonbewegung, kein Wechsel. */
+    function beginne(leise) {
+      if (seitRuhe > maxOnset) return;
+      if (neueinsatz(i)) { ruhe = []; seitRuhe = 0; st = NaN; return; }
+      run = { von: track.t[i], bis: track.t[i], iVon: i, iBis: i, ref: ref, refMittel: mittelLage(ruhe, ref), dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0, leiseN: leise ? 1 : 0 };
+    }
     for (i = 0; i < n; i++) {
-      if (!gueltig(i)) {
+      var ok = gueltig(i), drueber = false, unter = 0, leise = false;
+      ref = NaN; st = NaN;
+      if (ok) {
+        /* Bezug sind die ruhigen Rahmen VOR dem Ereignis. Während eines Laufs wird er eingefroren —
+           wandert er mit, endet ein gehaltener Sprung nach rund 80 ms von selbst und wird als Kante
+           gemeldet. Das ist derselbe Fehler, der gehaltene Registerwechsel unsichtbar macht. */
+        ref = run ? run.ref : bezug();
+        st = (isFinite(ref) && ref > 0) ? 12 * Math.log2(track.f0[i] / ref) : NaN;
+        drueber = isFinite(st) && Math.abs(st) >= minSt;
+        if (mitPegel) {
+          if (drueber) unter = pv[i] - pegel[i];
+          else if (!(Math.abs(st) >= ruheSt)) unter = pvTon[i] - pegel[i];
+          leise = unter > ausklangDb;
+        }
+      }
+      if (!ok || leise) {
         /* Eine kurze stimmlose Lücke (Konsonant, Staccato) unterbricht weder den Bezug noch einen
            laufenden Sprung. Erst eine Pause ab pauseMs trennt Phrasen: Der Lauf endet, der Bezug wird
            verworfen — eine neue Phrase auf anderem Ton ist kein Sprung. Gemessen (Feinspur, Rahmen
@@ -1356,43 +1464,19 @@
            Staccato-Lücken und bei 30–60 ms Rauschen am Übergang eines Bruchs; dann wird der neue Ton
            zum Bezug und die Rückkehr erscheint als gehaltener Sprung in Gegenrichtung. 90–200 ms
            bestehen alle geprüften Fälle; 120 ms hält Abstand zu den längsten Lücken (80 ms) und zur
-           kürzesten Atempause (200 ms). */
-        if (++luecke >= pauseFr) {
-          if (run) { if (zaehlt(run)) events.push(run); run = null; }
-          ruhe = []; seitRuhe = 0;
-        }
+           kürzesten Atempause (200 ms). Leise Rahmen über der Schwelle führen einen Lauf weiter oder
+           beginnen ihn, zählen aber zur Lücke: Ein leiser Bruch endet erst mit lautem Gesang. */
+        if (!ok) stumm++;
+        else if (unter > pauseTiefDb) tiefe = true;
+        if (ok && drueber) { if (run) verlaengere(true); else if (unter <= sperrDb) beginne(true); }
+        else if (ok && run) zurueckBeimBezug(true);
+        if (++luecke >= pauseFr && (tiefe || stumm >= pauseFr)) pause();
         continue;
       }
-      luecke = 0;
-      /* Bezug sind die ruhigen Rahmen VOR dem Ereignis. Während eines Laufs wird er eingefroren —
-         wandert er mit, endet ein gehaltener Sprung nach rund 80 ms von selbst und wird als Kante
-         gemeldet. Das ist derselbe Fehler, der gehaltene Registerwechsel unsichtbar macht. */
-      var ref = run ? run.ref : bezug();
-      var st = (isFinite(ref) && ref > 0) ? 12 * Math.log2(track.f0[i] / ref) : NaN;
-      var drueber = isFinite(st) && Math.abs(st) >= minSt;
-
+      luecke = 0; stumm = 0; tiefe = false;
       if (run) {
-        if (drueber) {
-          run.bis = track.t[i]; run.iBis = i; run.dauerFrames++; run.sts.push(st); run.fs.push(track.f0[i]); run.zurueck = 0;
-        } else if (++run.zurueck >= 2) {
-          /* Zurück beim Bezug erst nach zwei Rahmen: Ein einzelner Mischrahmen am Rand eines lauten
-             Kieksers beendete den Lauf sonst mittendrin. Ein Lauf, der nicht zählt (zaehlt), ist ein
-             Messfehler am Übergang und wird verworfen, ohne den Bezug zu löschen. Nach einer Kante ist
-             die Stimme zurück am Bezugston, der Bezug bleibt; erst nach einem gehaltenen Wechsel wird
-             er neu aufgebaut. Gemessen: Wurde der Bezug nach jedem Lauf gelöscht, machte ein
-             Fehlrahmen am Übergang den neuen Ton zum Bezug, und die Rückkehr erschien als gehaltener
-             Sprung in Gegenrichtung (+16 HT gesungen, −16 HT über 580 ms gemeldet). */
-          if (zaehlt(run)) {
-            events.push(run);
-            if (run.bis - run.von + track.hopS >= holdS) { ruhe = []; seitRuhe = 0; }
-          }
-          run = null;
-        }
-      } else if (drueber) {
-        /* Ein Sprung muss schnell einsetzen. Ein Portamento erreicht dieselbe Weite, aber über
-           Hunderte Millisekunden — das ist Tonbewegung, kein Wechsel. */
-        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], iVon: i, iBis: i, ref: ref, refMittel: mittelLage(ruhe, ref), dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
-      }
+        if (drueber) verlaengere(false); else zurueckBeimBezug(false);
+      } else if (drueber) beginne(false);
       if (!run) {
         /* seitRuhe zählt nur Rahmen mit sicherer Periode (ap unter der YIN-Schwelle 0,15). Unsichere
            Rahmen in einem rauen Übergang sind kein Beleg für ein Gleiten — gemessen: Bei einem
@@ -1407,7 +1491,7 @@
         if (ruhe.length > back) ruhe.shift();
       }
     }
-    if (run && zaehlt(run)) events.push(run);
+    if (run) beende(run, false);
 
     return events.map(function (e) {
       var dauer = e.bis - e.von + track.hopS, kern = kernGruppe(e.sts), hs = [], fz = [], k;

@@ -1,6 +1,7 @@
 /* Kriterien der Nachprüfung, Rechenkern.
    A1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps) —
-     A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0), A1b Mischrahmen, 1,5·F0 und Schwelle am legato Tonwechsel.
+     A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0), A1b Mischrahmen, 1,5·F0 und Schwelle am legato Tonwechsel,
+     A1c Atempause im Raum und mit Brumm.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -180,5 +181,99 @@ module.exports = async function (H) {
     }
     const r2 = sammle(nah);
     check('A1b', 'legato Schritte 4,7 und 4,8 HT mit Vibrato ±50 Cent: kein Ereignis (gemessen wird die Lage des Tons, nicht die Vibratospitzen)', r2.ok === r2.n, r2.detail);
+  }
+  /* ---------- A1c: Atempause im Raum, Brumm ----------
+     Nachhall setzt den alten Ton in der Atempause periodisch fort, Brumm über 70 Hz ebenso. Ohne
+     Pegel überdauerte der Bezug die Pause, und die neue Phrase zählte als gehaltener Sprung (Befund
+     N4). Raum: Direktschall plus exponentiell abklingendes Rauschen (RT60), Verhältnis direkt zu
+     Nachhall DRR. Stimme um −19 dBFS, Raumrauschen 45 dB darunter. */
+  {
+    function raumantwort(rt60, drr, seed) {
+      const L = Math.round(Math.min(2, 1.4 * rt60) * SR), h = new Float64Array(L), rnd = zufall(seed), d0 = Math.round(0.003 * SR);
+      let e = 0;
+      for (let i = d0; i < L; i++) { let u = 0; for (let k = 0; k < 12; k++) u += rnd(); h[i] = (u - 6) * Math.pow(10, -3 * (i - d0) / SR / rt60); e += h[i] * h[i]; }
+      const g = Math.sqrt(Math.pow(10, -drr / 10) / e); for (let i = 0; i < L; i++) h[i] *= g; h[0] = 1; return h;
+    }
+    function falte(x, h) {   // Overlap-Add über die FFT des Kerns
+      const N = D.nextPow2(2 * h.length), B = N - h.length + 1, y = new Float64Array(x.length + N);
+      const hr = new Float64Array(N), hi = new Float64Array(N); hr.set(h); D.fft(hr, hi);
+      for (let s0 = 0; s0 < x.length; s0 += B) {
+        const re = new Float64Array(N), im = new Float64Array(N);
+        for (let i = s0; i < Math.min(x.length, s0 + B); i++) re[i - s0] = x[i];
+        D.fft(re, im);
+        for (let k = 0; k < N; k++) { const a = re[k] * hr[k] - im[k] * hi[k], b = re[k] * hi[k] + im[k] * hr[k]; re[k] = a; im[k] = -b; }
+        D.fft(re, im);
+        for (let i = 0; i < N; i++) y[s0 + i] += re[i] / N;
+      }
+      return y.subarray(0, x.length);
+    }
+    function phrase(f, dur, v, seed, ansatzS) {
+      const y = stimme(() => f, dur, v, { art: 'rosenberg', jit: 0.005, shim: 0.02, seed });
+      const a = Math.round((ansatzS || 0.03) * SR), b = Math.round(0.06 * SR), n = y.length;
+      for (let i = 0; i < n; i++) { let e = 1; if (i < a) e = i / a; if (n - i < b) e = Math.min(e, (n - i) / b); y[i] *= e; }
+      return y;
+    }
+    const still = s => new Float64Array(Math.round(s * SR));
+    function zweiPhrasen(f1, f2, pause, o) {
+      const x = H.concat([still(0.3), phrase(f1, 1, o.v || 'a', 3, o.ansatz), still(pause), phrase(f2, 1, o.v || 'a', 9, o.ansatz), still(0.4)]);
+      const y = o.rt ? falte(x, raumantwort(o.rt, o.drr, o.seed || 5)) : x;
+      let e = 0; const a0 = Math.round(0.4 * SR), a1 = Math.round(1.2 * SR); for (let i = a0; i < a1; i++) e += y[i] * y[i];
+      const g = Math.pow(10, -19 / 20) / Math.sqrt(e / (a1 - a0)), rnd = zufall(o.seed + 77 || 77), z = new Float64Array(y.length), nz = Math.pow(10, (-19 - 45) / 20);
+      for (let i = 0; i < y.length; i++) { let u = 0; for (let k = 0; k < 12; k++) u += rnd(); z[i] = g * y[i] + nz * (u - 6); }
+      if (o.brumm) {
+        const [fb, db] = o.brumm; let eb = 0; const b = new Float64Array(z.length);
+        for (let i = 0; i < z.length; i++) { let v = 0; for (let k = 1; k <= 8; k++) v += Math.sin(2 * Math.PI * k * fb * i / SR + k) / k; b[i] = v; eb += v * v; }
+        const gb = Math.pow(10, db / 20) / Math.sqrt(eb / z.length); for (let i = 0; i < z.length; i++) z[i] += gb * b[i];
+      }
+      return z;
+    }
+    const paare = [[196, 294], [220, 147], [165, 247], [262, 175]];
+    const raum = [], raumMild = [];
+    // Pause 0,2 s bei RT60 0,8 s prüft dieses Kriterium nicht: dort reicht die Tiefe des Nachhalls nicht
+    // sicher, siehe pauseTiefDb in dsp.js (offen).
+    for (const [rt, drr] of [[0.3, 6], [0.4, 15], [0.5, 3], [0.8, 0], [0.8, 6]]) for (const p of [0.2, 0.3, 0.5]) if (p >= 0.3 || rt <= 0.5) paare.forEach(([a, b], k) => {
+      const f = { name: 'RT60 ' + rt + ' DRR ' + drr + ' Pause ' + p + ' ' + a + '→' + b, sig: zweiPhrasen(a, b, p, { rt, drr, seed: 5 + k }) };
+      raum.push(Object.assign({ soll: e => !e.some(x => x.art === 'gehalten') }, f));
+      if (rt <= 0.6) raumMild.push(Object.assign({ soll: keins }, f));
+    });
+    let r = sammle(raum);
+    check('A1c', 'Atempause 0,3/0,5 s im Raum (RT60 0,3–0,8 s, DRR 0–15 dB), 0,2 s bis RT60 0,5 s, neue Phrase auf anderem Ton: kein gehaltenes Ereignis', r.ok === r.n, r.detail);
+    r = sammle(raumMild);
+    check('A1c', 'dieselbe Atempause bei RT60 0,3–0,5 s: gar kein Ereignis (auch keine Kante im Ausklang)', r.ok === r.n, r.detail);
+    // Brumm: Netz 50 Hz, Gleichrichter 100 Hz, 120 Hz, je mit Obertönen, im Vorlauf und in der Pause
+    const brumm = [];
+    for (const [fb, db] of [[50, -50], [100, -50], [100, -60], [100, -70], [120, -60]]) for (const p of [0.25, 0.8]) for (const gleich of [false, true]) for (const ans of [0.03, 0.2])
+      paare.slice(ans > 0.1 ? 1 : 0, ans > 0.1 ? 2 : 1).forEach(([a, b], k) => brumm.push({ name: fb + ' Hz ' + db + ' dBFS Pause ' + p + (gleich ? ' gleicher Ton' : '') + ' Einsatz ' + ans * 1000 + ' ms ' + a, sig: zweiPhrasen(a, gleich ? a : b, p, { brumm: [fb, db], ansatz: ans, seed: 11 + k }), soll: keins }));
+    r = sammle(brumm);
+    check('A1c', 'Brumm 50/100/120 Hz mit Obertönen, −50 bis −70 dBFS (Stimme −19 dBFS), Vorlauf und Atempause 0,25/0,8 s, Einsatz 30/200 ms: kein Ereignis', r.ok === r.n, r.detail);
+    // Ende zu Ende: Take im Raum durch analyseTake, Kalibrierboden gesetzt
+    {
+      const sig = zweiPhrasen(165, 247, 0.3, { rt: 0.4, drr: 6, seed: 21 });
+      const res = await H.A.analyseTake(Float32Array.from(sig), SR, { floorDb: -64, yieldMs: 0 });
+      const sp = res.summary.spruenge;
+      check('A1c', 'Take im Raum (RT60 0,4 s, DRR 6 dB, Pause 0,3 s) durch analyseTake: gehalten 0, λ_gehalten 0', sp.gehalten === 0 && sp.lambdaGehalten === 0, 'gehalten ' + sp.gehalten + ', Kanten ' + sp.kante + ', λ_gehalten ' + sp.lambdaGehalten);
+    }
+    // Gegenproben: Pegel allein ist keine Pause
+    const env = (y, g) => { const z = new Float64Array(y.length); for (let i = 0; i < y.length; i++) z[i] = y[i] * g(i / SR); return z; };
+    const db = x => Math.pow(10, x / 20);
+    const ton = (fz, dur, v, seed) => stimme(fz, dur, v, { art: 'rosenberg', jit: 0.01, shim: 0.02, seed });
+    const rausch60 = s => { const rnd = zufall(5), y = new Float64Array(Math.round(s * SR)); for (let i = 0; i < y.length; i++) y[i] = 0.001 * (2 * rnd() - 1); return y; };
+    const gegen = [];
+    for (const a of [147, 196]) for (const dec of [6, 10, 14]) for (const gap of [0.04, 0.08]) for (const v of ['a', 'i'])
+      gegen.push({ name: 'Decrescendo −' + dec + ' dB, Lücke ' + gap * 1000 + ' ms, ' + a + '+7 ' + NAME[v],
+        sig: mitRauschen(H.concat([env(ton(() => a, 0.8, v, saat++), t => t < 0.6 ? 1 : db(-dec * Math.min(1, (t - 0.6) / 0.15))), rausch60(gap), ton(() => HT(a, 7), 0.5, v, saat++)]), 40, saat++),
+        soll: e => e.length === 1 && e[0].art === 'gehalten' && Math.abs(e[0].halbtoene - 7) <= 1 });
+    for (const a of [110, 196, 294]) for (const v of ['a', 'i']) {
+      gegen.push({ name: 'Messa di voce ' + a + ' ' + NAME[v], sig: mitRauschen(env(ton(() => a, 2, v, saat++), t => db(-20 + 20 * Math.sin(Math.PI * t / 2))), 40, saat++), soll: keins });
+      gegen.push({ name: 'Tremolo ±4 dB ' + a + ' ' + NAME[v], sig: mitRauschen(env(ton(() => a, 2, v, saat++), t => db(4 * Math.sin(2 * Math.PI * 5 * t))), 40, saat++), soll: keins });
+      gegen.push({ name: 'Subito piano −15 dB ' + a + ' ' + NAME[v], sig: mitRauschen(env(ton(() => a, 2, v, saat++), t => t < 1 ? 1 : db(-15)), 40, saat++), soll: keins });
+    }
+    for (const a of [147, 196]) for (const pg of [-15, -25]) for (const v of ['a', 'o']) {
+      const leise = env(ton(t => (t > 0.4 && t < 0.7) ? HT(a, 7) : ((t > 0.9 && t < 0.95) ? 2 * a : a), 1.4, v, saat++), () => db(pg));
+      gegen.push({ name: 'leise Phrase ' + pg + ' dB nach lauter ' + a + ' ' + NAME[v], sig: mitRauschen(H.concat([ton(() => a, 1, v, saat++), still(0.4), leise]), 40, saat++),
+        soll: e => e.length === 2 && e[0].art === 'gehalten' && Math.abs(e[0].halbtoene - 7) <= 1 && e[1].art === 'kante' && Math.abs(e[1].halbtoene - 12) <= 1 });
+    }
+    r = sammle(gegen);
+    check('A1c', 'Gegenprobe Pegel: Decrescendo bis 14 dB vor Konsonantenlücke mit Sprung danach, Messa di voce, Tremolo, Subito piano, leise Phrase nach lauter: richtig gezählt', r.ok === r.n, r.detail);
   }
 };
