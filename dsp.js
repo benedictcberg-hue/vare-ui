@@ -772,7 +772,18 @@
     if (!isFinite(t.newMinusNoise)) return out;
     out.newMinusNoise = t.newMinusNoise;
     out.newMinusOld = t.newMinusOld;
-    if (!(out.newMinusNoise > marginDb && t.above >= Math.max(3, Math.ceil(0.6 * t.nNew)))) return out;
+    if (!(out.newMinusNoise > marginDb && t.above >= Math.max(3, Math.ceil(0.6 * t.nNew)))) {
+      /* Teilweise belegte Reihe: Im Hauch versinken die hohen neuen Linien im Rauschen, die tiefen stehen
+         (Hauch stärkt H1). Dann reicht es nicht zu den 60 %, und YIN behielt die Oktave darüber ohne Marke
+         (/o/ /e/ 196–233 Hz, HNR 5–8 dB: Grundton auf 2·F0, auch als Korrektur). Liegen die neuen Linien im
+         Mittel marginDb über dem Zwischenrauschen, mindestens 40 % (wenigstens zwei) einzeln darüber und im
+         Mittel weniger als marginDb unter den bekannten, ist f/m weder belegt noch ausgeschlossen: ambiguous.
+         Gemessen: 31 von 32 Rahmen auf 2·F0 erfasst; auf richtigen Grundtönen 5 zusätzliche Marken in 8058
+         behauchten Rahmen, keine in sauberen. */
+      out.ambiguous = out.newMinusNoise > marginDb && t.above >= Math.max(2, Math.ceil(0.4 * t.nNew)) && out.newMinusOld > -marginDb;
+      out.unterGrenze = out.ambiguous && g < F0_MIN_HZ;
+      return out;
+    }
     /* Unsicher ist nur das schmale Band, in dem die Spezifikation die Subharmonische überhaupt für
        nennenswert hält (SHR über −25 dB), sie aber noch nicht zum Teilen reicht. Darunter ist das
        Signal sauber — ein Dauerhinweis „Oktave unsicher“ bei jedem gesunden Ton wäre kein ehrlicher

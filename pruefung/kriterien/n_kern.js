@@ -10,7 +10,7 @@
      Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag, A3g tiefes enges
      Cluster, das nur eine LPC-Ordnung trennt, A3h Vokalwechsel im Fenster.
    A4: Grundton bei starkem Hauch (analyseAt: Gegenprobe und Teilerkontrolle im Rauschen) —
-     A4a hohe Lage (Befund N17), A4b Unterton in behauchter Stimme.
+     A4a hohe Lage (Befund N17), A4b Unterton in behauchter Stimme, A4c Oktave darüber bei teilweise belegter Reihe.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -967,5 +967,24 @@ module.exports = async function (H) {
       R.length >= 3000 && unter.length >= 300 && ohne.length <= 0.01 * unter.length && korr.length === 0 && fehl.length <= 0.005 * richtig.length,
       R.length + ' Rahmen, richtig ' + richtig.length + ' (davon \'teiltonreihe\' ' + fehl.length + '), Unterton ' + unter.length + ', ohne Marke ' + ohne.length + ', dorthin korrigiert ' + korr.length +
       (ohne.length ? ' — offen (Nachweisgrenze): ' + ohne.slice(0, 4).map(r => r.nm).join(' | ') : '') + (korr.length ? ' — ' + korr.slice(0, 3).map(r => r.nm).join(' | ') : ''));
+  }
+
+  /* A4c Oktave darüber: Im Hauch steht von der ungeraden Reihe bei f/2 nur der tiefe Teil über dem Rauschen; die
+     Teilerkontrolle teilte nicht und meldete nichts, YIN oder die Korrektur blieben auf 2·F0 (/o/ /e/ mit F1 nahe
+     2·F0). Jetzt „Oktave offen“ (octaveAmbiguous). Der Anteil richtiger Grundtöne mit dieser Marke steht im
+     Bericht (er stammt überwiegend aus dem schmalen Band −25…−20 dB, das es schon vorher gab). */
+  {
+    let s4 = 42000; const R = [];
+    for (const v of ['o', 'e']) for (const f0 of [196, 208, 220, 233]) for (const hnr of [5, 8]) for (const vib of [0, 40]) for (let sd = 0; sd < 2; sd++) {
+      const fz = vib ? vibrato(() => f0, 5.5, vib, sd) : () => f0;
+      const x = raum4(rampen4(q4({ f0: fz, dur: 0.9, jit: 0.008, shim: 0.02, hnr, seed: s4++ }, v), 0.03, 0.03), 40, s4++);
+      for (const r of rahmen4(x, zeiten4(0.2, 0.7, 0.02))) if (r.voiced) { r.soll = fz(r.t); r.nm = name4(r, v, f0 + ' HNR ' + hnr + (vib ? ' Vibrato' : '')); R.push(r); }
+    }
+    const hoch = R.filter(r => Math.abs(r.f0 / (2 * r.soll) - 1) <= 0.03), richtig = R.filter(r => Math.abs(r.f0 / r.soll - 1) <= 0.03);
+    const ohne = hoch.filter(r => !markiert4(r)), korr = hoch.filter(r => r.f0Korrektur), amb = richtig.filter(r => r.octaveAmbiguous);
+    check('A4c', 'behauchte Stimme mit F1 nahe 2·F0 (/o/ /e/ 196–233 Hz, HNR 5/8 dB, mit Vibrato, Raumrauschen 40 dB), Grundton eine Oktave zu hoch: jeder trägt octaveAmbiguous oder f0Unsure, keiner durch die Korrektur dorthin gesetzt',
+      R.length >= 1000 && hoch.length >= 30 && ohne.length === 0 && korr.length === 0,
+      R.length + ' Rahmen, Oktave zu hoch ' + hoch.length + ', ohne Marke ' + ohne.length + ', dorthin korrigiert ' + korr.length + (ohne.length + korr.length ? ' — ' + ohne.concat(korr).slice(0, 4).map(r => r.nm).join(' | ') : '') +
+      '; Bericht: richtige Grundtöne mit „Oktave offen“ ' + amb.length + ' von ' + richtig.length);
   }
 };
