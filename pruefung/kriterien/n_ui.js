@@ -688,7 +688,8 @@ module.exports = async function (H) {
    B2a: Das Take-Ergebnis zeigt schwach belegte Formanten und ein zweideutiges Bestsegment wie das Detail (N8).
    B2b: Die Neu-Analyse nennt jede geänderte Rechenweise und sperrt währenddessen den Take-Knopf (N20).
    B2c: Kein Take-Code, den pandas oder Excel als fehlend, Zahl oder Wahrheitswert lesen (N18).
-   B2d: Die Sicherung zählt die ganze Datei und scheitert nie mit „Invalid string length“ (N19). */
+   B2d: Die Sicherung zählt die ganze Datei und scheitert nie mit „Invalid string length“ (N19).
+   B2e: README und pages.yml nennen dieselbe Pages-Quelle „GitHub Actions“ (N24). */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -885,6 +886,21 @@ async function kriterienB2(H) {
       'Grenze ' + grenzeVorgabe + ' | nur Messwerte ' + z(ohne) + ' | mit Audio ' + z(mit) + ' || A (Grenze dazwischen) ' + z(a) + ' || B (unter den Messwerten) ' + z(b) + ' || C (RangeError mit Audio) ' + z(c) + ' || D (RangeError ohne Audio) ' + z(d));
     p.schliessen();
   } catch (e) { check('B2d', 'Ablauf Sicherung läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2e · README und pages.yml nennen dieselbe Pages-Quelle ---------- */
+  try {
+    // Hängt die Veröffentlichung am Prüflauf (deploy needs test), muss Pages auf „GitHub Actions“ stehen. Mit der Quelle
+    // „Deploy from a branch“ veröffentlicht GitHub jeden Push selbst, ohne Prüflauf, und das Gate greift nicht (N24).
+    const readme = quelle('README.md'), pages = quelle(path.join('.github', 'workflows', 'pages.yml'));
+    const gate = /\bdeploy:[\s\S]*?\bneeds:\s*\[?\s*test\b/.test(pages), quelleYml = /Source:\s*"?GitHub Actions/.test(pages);
+    const abschnitt = (/\*\*GitHub Pages:\*\*([\s\S]*?)(?:\n\n|\n\*\*|\nAdresse)/.exec(readme) || [])[1] || '';
+    const nenntActions = /Source:\s*\**"?GitHub Actions/.test(abschnitt);
+    // „Deploy from a branch“ darf nur als Warnung („Nicht …“) dastehen, nie als Anweisung.
+    const branchAnweisung = abschnitt.split(/(?<=\.)\s+/).some(satz => /Deploy from a branch/.test(satz) && !/\bNicht\b|\bnicht\b/.test(satz));
+    check('B2e', 'README richtet Pages so ein, wie pages.yml es verlangt: Source „GitHub Actions“, damit nur nach grünem Prüflauf veröffentlicht wird; „Deploy from a branch“ nicht als Anweisung (N24)',
+      gate && quelleYml && nenntActions && !branchAnweisung,
+      'pages.yml: deploy needs test=' + gate + ', verlangt GitHub Actions=' + quelleYml + ' | README: „' + abschnitt.replace(/\s+/g, ' ').trim().slice(0, 160) + '“, nennt GitHub Actions=' + nenntActions + ', Branch als Anweisung=' + branchAnweisung);
+  } catch (e) { check('B2e', 'Ablauf README/pages.yml läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

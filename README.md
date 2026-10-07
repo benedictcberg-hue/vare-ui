@@ -50,7 +50,10 @@ im Code — sie kommen aus `korpus.json` im privaten Repo.
 
 ## Start
 
-**GitHub Pages:** Settings → Pages → Deploy from a branch, **main** / **(root)**.
+**GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**. Veröffentlicht wird über
+`.github/workflows/pages.yml`, und zwar nur, wenn der Prüflauf auf ubuntu-latest und windows-latest grün ist.
+Nicht die Quelle „Deploy from a branch“ wählen: Dann veröffentlicht GitHub jeden Push auf main selbst, ohne
+Prüflauf, und das Gate in `pages.yml` greift nicht.
 Adresse: `https://benedictcberg-hue.github.io/vare-ui/`
 
 **Lokal (Windows 10, Edge oder Chrome):** im Ordner `py -m http.server 8000` (oder `python -m http.server 8000`), dann
