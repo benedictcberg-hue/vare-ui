@@ -447,6 +447,11 @@ const WAV = path.join(SP, 'fake.wav');
       'Fortsetzen nach dem Neuladen: derselbe Take mit Bezeichnung, Stelle in der Sitzung, WAV und Rahmenverlauf; nichts mehr offen',
       'Aussetzer von 1,5 s mitten im Take: als Signallücke erkannt, Take gespeichert und in Ergebnis, Detail und CSV als lückenhaft gekennzeichnet'];
     const neuladenErledigt = [], neuladenCheck = (k, ok, d) => { neuladenErledigt.push(k); check(NEULADEN_NAMEN[k], ok, d); };
+    /* page.waitForFunction wartet nicht auf ein Promise: Gibt die Bedingung eines zurück, gilt sie sofort als erfüllt
+       (Playwright: Promise.resolve(false) war nach 31 ms „erfüllt“). Das Warten auf den fortgesetzten Take endete deshalb
+       sofort; ob er gespeichert war, hing daran, ob die Analyse beim folgenden Warten auf !busy schon lief — unter Last
+       riss „Fortsetzen nach dem Neuladen“ zufällig. Bedingungen, die IndexedDB lesen, laufen über evaluate. */
+    const bisWahr = async (seite, fn, ms) => { const t0 = Date.now(); for (;;) { if (await seite.evaluate(fn).catch(() => false)) return true; if (Date.now() - t0 > ms) return false; await seite.waitForTimeout(300); } };
     let ctx4 = null;
     try {
       ctx4 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
@@ -518,7 +523,7 @@ const WAV = path.join(SP, 'fake.wav');
         && angebot.sichtbar && /Neuladen-Probe/.test(angebot.text) && angebot.knoepfe.join('|') === 'Analyse fortsetzen|WAV sichern|Verwerfen',
         JSON.stringify({ vor, dialoge, nachAbgelehnt, nochInAnalyse, angebot: angebot.text.slice(0, 90), knoepfe: angebot.knoepfe }));
       await p4.click('#offene-analysen button[data-offen="weiter"]').catch(() => { });
-      await p4.waitForFunction(() => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Neuladen-Probe')), null, { timeout: 60000, polling: 300 }).catch(() => { });
+      await bisWahr(p4, () => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Neuladen-Probe')), 60000);
       await p4.waitForFunction(() => !VAREAPP.state.busy, null, { timeout: 30000 }).catch(() => { });
       const nach = await p4.evaluate(id => Promise.all([VARESTORE.getTake(id), VARESTORE.allPending(), VARESTORE.hasAudio(id), VARESTORE.getSeries(id)]).then(r => ({ code: r[0] && r[0].code, label: r[0] && r[0].label, pos: r[0] && r[0].sitzung && r[0].sitzung.position, pending: r[1].length, audio: r[2], serie: !!r[3], angebotWeg: document.getElementById('offene-analysen').hidden, ergebnis: document.getElementById('take-result').textContent.slice(0, 40) })), vor.pending[0] || '');
       neuladenCheck(2,
@@ -532,7 +537,7 @@ const WAV = path.join(SP, 'fake.wav');
       await p4.waitForTimeout(2000); await p4.evaluate(() => { window.__drop = true; });
       await p4.waitForTimeout(1500); await p4.evaluate(() => { window.__drop = false; });
       await p4.waitForTimeout(1500); await p4.click('#btn-take');
-      await p4.waitForFunction(() => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Aussetzer-Probe')), null, { timeout: 60000, polling: 300 }).catch(() => { });
+      await bisWahr(p4, () => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Aussetzer-Probe')), 60000);
       await p4.waitForFunction(() => !VAREAPP.state.busy, null, { timeout: 30000 }).catch(() => { });
       const lk = await p4.evaluate(() => VARESTORE.allTakes().then(ts => { const t = ts.find(x => x.label === 'Aussetzer-Probe'); if (!t) return null;
         const csv = VARECSV.takesToCsv([t], 'standard').split(/\r?\n/), kopf = csv[0].split(','), wert = csv[1].split(',')[kopf.indexOf('signal_gap_s')];
