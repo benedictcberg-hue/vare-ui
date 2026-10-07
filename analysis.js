@@ -44,9 +44,18 @@
       var quiet = levels.slice(0, cut);
       return { db: Math.max(-95, D.median(quiet)), known: true, gapDb: gap };
     }
-    // Keine Stille: der Boden liegt unter allem Gemessenen. Als Schranke der leiseste Rahmen
-    // minus 12 dB — damit verwirft die Stimmhaftigkeitsprüfung keinen gemessenen Rahmen.
-    return { db: Math.max(-95, D.quantile(levels, 0.05) - 12), known: false, gapDb: gap };
+    /* Keine Stille: Der Boden liegt unter dem leisesten Rahmen, wie weit, ist unbekannt. Jede Annahme
+       darüber verwirft gemessene Stimme. Früher q05 − 12: die Schwelle Boden + 12 lag genau auf q05,
+       die leisesten 5 % jedes Takes galten als Pause (gehaltener Vokal 22 von 395 Rahmen, im
+       Decrescendo die letzten 0,22 s), obwohl sie weit über dem echten Boden lagen (dort rund 45 dB;
+       Bericht 2, Befund 3). Jetzt leisester Rahmen − 24: die Schwelle liegt 12 dB unter allem
+       Gemessenen. Mit − 12 fielen 1–3 Rahmen je Take heraus: der leiseste selbst (Pegel gleich
+       Schwelle) und Randrahmen, die analyseAt mit kürzerem Fenster leiser misst; mit q05 − 24 ein
+       schneller Ausklang am Ende (30 dB in 0,3 s: 10 Rahmen). Über stimmhaft entscheidet dann
+       die Periodizität (ap < 0,45); Rauschen ohne Stimme bleibt stimmlos. Periodischen Brumm (100 Hz)
+       trennt auch die alte Regel nicht, nur eine Kalibrierung. Die Zahl ist eine Arbeitsannahme, kein
+       gemessener Boden: summarise gibt sie nur als voicingFloorDb aus, floorDb bleibt NaN. */
+    return { db: Math.max(-95, levels[0] - 24), known: false, gapDb: gap };
   }
 
   function makeSeries(n) {
@@ -102,9 +111,10 @@
   /* Fassung der Zusammenfassung. Erhöhen, sobald bei gleichen Rahmenwerten andere Rahmen stabil,
      gewertet, Segment oder Bestwert werden (hier oder im Offline-Gatter von vowel.js) — ältere Takes
      sind dann nicht mehr gleich zusammengefasst. Takes ohne Angabe stammen aus Fassung 1, vor der
-     Prüfung auf zweideutige Vokalzuordnung. Fassung 3: stabil zählt nur noch stimmhafte Rahmen. */
+     Prüfung auf zweideutige Vokalzuordnung. Fassung 3: stabil zählt nur noch stimmhafte Rahmen;
+     ohne Stille und ohne Kalibrierung fallen die leisesten 5 % nicht mehr als Pause heraus. */
   var SUMMARY_VERSION = 3;
-  var FASSUNG_FEHLT = { 1: 'ohne Prüfung auf zweideutige Vokalzuordnung', 2: 'stimmlose Rahmen zählten als stabil' };
+  var FASSUNG_FEHLT = { 1: 'ohne Prüfung auf zweideutige Vokalzuordnung', 2: 'stimmlose Rahmen zählten als stabil, ohne Stille und Kalibrierung fielen die leisesten 5 % als Pause heraus' };
 
   /* Segmente: maximale Läufe mit gate = stabil und gleicher Klasse, Mindestlänge, Mindestanteil Score.
      ambiguousShare = Anteil der Rahmen mit zweideutiger Vokalzuordnung (FLAG.VOWELAMBIG). */
@@ -139,7 +149,11 @@
     var s = {};
     s.nFrames = n; s.hopS = meta.hopS; s.durationS = meta.durationS;
     s.voicedShare = n ? voicedIdx.length / n : 0;
-    s.floorDb = meta.floorDb; s.floorSource = meta.floorSource;
+    /* Unbekannter Boden ist keine Zahl (Anzeige „–“, CSV −99): sonst stünde die Arbeitsannahme aus
+       estimateFloor als „Rauschboden“ da. voicingFloorDb ist der Boden, gegen den die
+       Stimmhaftigkeit geprüft wurde (Pegel > voicingFloorDb + 12), gemessen oder angenommen. */
+    s.floorKnown = meta.floorKnown !== false;
+    s.floorDb = s.floorKnown ? meta.floorDb : NaN; s.voicingFloorDb = meta.floorDb; s.floorSource = meta.floorSource;
     var f0s = pick('f0', voicedIdx);
     s.f0 = stats(f0s); s.f0.note = D.hzToNote(s.f0.med);
     s.F = [];
@@ -171,7 +185,6 @@
     s.rms = stats(rmsAll, true);
     var lvl = D.median(pick('rms', voicedIdx));
     // SNR nur, wenn der Boden gemessen ist. Sonst wäre es die Differenz zu einer erfundenen Zahl.
-    s.floorKnown = meta.floorKnown !== false;
     s.snrDb = (s.floorKnown && isFinite(lvl) && isFinite(meta.floorDb)) ? lvl - meta.floorDb : NaN;
     s.octaveCorrectedShare = voicedIdx.length ? pick('flags', voicedIdx, function (j) { return series.flags[j] & FLAG.OCTAVE; }).length / voicedIdx.length : 0;
     s.octaveAmbiguousShare = voicedIdx.length ? pick('flags', voicedIdx, function (j) { return series.flags[j] & FLAG.OCTAMBIG; }).length / voicedIdx.length : 0;

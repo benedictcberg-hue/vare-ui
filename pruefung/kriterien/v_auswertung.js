@@ -383,6 +383,74 @@ module.exports = async function (H) {
     const alt = JSON.parse(JSON.stringify(T_EIN)); alt.summary.summaryVersion = 2;
     const g = uv(alt, AKTUELL);
     check('V3', 'Fassung der Zusammenfassung erhöht: ein Take aus Fassung 2 (stimmlose Rahmen als stabil gezählt) ist nicht vergleichbar, Grund benannt',
-      A.SUMMARY_VERSION >= 3 && /Fassung 2 statt \d+ \(stimmlose Rahmen zählten als stabil\)/.test(g) && !A.computeRefs([alt], {}, AKTUELL).a, 'Fassung ' + A.SUMMARY_VERSION + ' — „' + g + '“');
+      A.SUMMARY_VERSION >= 3 && /Fassung 2 statt \d+ \(stimmlose Rahmen zählten als stabil/.test(g) && !A.computeRefs([alt], {}, AKTUELL).a, 'Fassung ' + A.SUMMARY_VERSION + ' — „' + g + '“');
+  }
+
+  /* V3c: Rauschboden ohne Stille und ohne Kalibrierung (Bericht 2, Befund 3). Der Boden ist dann
+     unbekannt (T24). Früher galt q05 − 12 als Boden; die Stimmhaftigkeit verlangt Pegel > Boden + 12,
+     also fielen die leisesten 5 % jedes Takes als Pause heraus, im Decrescendo dessen Ende. Gegenprobe
+     ist derselbe Take mit dem echten Boden (wie nach einer Kalibrierung). */
+  const { C } = H;
+  {
+    // Vokal fast ohne eigenes Rauschen (synth mit 300 dB Abstand), Hüllkurve in dB, dann Raumrauschen
+    // mit festem Effektivwert dazu. Echter Boden = Pegel des Rauschens nach Wandlung auf 12 kHz.
+    const mitBoden = (f0fn, dur, envDb, nzRms, seed) => {
+      const v = synth(f0fn, () => VOK.a, dur, BW5, 300, seed).y, nz = noise(v.length, nzRms * Math.sqrt(3), seed + 1);
+      for (let i = 0; i < v.length; i++) v[i] = v[i] * Math.pow(10, envDb(i / SR) / 20) + nz[i];
+      return { y: v, boden: D.rmsDb(D.resample(nz, SR, TSR)) };
+    };
+    const FAELLE = [
+      ['gehaltenes /a/ 147 Hz, Vibrato ±40 Cent', mitBoden(vib(147, 5.5, 40), 2.5, () => 0, 3e-4, 31)],
+      ['Decrescendo 30 dB, /a/ 98 Hz', mitBoden(vib(98, 5.5, 0), 2.5, t => -30 * t / 2.5, 1e-4, 33)],
+      ['Ausklang 30 dB in 0,3 s, /a/ 196 Hz', mitBoden(vib(196, 5.5, 0), 2.0, t => (t > 1.7 ? -30 * (t - 1.7) / 0.3 : 0), 1e-4, 35)]
+    ];
+    const falsch = [], info = [], erg = [];
+    for (const [name, sig] of FAELLE) {
+      const ru = await A.analyseTake(sig.y, SR, {}), rk = await A.analyseTake(sig.y, SR, { floorDb: sig.boden });
+      erg.push({ ru, rk, boden: sig.boden });
+      const fu = ru.series.flags, fk = rk.series.flags; let verl = 0, extra = 0, vk = 0, tVerl = '';
+      for (let i = 0; i < fk.length; i++) {
+        const a = fk[i] & A.FLAG.VOICED, b = fu[i] & A.FLAG.VOICED; if (a) vk++;
+        if (a && !b) { verl++; if (!tVerl) tVerl = ' ab t = ' + ru.series.t[i].toFixed(2) + ' s'; } if (!a && b) extra++;
+      }
+      const su = ru.summary;
+      if (verl || extra || su.floorKnown !== false || !Number.isNaN(su.snrDb) || vk === 0) falsch.push(name + ': ' + verl + ' verloren' + tVerl + ', ' + extra + ' zusätzlich, bekannt ' + su.floorKnown + ', SNR ' + su.snrDb);
+      info.push(name + ' ' + (vk - verl) + '/' + vk);
+    }
+    check('V3', 'Ohne Stille und ohne Kalibrierung: gehaltener Vokal, Decrescendo und schneller Ausklang um 30 dB verlieren keinen stimmhaften Rahmen gegenüber dem echten Boden; Boden bleibt unbekannt, SNR NaN',
+      falsch.length === 0, falsch.join(' | ') || info.join('; '));
+
+    // Ein unbekannter Boden ist keine Zahl: Anzeige „–“, CSV −99. Die Arbeitsannahme steht getrennt da.
+    const { ru, rk, boden } = erg[0], s = ru.summary;
+    let minRms = Infinity; for (let i = 0; i < ru.series.rms.length; i++) if (ru.series.rms[i] < minRms) minRms = ru.series.rms[i];
+    const L = C.takesToCsv([{ id: 'u', code: 'U', createdAt: '2026-10-07T10:00:00Z', summary: s }], 'standard').split('\n'), kopf = L[0].split(','), zeile = L[1].split(',');
+    const feld = k => zeile[kopf.indexOf(k)];
+    check('V3', 'Boden unbekannt: summary.floorDb NaN, CSV floor_dbfs −99 mit floor_source unknown; voicingFloorDb trägt die Arbeitsannahme 12 dB unter dem leisesten Rahmen',
+      Number.isNaN(s.floorDb) && s.floorSource === 'unknown' && feld('floor_dbfs') === '-99.00' && feld('floor_source') === 'unknown' && isFinite(s.voicingFloorDb) && s.voicingFloorDb + 12 < minRms,
+      'floorDb ' + s.floorDb + ', CSV ' + feld('floor_dbfs') + '/' + feld('floor_source') + ', voicingFloorDb ' + (isFinite(s.voicingFloorDb) ? s.voicingFloorDb.toFixed(1) : s.voicingFloorDb) + ', leisester Rahmen ' + minRms.toFixed(1));
+    const sk = rk.summary;
+    check('V3', 'Boden bekannt (kalibriert): floorDb wie bisher, voicingFloorDb gleich floorDb', sk.floorDb === boden && sk.voicingFloorDb === boden && sk.floorKnown === true, 'floorDb ' + sk.floorDb.toFixed(2) + ', voicingFloorDb ' + sk.voicingFloorDb);
+  }
+  {
+    // Gegenseite: Rauschen ohne Stimme und ohne Stille wird nicht stimmhaft (die Pegelschwelle liegt
+    // jetzt unter allem Gemessenen, es entscheidet die Periodizität).
+    const farbig = (n, rms, art, seed) => {
+      const w = noise(n, 1, seed), y = new Float64Array(n); let z = 0;
+      for (let i = 0; i < n; i++) {
+        if (art === 'weiß') y[i] = w[i];
+        else if (art === 'rosa') { z = 0.877 * z + 0.123 * w[i]; y[i] = 4 * z + 0.15 * w[i]; }
+        else if (art === 'braun') { z = 0.998 * z + 0.02 * w[i]; y[i] = z; }
+        else y[i] = 0.6 * Math.sin(2 * Math.PI * 50 * i / SR) + 0.35 * Math.sin(2 * Math.PI * 100 * i / SR + 1) + 0.2 * Math.sin(2 * Math.PI * 150 * i / SR + 2) + 0.3 * w[i];
+      }
+      let e = 0; for (let i = 0; i < n; i++) e += y[i] * y[i]; const g = rms / Math.sqrt(e / n);
+      for (let i = 0; i < n; i++) y[i] *= g;
+      return y;
+    };
+    const falsch = [];
+    for (const [art, db] of [['weiß', -60], ['weiß', -35], ['rosa', -50], ['braun', -50], ['Netzbrumm 50 Hz mit Rauschen', -45]]) {
+      const r = await A.analyseTake(farbig(2 * SR, Math.pow(10, db / 20), art, 41), SR, {}), s = r.summary;
+      if (s.voicedShare !== 0 || s.floorKnown !== false || !Number.isNaN(s.snrDb)) falsch.push(art + ' ' + db + ' dBFS: stimmhaft ' + (100 * s.voicedShare).toFixed(1) + ' %, bekannt ' + s.floorKnown + ', SNR ' + s.snrDb);
+    }
+    check('V3', 'Rauschen ohne Stimme und ohne Stille (weiß −60/−35, rosa, braun, Netzbrumm 50 Hz): kein Rahmen stimmhaft, Boden unbekannt, SNR NaN', falsch.length === 0, falsch.join(' | '));
   }
 };
