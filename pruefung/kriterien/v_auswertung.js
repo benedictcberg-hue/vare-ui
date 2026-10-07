@@ -305,30 +305,40 @@ module.exports = async function (H) {
 
   /* V3a: lange Takes (Bericht 2, Befund 7). stats() nahm Minimum und Maximum mit Math.min.apply: jeder
      Wert ein Argument, ab etwa 125 000 Werten RangeError. Das sind 21 min bei 10 ms Raster oder 11 min
-     bei 5 ms; app.js speicherte den Take dann nicht. 400 000 Werte = 67 min bei 10 ms. */
+     bei 5 ms; app.js speicherte den Take dann nicht. 400 000 Werte = 67 min bei 10 ms.
+     Geprüft in einem frischen Node-Prozess wie in einem frisch geladenen Tab: Hier im Prüflauf ist
+     stats nach Tausenden Aufrufen optimiert übersetzt, und der optimierte Code stürzt an dieser
+     Stelle nicht ab — der Fehler wäre im laufenden Prüflauf unsichtbar. */
   {
-    const n = 400000, a = new Float64Array(n);
-    for (let i = 0; i < n; i++) a[i] = -30 - (i % 977) * 0.05;
-    a[123457] = -95.5; a[333333] = -3.25; a[5] = NaN; a[6] = Infinity;
-    let r, fehler = '';
-    try { r = A.stats(a, true); } catch (e) { fehler = e.constructor.name + ': ' + e.message; }
-    check('V3', 'stats über 400 000 Werte: kein Absturz, Minimum und Maximum exakt, nicht-endliche Werte übergangen',
-      !fehler && r.min === -95.5 && r.max === -3.25 && r.n === n - 2, fehler || 'min ' + r.min + ', max ' + r.max + ', n ' + r.n);
-    const leer = A.stats([NaN], true);
-    check('V3', 'stats ohne endlichen Wert: Minimum und Maximum NaN, n 0', Number.isNaN(leer.min) && Number.isNaN(leer.max) && leer.n === 0, JSON.stringify(leer));
-  }
-  {
+    const { spawnSync } = require('child_process'), path = require('path');
+    const ANALYSE = path.join(__dirname, '..', '..', 'analysis.js');
+    const kalt = code => {
+      const r = spawnSync(process.execPath, ['-e', 'const A = require(' + JSON.stringify(ANALYSE) + ');\n' + code], { encoding: 'utf8', timeout: 120000 });
+      const z = String(r.stdout || '').trim().split('\n').pop();
+      try { return JSON.parse(z); } catch (e) { return { fehler: 'kein Ergebnis: ' + (String(r.stderr || '').split('\n').slice(0, 3).join(' | ') || z) }; }
+    };
+    const r1 = kalt(`
+      const n = 400000, a = new Float64Array(n);
+      for (let i = 0; i < n; i++) a[i] = -30 - (i % 977) * 0.05;
+      a[123457] = -95.5; a[333333] = -3.25; a[5] = NaN; a[6] = Infinity;
+      let out; try { const r = A.stats(a, true); out = { min: r.min, max: r.max, n: r.n }; } catch (e) { out = { fehler: e.constructor.name + ': ' + e.message }; }
+      const leer = A.stats([NaN], true); out.leer = [String(leer.min), String(leer.max), leer.n].join('/');
+      console.log(JSON.stringify(out));`);
+    check('V3', 'stats über 400 000 Werte im frischen Prozess: kein Absturz, Minimum und Maximum exakt, nicht-endliche Werte übergangen',
+      !r1.fehler && r1.min === -95.5 && r1.max === -3.25 && r1.n === 399998, r1.fehler || 'min ' + r1.min + ', max ' + r1.max + ', n ' + r1.n);
+    check('V3', 'stats ohne endlichen Wert: Minimum und Maximum NaN, n 0', r1.leer === 'NaN/NaN/0', r1.leer || r1.fehler);
     // Derselbe Weg wie analyseTake: summarise über eine Serie mit 400 000 Rahmen (Pegel aller Rahmen
     // gehen in stats(…, true)). Nur jeder hundertste Rahmen stimmhaft, damit der Lauf kurz bleibt.
-    const n = 400000, ser = A.makeSeries(n);
-    for (let i = 0; i < n; i++) {
-      ser.t[i] = 0.01 * i; ser.rms[i] = -40 - (i % 500) * 0.01; ser.gate[i] = 0; ser.cls[i] = -1; ser.score[i] = NaN; ser.flags[i] = 0;
-      if (i % 100 === 0) { ser.flags[i] = A.FLAG.VOICED; ser.f0[i] = 147; ser.shr[i] = -20 - (i % 7); }
-    }
-    ser.rms[250000] = -88.5;
-    let s, fehler = '';
-    try { s = A.summarise(ser, { hopS: 0.01, durationS: n * 0.01, floorDb: -90, floorSource: 'calibration', floorKnown: true }); } catch (e) { fehler = e.constructor.name + ': ' + e.message; }
-    check('V3', 'Zusammenfassung eines Takes mit 400 000 Rahmen (67 min bei 10 ms, 33 min bei 5 ms) läuft durch, Pegel-Minimum und -Maximum stimmen',
-      !fehler && s.rms.min === Math.fround(-88.5) && s.rms.max === -40 && s.nFrames === n, fehler || 'rms min ' + s.rms.min + ', max ' + s.rms.max);
+    const r2 = kalt(`
+      const n = 400000, ser = A.makeSeries(n);
+      for (let i = 0; i < n; i++) {
+        ser.t[i] = 0.01 * i; ser.rms[i] = -40 - (i % 500) * 0.01; ser.gate[i] = 0; ser.cls[i] = -1; ser.score[i] = NaN; ser.flags[i] = 0;
+        if (i % 100 === 0) { ser.flags[i] = A.FLAG.VOICED; ser.f0[i] = 147; ser.shr[i] = -20 - (i % 7); }
+      }
+      ser.rms[250000] = -88.5;
+      let out; try { const s = A.summarise(ser, { hopS: 0.01, durationS: n * 0.01, floorDb: -90, floorSource: 'calibration', floorKnown: true }); out = { min: s.rms.min, max: s.rms.max, n: s.nFrames }; } catch (e) { out = { fehler: e.constructor.name + ': ' + e.message }; }
+      console.log(JSON.stringify(out));`);
+    check('V3', 'Zusammenfassung eines Takes mit 400 000 Rahmen (67 min bei 10 ms, 33 min bei 5 ms) im frischen Prozess: läuft durch, Pegel-Minimum und -Maximum stimmen',
+      !r2.fehler && r2.min === Math.fround(-88.5) && r2.max === -40 && r2.n === 400000, r2.fehler || 'rms min ' + r2.min + ', max ' + r2.max);
   }
 };
