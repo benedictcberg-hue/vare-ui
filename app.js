@@ -119,11 +119,15 @@
       sel.value = cur;
     }).catch(function () { });
   }
+  // Mikrofon aus und alles, was davon abhängt, im selben Zug: Knopf, Kalibrieren, Take, Live-Felder.
+  function mikrofonAus(grund) {
+    return st.rec.stop().then(function () { $('btn-mic').textContent = 'Mikrofon starten'; $('mic-info').textContent = 'kein Mikrofon aktiv'; cancelAnimationFrame(st.raf); updateTakeButton(); $('btn-cal').disabled = true; st.hist = []; drawHist(); freezeLive(grund); });
+  }
   function micToggle() {
     if (st.rec && st.rec.active) {
       if (st.taking) { status('Erst den Take beenden.', true); return; }
       if (st.calRunning) { status('Erst die Kalibrierung abwarten.', true); return; }
-      st.rec.stop().then(function () { $('btn-mic').textContent = 'Mikrofon starten'; $('mic-info').textContent = 'kein Mikrofon aktiv'; cancelAnimationFrame(st.raf); updateTakeButton(); $('btn-cal').disabled = true; st.hist = []; drawHist(); freezeLive('Mikrofon aus'); });
+      mikrofonAus('Mikrofon aus');
       return;
     }
     var rec = R.createRecorder();
@@ -876,9 +880,16 @@
     }).then(function () { knopf.disabled = false; });
   }
   function abmelden() {
+    // Mitten in Take oder Kalibrierung nicht: das Mikrofon dabei abzuschalten, verdürbe die Aufnahme.
+    if (st.taking || st.calRunning) { status(st.taking ? 'Erst den Take beenden, dann das Token entfernen.' : 'Erst die Kalibrierung abwarten, dann das Token entfernen.', true); return; }
     KO.tokenLoeschen(); st.korpus = null;
     CH.setMarken([]);
-    if (st.rec && st.rec.active) st.rec.stop();
+    /* Nichts aus korpus.json bleibt sichtbar: die Kopfzeile nennt Stand und Gatterwerte des Korpus.
+       Der Haken geht auf „nicht merken“ zurück — wer neu verbindet, entscheidet neu. */
+    $('korpus-stand').textContent = ''; $('token-merken').checked = false;
+    // Mikrofon wirklich aus, mit Knopf und Live-Feldern — sonst stand nach erneutem Verbinden
+    // „Mikrofon stoppen“ da, während nichts mehr lief.
+    if (st.rec && st.rec.active) mikrofonAus('Token entfernt');
     cancelAnimationFrame(st.raf);
     $('token').value = ''; zeigeApp(false);
     status('Token entfernt. Die Chronik bleibt in diesem Browser erhalten.');
@@ -899,7 +910,10 @@
       renderSettings(); renderCalStatus([]); updateTakeButton(); $('live-hints').textContent = hintText();
       // Gemerktes Token: still versuchen. Schlägt es fehl, bleibt die Anmeldung stehen.
       var gemerkt = KO.tokenLesen();
-      if (gemerkt) { $('token').value = gemerkt; $('token-merken').checked = true; verbinden(gemerkt, null); }
+      /* Der Haken zeigt, WO das Token liegt, nicht DASS eines da ist. Stets gesetzt, landete ein Token,
+         das nur für diesen Tab galt, beim nächsten Verbinden dauerhaft im localStorage — den teilen
+         sich alle Pages-Projekte desselben Kontos. */
+      if (gemerkt) { $('token').value = gemerkt; $('token-merken').checked = KO.tokenGemerkt(); verbinden(gemerkt, null); }
       else zeigeApp(false);
       S.allCalibrations().then(function (all) { if (all.length) { var c = all[0]; $('cal-status').innerHTML += ' <span class="muted">Letzte gespeicherte Kalibrierung: ' + CH.esc(CH.dateShort(c.createdAt)) + ', Boden ' + fmt(c.floorDb, 1) + ' dBFS, SNR ' + fmt(c.snrDb, 1) + ' dB — für diese Sitzung neu kalibrieren.</span>'; } }).catch(function () { });
     });

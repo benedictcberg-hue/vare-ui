@@ -87,7 +87,16 @@ function speicherNeu() {
     clearAll: behalten => { Object.values(d).forEach(m => m.clear()); for (const k in (behalten || {})) if (behalten[k] !== undefined) d.meta.set(k, kopie(behalten[k])); return P(); },
     estimate: () => P(null), persist: () => P(false), persisted: () => P(false)
   };
-  return { d, api };
+  // Token-Ablage des Browsers: localStorage und sessionStorage überstehen beide ein Neuladen im selben Tab.
+  return { d, api, web: { local: new Map(), session: new Map() } };
+}
+function webSpeicher(m) { return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); } }; }
+// GitHub-API-Ersatz für korpus.js: nur das Prüftoken bekommt einen (erfundenen) Korpus.
+const TOKEN = 'github_pat_PRUEFPRUEFPRUEFPRUEF';
+const KORPUS = JSON.stringify({ format: 'vare-korpus', version: 1, stand: '2026-01-01', notiz: 'Prüfkorpus', marken: { d34: [{ hz: 404 }, { hz: 707 }] }, gatter: { f3MinHz: 2500, spreadMaxHz: 130 } });
+function korpusAbruf(url, o) {
+  const ok = !!(o && o.headers && o.headers.Authorization === 'Bearer ' + TOKEN);
+  return Promise.resolve({ ok, status: ok ? 200 : 401, json: () => Promise.resolve(ok ? { content: Buffer.from(KORPUS, 'utf8').toString('base64'), encoding: 'base64' } : { message: 'Bad credentials' }) });
 }
 // Mikrofon-Ersatz: jeder Take liefert dasselbe Signal. Geräte-ID wählt den Gerätenamen.
 // ueber: Angaben, die der nächste Start abweichend meldet (dasselbe Gerät, andere Rate oder Bearbeitung).
@@ -131,7 +140,8 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
     setInterval: (f, ms) => { const h = setInterval(f, ms); if (h.unref) h.unref(); intervalle.push({ h, f, ms }); return h; },
     clearInterval: h => { clearInterval(h); const i = intervalle.findIndex(x => x.h === h); if (i >= 0) intervalle.splice(i, 1); },
     confirm: () => true, alert() { }, crypto: { randomUUID: () => nodeCrypto.randomUUID() },
-    Blob, URL, btoa, atob, Date: uhr.Date, devicePixelRatio: 1
+    Blob, URL, btoa, atob, Date: uhr.Date, devicePixelRatio: 1,
+    localStorage: webSpeicher(sp.web.local), sessionStorage: webSpeicher(sp.web.session), fetch: korpusAbruf, TextDecoder
   };
   sb.window = sb; sb.self = sb;
   vm.createContext(sb);
@@ -474,6 +484,65 @@ module.exports = async function (H) {
       'vorher ' + vorAenderung + ' | cal=' + (p.st().cal && p.st().cal.id) + ' | „' + w2 + '“');
     p.schliessen();
   } catch (e) { check('U2.7', 'Ablauf Gerätewechsel läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U2 · Token: „merken“ nur, wenn gemerkt; „Token entfernen“ räumt auf ---------- */
+  // merken: true/false setzt den Haken, null lässt ihn, wie er steht.
+  async function anmelden(p, merken) {
+    p.el('token').value = TOKEN;
+    if (merken != null) p.el('token-merken').checked = merken;
+    p.klick('btn-verbinden');
+    return p.warte(() => !p.el('app').hidden && !p.el('btn-verbinden').disabled);
+  }
+  try {
+    const uhr = uhrNeu(T0 + 9 * 86400e3);
+    // Ohne Haken verbunden: das Token gilt nur für diesen Tab.
+    const sp = speicherNeu();
+    let p = await seiteOeffnen(sp, uhr, SIG, SR);
+    const ok1 = await anmelden(p, false);
+    const ablage = { lokal: sp.web.local.has('vare-token'), tab: sp.web.session.has('vare-token') };
+    p.schliessen();
+    p = await seiteOeffnen(sp, uhr, SIG, SR);
+    await p.warte(() => !p.el('app').hidden);
+    const haken = p.el('token-merken').checked;
+    p.klick('btn-abmelden'); await p.warte(() => !p.el('anmeldung').hidden);
+    await anmelden(p, null);
+    const lokal2 = sp.web.local.has('vare-token');
+    check('U2.11', 'Token nur für diesen Tab: nach dem Neuladen ist „merken“ nicht angehakt, erneutes Verbinden legt es nicht dauerhaft ab',
+      ok1 && !ablage.lokal && ablage.tab && haken === false && lokal2 === false,
+      'verbunden=' + ok1 + ' | zuerst localStorage=' + ablage.lokal + ' sessionStorage=' + ablage.tab + ' | Haken nach Neuladen=' + haken + ' | nach erneutem Verbinden localStorage=' + lokal2);
+    p.schliessen();
+    // Mit Haken verbunden: gemerkt; „Token entfernen“ nimmt Haken und Korpus-Kopfzeile zurück.
+    const sp2 = speicherNeu();
+    p = await seiteOeffnen(sp2, uhr, SIG, SR);
+    await anmelden(p, true);
+    p.schliessen();
+    p = await seiteOeffnen(sp2, uhr, SIG, SR);
+    await p.warte(() => !p.el('app').hidden);
+    const vor = { haken: p.el('token-merken').checked, kopf: p.el('korpus-stand').textContent };
+    p.klick('btn-abmelden'); await p.warte(() => !p.el('anmeldung').hidden);
+    const nach = { haken: p.el('token-merken').checked, kopf: p.el('korpus-stand').textContent, lokal: sp2.web.local.has('vare-token'), tab: sp2.web.session.has('vare-token') };
+    check('U2.12', 'Gemerktes Token: Haken nach dem Neuladen gesetzt; „Token entfernen“ nimmt ihn zurück und leert die Korpus-Kopfzeile',
+      vor.haken === true && /Korpus vom/.test(vor.kopf) && nach.haken === false && nach.kopf === '' && !nach.lokal && !nach.tab,
+      'vorher ' + JSON.stringify(vor) + ' | nachher ' + JSON.stringify(nach));
+    // Mikrofon: während eines Takes nicht abmelden; sonst Mikrofon samt Knopf und Live-Feldern aus.
+    await anmelden(p, false);
+    p.kalibriert('cal-T1'); await p.mikrofon();
+    p.klick('btn-take');
+    p.klick('btn-abmelden');
+    const waehrend = { app: !p.el('app').hidden, mic: p.st().rec.active, take: p.st().taking, token: sp2.web.session.has('vare-token'), meldung: statusText(p) };
+    uhr.vor(2000); p.klick('btn-take');
+    await p.warte(() => !p.st().busy && sp2.d.takes.size === 1, 60000);
+    p.klick('btn-abmelden');
+    await p.warte(() => !p.st().rec.active && p.el('btn-mic').textContent === 'Mikrofon starten');
+    const aus = { knopf: p.el('btn-mic').textContent, mic: p.st().rec.active, kalibrieren: p.el('btn-cal').disabled, take: p.el('btn-take').disabled, eingefroren: /frozen/.test(p.el('st-floor').className) };
+    await anmelden(p, false);
+    const wieder = { knopf: p.el('btn-mic').textContent, mic: p.st().rec.active };
+    check('U2.13', '„Token entfernen“: während eines Takes abgewiesen; sonst Mikrofon aus, Knopf, Kalibrieren, Take und Live-Felder folgen, auch nach erneutem Verbinden',
+      waehrend.app && waehrend.mic && waehrend.take && waehrend.token && /Take beenden/.test(waehrend.meldung) && sp2.d.takes.size === 1
+      && aus.knopf === 'Mikrofon starten' && !aus.mic && aus.kalibrieren && aus.take && aus.eingefroren && wieder.knopf === 'Mikrofon starten' && !wieder.mic,
+      'während des Takes ' + JSON.stringify(waehrend) + ' | danach ' + JSON.stringify(aus) + ' | neu verbunden ' + JSON.stringify(wieder));
+    p.schliessen();
+  } catch (e) { check('U2.11', 'Ablauf Token läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
