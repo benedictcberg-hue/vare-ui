@@ -326,11 +326,18 @@ for (const srIn of [44100, 48000, 96000]) {
   const de = C.takesToCsv([take], 'excelde'), deRows = de.split('\r\n');
   check('T15', 'CSV Excel-DE: BOM, Semikolon, Dezimalkomma', de.charCodeAt(0) === 0xFEFF && deRows[0].indexOf(';') > 0 && parseRow(deRows.slice(1, -1).join('\r\n'), ';')[idx('f0_med_hz')] === '196,1', '');
   const series = A.makeSeries(5); series.f1[0] = 700.1234; series.f1[1] = NaN; series.gate[2] = 2; series.cls[3] = -1; series.flags[4] = 65; series.t[4] = 0.04;
+  series.f2[0] = -0; series.f2[1] = Infinity; series.f2[2] = -Infinity; series.d34[3] = 1e-7; series.h1h2[4] = -12.3456789; series.nWin[4] = 0x7fff;
   const text = C.serializeBackup({ takes: [take], series: { t1: series }, refs: { a: { d34: 640 } }, calibrations: [{ id: 'c1' }], settings: { x: 1 }, kernelVersion: D.VERSION });
   const back = C.parseBackup(text);
   const s2 = back.series.t1;
   check('T15', 'Sicherung: Takes, Refs, Kalibrierungen, Einstellungen kommen zurueck', back.takes[0].id === 't1' && back.refs.a.d34 === 640 && back.calibrations[0].id === 'c1' && back.settings.x === 1, '');
-  check('T15', 'Sicherung: Serien als typisierte Arrays, NaN erhalten, Werte auf 1e-3', s2.f1 instanceof Float32Array && near(s2.f1[0], 700.123, 1e-3) && isNaN(s2.f1[1]) && s2.gate instanceof Uint8Array && s2.gate[2] === 2 && s2.cls instanceof Int8Array && s2.cls[3] === -1 && s2.flags[4] === 65, '');
+  /* Seit Version 3 stehen Serien als Bytes in der Sicherung. Der frühere Prüfname „Werte auf 1e-3“ beschrieb
+     Version 2 und ließ eine Rundung auf 0,001 durchgehen; geprüft wird jetzt jedes Feld mit Typ und Bytes. */
+  const serFelder = Object.keys(series).filter(k => ArrayBuffer.isView(series[k])), bytes = a => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
+  const serAnders = serFelder.filter(k => !(s2[k] && s2[k].constructor === series[k].constructor && bytes(s2[k]).equals(bytes(series[k]))));
+  check('T15', 'Sicherung: jedes Serienfeld kommt mit seinem Typ bitgleich zurück (Float32 ungerundet, NaN, ±Infinity, −0)',
+    serFelder.length >= 40 && !serAnders.length && s2.f1[0] === Math.fround(700.1234) && isNaN(s2.f1[1]) && Object.is(s2.f2[0], -0) && s2.f2[2] === -Infinity && s2.cls[3] === -1 && s2.flags[4] === 65,
+    serFelder.length + ' Felder' + (serAnders.length ? ', abweichend: ' + serAnders.map(k => k + ' ' + Array.from(s2[k] || []).slice(0, 5).join('/')).join(', ') : '') + ' | f1[0] ' + s2.f1[0]);
   let bad = false; try { C.parseBackup('{"format":"x"}'); } catch (e) { bad = true; }
   check('T15', 'Sicherung: fremdes Format wird abgelehnt', bad, '');
   const fcsv = C.framesToCsv(series, 'standard', V).split('\r\n');
