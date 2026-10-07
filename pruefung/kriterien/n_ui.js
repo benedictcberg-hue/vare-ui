@@ -682,6 +682,7 @@ module.exports = async function (H) {
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
   await kriterienB2(H);
+  await kriterienB3(H);
 };
 
 /* Kriterien B2 — Anzeige, CSV und Doku sagen dasselbe wie die Messung.
@@ -1101,5 +1102,290 @@ async function kriterienB2(H) {
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
 }
+/* Kriterien B3 — Prüfstärke. Jede Sperre, die ein ungültiges ΔF3–4, ein filtergetriebenes H1−H2, eine offene
+   Oktave oder ein zweideutiges Bestsegment sichtbar hält, hat hier ein Kriterium, das reißt, wenn sie fällt.
+   Vorher überlebten die Mutanten der Nachprüfung den ganzen Prüflauf (N10–N13, N22, N23).
+   B3a: ΔF3–4 wird nur aus einem gültigen ΔF3–4 gewertet: Gatter live und offline, Take, Referenz, CSV (N10).
+   B3b: Die Zusammenfassung zählt für ΔF3–4, ΔF4–5 und F3 stabil nur gültige Rahmen (N11).
+   B3c: H1−H2 bei F1 nahe 2·F0 heißt filtergetrieben: Rahmen, Zusammenfassung, CSV, Live-Kachel, Hover (N12).
+   B3d: Ungültiges ΔF3–4/ΔF4–5 steht live in Rost; die ΔF3–4-Spur der Chronik zeichnet nur gültige Werte (N13).
+   B3e: Periodenverdopplung mit Subharmonischer knapp unter der Oktavschwelle heißt „Oktave offen“ (N22).
+   B3f: Freie und angepinnte Referenzen tragen den Zweideutig-Anteil ihres Bestsegments bis in die Tabelle (N23). */
+async function kriterienB3(H) {
+  const { D, V, A, C, SR, noise } = H;
+  const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
+  const fehlerVorher = fehlerListe.length;
+  const F = A.FLAG, TSR = D.TARGET_SR;
+  const rms = x => { let e = 0; for (let i = 0; i < x.length; i++) e += x[i] * x[i]; return Math.sqrt(e / x.length); };
+  // Vokal im Raumrauschen, snr dB unter dem Vokal (Effektivwerte); davor und danach je rand s nur Rauschen.
+  function imRauschen(v, snr, seed, rand) {
+    const r0 = Math.round((rand || 0) * SR), n = v.length + 2 * r0, z = noise(n, 1, seed), g = rms(v) / Math.pow(10, snr / 20) / rms(z), y = new Float32Array(n);
+    for (let i = 0; i < n; i++) y[i] = g * z[i] + (i >= r0 && i < r0 + v.length ? v[i - r0] : 0);
+    return y;
+  }
+  // Quellneigung einer echten Glottisquelle (einpoliger Tiefpass): schwächt F3–F5 gegen das Raumrauschen.
+  function quellneigung(v, fc) { const a = Math.exp(-2 * Math.PI * fc / SR); let z = 0; for (let i = 0; i < v.length; i++) { z = (1 - a) * v[i] + a * z; v[i] = z; } return v; }
+  const takeAus = (res, id) => ({ id: id || 't', code: 'A', label: 'Prüftake', createdAt: '2026-10-07T10:00:00Z', durationS: 1.5, sampleRate: SR, analysis: res.meta, summary: res.summary });
+  function csvSpalte(take, dialekt) {
+    const z = C.takesToCsv([take], dialekt || 'standard').split('\r\n'), sep = dialekt === 'excelde' ? ';' : ',';
+    const h = z[0].replace(/^﻿/, '').split(sep), r = z[1].split(sep);
+    return k => (h.indexOf(k) < 0 ? 'Spalte ' + k + ' fehlt' : r[h.indexOf(k)]);
+  }
+  // CSV-Zelle zu einer Statistik: ohne Rahmen der Sentinel −99, sonst der Median auf eine Nachkommastelle.
+  const csvWie = (zelle, st) => (st.n ? zelle !== '-99.0' && Math.abs(parseFloat(zelle) - st.med) <= 0.051 : zelle === '-99.0');
+  // Chronik wie im Browser in einer eigenen Umgebung.
+  const csb = { console: { log() { }, warn() { }, error: aufFehler }, devicePixelRatio: 1 };
+  csb.self = csb; csb.window = csb; vm.createContext(csb);
+  for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), csb, { filename: f });
+  const CHR = csb.VARECHRONIK;
+  // Zeichenfläche, die jeden Aufruf mit der gerade gesetzten Füllfarbe mitschreibt.
+  function leinwand() {
+    const ops = []; let fill = '';
+    const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { ops.push([k, a, fill]); }), set: (t, k, v) => { t[k] = v; if (k === 'fillStyle') fill = v; return true; } });
+    return { cv: { clientWidth: 600, style: {}, getContext: () => ctx }, ops };
+  }
+  /* Live-Seite: app.js mit echtem storage.js (wie B1), das Mikrofon liefert die letzten s Sekunden von quelle.sig
+     bis quelle.pos. takt() rückt Audio und Uhr um 41 ms vor und ruft den Live-Takt der Seite auf. */
+  async function liveSeite() {
+    const p = await seiteNeu(idbNeu(), () => ({ samples: new Float32Array(0), sampleRate: SR, durationS: 0, luecken: [] }), SR);
+    let raf = null;
+    p.sb.requestAnimationFrame = f => { raf = f; return 1; };
+    if (!(await p.mikrofon()) || !raf) throw new Error('Live-Schleife startet nicht');
+    const rec = p.st().rec, quelle = { sig: new Float32Array(SR), pos: SR }, SCHRITT = Math.round(0.041 * SR);
+    rec.latest = s => { const n = Math.round(s * SR), a = Math.max(0, quelle.pos - n); return quelle.sig.slice(a, quelle.pos); };
+    let jetzt = 1000;
+    p.quelle = quelle;
+    p.takt = () => { rec.samplesSeen += SCHRITT; jetzt += 41; raf(jetzt); };
+    p.kachel = id => ({ klasse: p.el('st-' + id).className, text: p.el('v-' + id).textContent });
+    p.schritt = SCHRITT;
+    return p;
+  }
+
+  /* ---------- B3a · ΔF3–4 gewertet nur aus gültigem ΔF3–4 ---------- */
+  try {
+    const bad = [];
+    // a) Gatter: stehendes /a/ mit gültigem F1/F2 und F3 2600 Hz (über dem Mindestwert), ΔF3–4 endlich.
+    //    Gegenprobe mit gültigem ΔF3–4: dieselben Rahmen werden gewertet; sonst prüfte die Sperre nichts.
+    const rahmen = (i, gueltig) => ({ t: i * 0.01, voiced: true, F1: 700, F2: 1200, F3: 2600, valid1: true, valid2: true, d34: 1400, d34valid: gueltig });
+    const gatter = gueltig => {
+      const g = V.createGate({}), live = { stabil: 0, gewertet: 0, gruende: {} }, off = { stabil: 0, gewertet: 0, gruende: {} };
+      const zaehl = (z, r) => { if (r.state !== 'stabil') return; z.stabil++; if (isFinite(r.score)) z.gewertet++; else z.gruende[r.reason] = (z.gruende[r.reason] || 0) + 1; };
+      for (let i = 0; i < 100; i++) zaehl(live, g.update(rahmen(i, gueltig)));
+      V.gateOffline(Array.from({ length: 100 }, (_, i) => rahmen(i, gueltig))).forEach(r => zaehl(off, r));
+      return { live, off };
+    };
+    const ung = gatter(false), gue = gatter(true);
+    for (const [art, z] of [['live', ung.live], ['offline', ung.off]]) {
+      if (!(z.stabil >= 50)) bad.push(art + ': nur ' + z.stabil + ' stabile Rahmen');
+      if (z.gewertet) bad.push(art + ': ' + z.gewertet + ' von ' + z.stabil + ' stabilen Rahmen mit ungültigem ΔF3–4 gewertet');
+      if (Object.keys(z.gruende).some(g => !/F3\/F4 unsicher/.test(g))) bad.push(art + ': Grund ' + JSON.stringify(z.gruende));
+    }
+    if (!(gue.live.gewertet >= 50 && gue.off.gewertet >= 50)) bad.push('Gegenprobe gültiges ΔF3–4: live ' + gue.live.gewertet + ', offline ' + gue.off.gewertet + ' gewertet');
+    // b) Take: /o/ 130 Hz, Quellneigung 500 Hz, weißes Raumrauschen 35 dB — F4 im Rauschen, ΔF3–4 fast nie gültig.
+    const y = imRauschen(quellneigung(D.synthVowel(130, [450, 800, 2550, 3350, 4200], [80, 90, 120, 150, 200], 1.0, SR, { gain: 0.1 }), 500), 35, 4711, 0);
+    const res = await A.analyseTake(y, SR, {}), se = res.series, sm = res.summary;
+    let pruef = 0, gewertet = 0, ohne = 0, falsch = 0;
+    for (let i = 0; i < se.t.length; i++) {
+      if (se.gate[i] === 2 && se.f3[i] >= 2500 && isFinite(se.d34[i]) && !(se.flags[i] & F.D34VALID)) pruef++;
+      if (se.flags[i] & F.SCORE) { gewertet++; if (!(se.flags[i] & F.D34VALID)) { ohne++; if (Math.abs(se.score[i] - 800) > 120) falsch++; } }
+    }
+    if (!(pruef >= 30)) bad.push('Vorbedingung: nur ' + pruef + ' stabile Rahmen mit F3 ≥ 2500 und ungültigem ΔF3–4');
+    if (ohne) bad.push(ohne + ' Rahmen ohne gültiges ΔF3–4 gewertet (' + falsch + ' davon mehr als 120 Hz neben 800)');
+    if (sm.d34stable.n !== gewertet - ohne) bad.push('ΔF3–4 stabil n ' + sm.d34stable.n + ' statt ' + (gewertet - ohne) + ' gültig gewertete Rahmen');
+    const take = takeAus(res), sp = csvSpalte(take), refs = A.computeRefs([take], {});
+    if (!csvWie(sp('d34_stable_med'), sm.d34stable)) bad.push('CSV d34_stable_med ' + sp('d34_stable_med') + ' bei n ' + sm.d34stable.n + ', Median ' + sm.d34stable.med);
+    // Eine Referenz kann nur aus gültig gewerteten Rahmen kommen.
+    const refBad = Object.keys(refs).filter(k => refs[k] && isFinite(refs[k].d34) && !(gewertet - ohne > 0));
+    if (refBad.length) bad.push('Referenz aus ungültigem ΔF3–4: ' + refBad.map(k => '/' + k + '/ ' + Math.round(refs[k].d34)).join(', '));
+    check('B3a', 'ΔF3–4 wird nur aus einem gültigen ΔF3–4 gewertet: Gatter live und offline (Grund „F3/F4 unsicher“, Gegenprobe gültig wird gewertet); Take /o/ 130 Hz im Rauschen 35 dB ohne Wertung, Referenz und CSV-Wert aus ungültigen Rahmen (N10)',
+      !bad.length,
+      (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + 'Gatter ungültig: live ' + ung.live.gewertet + '/' + ung.live.stabil + ', offline ' + ung.off.gewertet + '/' + ung.off.stabil + ' gewertet; gültig: live ' + gue.live.gewertet + ', offline ' + gue.off.gewertet +
+      ' | Take: Prüfrahmen ' + pruef + ', gewertet ' + gewertet + ' (ohne gültiges ΔF3–4 ' + ohne + '), ΔF3–4 stabil n ' + sm.d34stable.n + ', CSV ' + sp('d34_stable_med') + ', Referenzen ' + (Object.keys(refs).map(k => '/' + k + '/ ' + Math.round(refs[k].d34)).join(', ') || 'keine'));
+  } catch (e) { check('B3a', 'Ablauf ΔF3–4-Wertung nur aus gültigem ΔF3–4 läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B3b · Zusammenfassung: ΔF3–4, ΔF4–5 und F3 stabil nur aus gültigen Rahmen ---------- */
+  try {
+    const bad = [];
+    /* a) Gebaute Serie: 60 stimmhafte, stabile Rahmen; die geraden gültig (ΔF3–4 850, ΔF4–5 800, F3 2450), die
+       ungeraden ohne Gültigkeit von F3/F4 und ohne D34VALID/D45VALID mit falschen Werten (2100, 250, 1900). */
+    const n = 60, s = A.makeSeries(n);
+    for (let i = 0; i < n; i++) {
+      const gut = i % 2 === 0;
+      s.t[i] = 0.01 * i; s.f0[i] = 110; s.rms[i] = -20; s.ap[i] = 0.1; s.gate[i] = 2; s.cls[i] = 0; s.score[i] = NaN;
+      s.f1[i] = 650; s.f2[i] = 1100; s.f4[i] = 3300; s.f5[i] = 4100; s.f3[i] = gut ? 2450 : 1900;
+      s.valid[i] = gut ? 31 : (1 | 2 | 16);
+      s.flags[i] = F.VOICED | (gut ? F.D34VALID | F.D45VALID : 0);
+      s.d34[i] = gut ? 850 : 2100; s.d45[i] = gut ? 800 : 250;
+    }
+    const sum = A.summarise(s, { hopS: 0.01, durationS: 0.6, floorDb: -80, floorSource: 'calibration', floorKnown: true });
+    const sp = csvSpalte({ id: 'k', code: 'K', label: 'k', createdAt: '2026-10-07T10:00:00Z', summary: sum }), spDe = csvSpalte({ id: 'k', code: 'K', label: 'k', createdAt: '2026-10-07T10:00:00Z', summary: sum }, 'excelde');
+    for (const [name, st, med, spalte, csv] of [['ΔF3–4', sum.d34, 850, 'd34_med', '850.0'], ['ΔF4–5', sum.d45, 800, 'd45_med', '800.0'], ['F3 stabil', sum.f3stable, 2450, 'f3_stable_med', '2450.0']]) {
+      if (!(st && st.n === 30 && st.med === med && st.q1 === med && st.q3 === med)) bad.push('Serie ' + name + ': n ' + (st && st.n) + ', Median ' + (st && st.med) + ' statt 30 gültige mit ' + med);
+      if (sp(spalte) !== csv || spDe(spalte) !== csv.replace('.', ',')) bad.push('CSV ' + spalte + ' ' + sp(spalte) + ' / ' + spDe(spalte) + ' statt ' + csv);
+    }
+    /* b) Takes im Raumrauschen, in denen die Gültigkeit entscheidet: /a/ 98 Hz mit schwachem F4 (B4 400) bei 35 dB und
+       /a/ 131 Hz mit schwachem F3 (B3 380) bei 33 dB. n ist jeweils genau die Zahl der gültigen Rahmen. */
+    const belege = [];
+    let ungueltig34 = 0, ungueltig45 = 0, ungueltigF3 = 0;
+    for (const [nm, f0, Fm, B, snr] of [['/a/ 98 Hz, schwaches F4', 98, [650, 1080, 2400, 3250, 4100], [80, 90, 120, 400, 200], 35], ['/a/ 131 Hz, schwaches F3', 131, [680, 1150, 2550, 3350, 4200], [80, 90, 380, 150, 200], 33]]) {
+      const res = await A.analyseTake(imRauschen(D.synthVowel(f0, Fm, B, 1.2, SR, { gain: 0.3 }), snr, 19, 0.3), SR, {}), se = res.series, sm = res.summary;
+      let g34 = 0, g45 = 0, gf3 = 0, u34 = 0, u45 = 0, uf3 = 0;
+      for (let i = 0; i < se.t.length; i++) {
+        if (!(se.flags[i] & F.VOICED)) continue;
+        if (se.flags[i] & F.D34VALID) g34++; else if (isFinite(se.d34[i])) u34++;
+        if (se.flags[i] & F.D45VALID) g45++; else if (isFinite(se.d45[i])) u45++;
+        if (se.gate[i] === 2) { if (se.valid[i] & 4) gf3++; else if (isFinite(se.f3[i])) uf3++; }
+      }
+      ungueltig34 += u34; ungueltig45 += u45; ungueltigF3 += uf3;
+      const c = csvSpalte(takeAus(res));
+      for (const [name, st, g, spalte] of [['ΔF3–4', sm.d34, g34, 'd34_med'], ['ΔF4–5', sm.d45, g45, 'd45_med'], ['F3 stabil', sm.f3stable, gf3, 'f3_stable_med']]) {
+        if (st.n !== g) bad.push(nm + ': ' + name + ' n ' + st.n + ' statt ' + g + ' gültige Rahmen (Median ' + Math.round(st.med) + ')');
+        if (!csvWie(c(spalte), st)) bad.push(nm + ': CSV ' + spalte + ' ' + c(spalte) + ' bei n ' + st.n);
+      }
+      belege.push(nm + ': gültig ' + g34 + '/' + g45 + '/' + gf3 + ', ungültig endlich ' + u34 + '/' + u45 + '/' + uf3 + ', CSV ' + c('d34_med') + ' / ' + c('d45_med') + ' / ' + c('f3_stable_med'));
+    }
+    // Ohne ungültige, aber endliche Werte entschiede die Gültigkeit hier nichts.
+    if (!(ungueltig34 >= 50 && ungueltig45 >= 10 && ungueltigF3 >= 50)) bad.push('Vorbedingung: ungültig endlich ΔF3–4 ' + ungueltig34 + ', ΔF4–5 ' + ungueltig45 + ', F3 stabil ' + ungueltigF3);
+    check('B3b', 'Zusammenfassung zählt für ΔF3–4, ΔF4–5 und F3 stabil nur gültige Rahmen (gebaute Serie: je 30 von 60 mit dem gültigen Wert, beide CSV-Dialekte; Takes mit schwachem F3 bzw. F4 im Rauschen: n = Zahl der gültigen Rahmen, ohne sie −99) (N11)',
+      !bad.length, (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + 'Serie: ' + [sum.d34, sum.d45, sum.f3stable].map(x => x.med + ' n ' + x.n).join(', ') + ' | ' + belege.join(' | '));
+  } catch (e) { check('B3b', 'Ablauf Gültigkeitsfilter der Zusammenfassung läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B3c · H1−H2 bei F1 nahe 2·F0 heißt filtergetrieben ---------- */
+  const U120 = [310, 800, 2300, 3200, 4200], BU = [60, 80, 120, 150, 200];
+  let u120 = null, g120 = null;
+  try {
+    const bad = [];
+    /* /u/ auf 120 Hz (mitten in der Baritonlage): F1 310 Hz liegt 70 Hz neben H2, gut eine Bandbreite. Der Filter hebt H2
+       dort um rund 5 dB an; ein Quellwert ist H1−H2 dann nicht. Gegenstück: dieselbe Quelle mit F1 650 Hz. */
+    u120 = await A.analyseTake(imRauschen(D.synthVowel(120, U120, BU, 1.2, SR, { gain: 0.3 }), 40, 11, 0.3), SR, {});
+    g120 = await A.analyseTake(imRauschen(D.synthVowel(120, [650].concat(U120.slice(1)), BU, 1.2, SR, { gain: 0.3 }), 40, 11, 0.3), SR, {});
+    const zaehl = se => { let st = 0, un = 0, f0u = 0; for (let i = 0; i < se.t.length; i++) if (se.flags[i] & F.VOICED) { st++; if (se.flags[i] & F.H1H2UNSURE) un++; if (se.flags[i] & F.F0UNSURE) f0u++; } return { st, un, f0u }; };
+    const zu = zaehl(u120.series), zg = zaehl(g120.series), cu = csvSpalte(takeAus(u120)), cg = csvSpalte(takeAus(g120));
+    if (!(zu.st >= 100 && u120.summary.h1h2.unsureShare >= 0.9)) bad.push('/u/ F1 310: filtergetrieben nur ' + zu.un + ' von ' + zu.st + ' stimmhaften Rahmen');
+    if (cu('h1h2_med_db') !== '-99.00') bad.push('/u/ F1 310: CSV h1h2_med_db ' + cu('h1h2_med_db') + ' statt -99.00 (Filterwert als Quellwert)');
+    // Der Rahmen in der Mitte: filtergetrieben, der Grundton selbst aber sicher (sonst wäre es ein anderer Grund).
+    const sm = D.resample(D.synthVowel(120, U120, BU, 0.6, SR, { gain: 0.3 }), SR, TSR), mitte = D.analyseAt(sm, TSR, Math.round(0.3 * TSR), {});
+    if (!(mitte.voiced && mitte.h1h2unsure && !mitte.f0Unsure)) bad.push('Rahmen Mitte: h1h2unsure ' + mitte.h1h2unsure + ', f0Unsure ' + mitte.f0Unsure);
+    if (!(zg.st >= 100 && zg.un === 0 && /^-?\d+\.\d\d$/.test(cg('h1h2_med_db')) && cg('h1h2_med_db') !== '-99.00')) bad.push('Gegenstück F1 650: filtergetrieben ' + zg.un + '/' + zg.st + ', CSV ' + cg('h1h2_med_db'));
+    // Hover: „(filtergetrieben)“ genau in den Rahmen mit der Marke.
+    let mitM = 0, ohneM = 0;
+    for (const se of [u120.series, g120.series]) for (let i = 0; i < se.t.length; i++) {
+      if (!(se.flags[i] & F.VOICED)) continue;
+      const h = CHR.hoverText(se, i, 130), m = !!(se.flags[i] & F.H1H2UNSURE);
+      if (/H1−H2 [^·<]*\(filtergetrieben\)/.test(h) !== m) { if (bad.length < 6) bad.push('Hover Rahmen ' + i + (m ? ' mit' : ' ohne') + ' Marke: „' + (h.match(/H1−H2[^·]*/) || [''])[0].replace(/<[^>]+>/g, '') + '“'); }
+      if (m) mitM++; else ohneM++;
+    }
+    if (!(mitM >= 100 && ohneM >= 100)) bad.push('Hover: Rahmen mit Marke ' + mitM + ', ohne ' + ohneM);
+    check('B3c', 'H1−H2 bei F1 nahe 2·F0 (/u/ 120 Hz, F1 310, Rauschen 40 dB): Rahmen filtergetrieben bei sicherem Grundton, Zusammenfassung und CSV ohne H1−H2-Wert (−99), Hover „(filtergetrieben)“; Gegenstück F1 650 Hz ohne Marke mit Wert (N12)',
+      !bad.length, (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + '/u/ F1 310: ' + zu.un + '/' + zu.st + ' filtergetrieben, Anteil ' + u120.summary.h1h2.unsureShare.toFixed(3) + ', CSV ' + cu('h1h2_med_db') +
+      ' | F1 650: ' + zg.un + '/' + zg.st + ', CSV ' + cg('h1h2_med_db') + ' | Hover mit Marke ' + mitM + ', ohne ' + ohneM);
+  } catch (e) { check('B3c', 'Ablauf H1−H2 filtergetrieben läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B3d · Live in Rost, Chronik-Spur nur gültig ---------- */
+  try {
+    const bad = [], zaehl = { d34g: 0, d34u: 0, d45g: 0, d45u: 0, filter: 0, sauber: 0 };
+    const p = await liveSeite(), DD = p.sb.VAREDSP, echt = DD.analyseAt;
+    let letzt = null;
+    DD.analyseAt = function () { letzt = echt.apply(this, arguments); return letzt; };
+    // Kacheln d34, d45, h1h2 gegen den Rahmen, den app.js gerade gemessen hat.
+    const pruefe = (name, fr) => {
+      if (!fr || !fr.voiced || fr.tonalButAperiodic) return;
+      const d34 = p.kachel('d34'), d45 = p.kachel('d45'), h12 = p.kachel('h1h2'), u = k => /\bunsure\b/.test(k.klasse);
+      if (u(d34) !== !fr.d34valid) bad.push(name + ': ΔF3–4 ' + (fr.d34valid ? 'gültig' : 'ungültig') + ', Kachel „' + d34.text + '“ (' + d34.klasse + ')');
+      if (u(d45) !== !fr.d45valid) bad.push(name + ': ΔF4–5 ' + (fr.d45valid ? 'gültig' : 'ungültig') + ', Kachel „' + d45.text + '“ (' + d45.klasse + ')');
+      if (u(h12) !== !!(fr.h1h2unsure || fr.f0Unsure) || /\(filtergetrieben\)/.test(h12.text) !== !!fr.h1h2unsure) bad.push(name + ': H1−H2 ' + (fr.h1h2unsure ? 'filtergetrieben' : 'sauber') + ', Kachel „' + h12.text + '“ (' + h12.klasse + ')');
+      zaehl[fr.d34valid ? 'd34g' : 'd34u']++; zaehl[fr.d45valid ? 'd45g' : 'd45u']++;
+      if (fr.h1h2unsure && !fr.f0Unsure) zaehl.filter++; else if (!fr.h1h2unsure && !fr.f0Unsure) zaehl.sauber++;
+    };
+    /* a) Mikrofon: sauberes /a/ 196 Hz, /e/ 147 Hz im Raumrauschen 35 dB (ΔF3–4 bei 30–50 dB fast nie gültig) und
+       /u/ 120 Hz mit F1 310 (H1−H2 filtergetrieben), dazwischen Stille. Je Takt 41 ms Audio weiter. */
+    const teile = [noise(Math.round(0.3 * SR), 2e-4, 31), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 1.0, SR, { gain: 0.3 }), noise(Math.round(0.3 * SR), 2e-4, 32),
+      imRauschen(D.synthVowel(147, [450, 1900, 2500, 3450, 4300], [70, 90, 120, 150, 200], 1.0, SR, { gain: 0.3 }), 35, 33, 0), noise(Math.round(0.3 * SR), 2e-4, 34),
+      imRauschen(D.synthVowel(120, U120, BU, 1.0, SR, { gain: 0.3 }), 40, 35, 0), noise(Math.round(0.3 * SR), 2e-4, 36)];
+    let ns = 0; teile.forEach(t => { ns += t.length; });
+    const sig = new Float32Array(ns); let o = 0; teile.forEach(t => { sig.set(t, o); o += t.length; });
+    p.quelle.sig = sig;
+    let takte = 0;
+    for (p.quelle.pos = Math.round(0.2 * SR); p.quelle.pos <= sig.length; p.quelle.pos += p.schritt) { letzt = null; p.takt(); takte++; pruefe('t ' + (p.quelle.pos / SR).toFixed(2) + ' s', letzt); }
+    const echtZaehl = Object.assign({}, zaehl);
+    // b) Gezielte Abwandlungen eines sauberen Rahmens: je genau eine Marke, unabhängig davon, was der Kern gerade liefert.
+    p.quelle.sig = Float32Array.from(D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 0.4, SR, { gain: 0.3 })); p.quelle.pos = p.quelle.sig.length;
+    const sauberDs = DD.resample(p.quelle.sig, SR, TSR);
+    const basis = JSON.parse(JSON.stringify(echt(sauberDs, TSR, sauberDs.length - 1, { align: 'end', floorDb: -70 })), (k, v) => (v === null ? NaN : v));
+    if (!(basis.voiced && basis.d34valid && basis.d45valid && !basis.h1h2unsure && !basis.f0Unsure)) bad.push('Grundrahmen nicht sauber');
+    for (const [name, ab] of [['sauber', {}], ['nur ΔF3–4 ungültig', { d34valid: false }], ['nur ΔF4–5 ungültig', { d45valid: false }], ['nur H1−H2 filtergetrieben', { h1h2unsure: true }]]) {
+      const fr = Object.assign({}, basis, ab);
+      DD.analyseAt = () => fr; p.takt(); pruefe(name, fr);
+    }
+    DD.analyseAt = echt;
+    p.schliessen();
+    /* c) Chronik-Spur ΔF3–4 (dritte Spur, y 270–370): graue 2×2-Punkte genau für Rahmen mit gültigem, endlichem ΔF3–4.
+       Serie aus demselben Mikrofonsignal wie a), gültige und ungültige Werte gemischt. */
+    const se = (await A.analyseTake(sig, SR, {})).series;
+    let gueltig = 0, ungueltig = 0;
+    for (let i = 0; i < se.t.length; i++) if (isFinite(se.d34[i])) { if (se.flags[i] & F.D34VALID) gueltig++; else ungueltig++; }
+    const l = leinwand(); CHR.drawLanes(l.cv, se, {}, null);
+    const grau = l.ops.filter(op => op[0] === 'fillRect' && op[2] === CHR.COL.muted && op[1][2] === 2 && op[1][3] === 2 && op[1][1] >= 269 && op[1][1] <= 371).length;
+    if (grau !== gueltig || !(gueltig >= 10 && ungueltig >= 10)) bad.push('Spur ΔF3–4: ' + grau + ' Punkte bei ' + gueltig + ' gültigen und ' + ungueltig + ' ungültigen endlichen Werten');
+    const genug = echtZaehl.d34g >= 5 && echtZaehl.d34u >= 5 && echtZaehl.d45g >= 5 && echtZaehl.d45u >= 5 && echtZaehl.filter >= 5 && echtZaehl.sauber >= 5;
+    if (!genug) bad.push('Mikrofon deckt nicht alle Fälle ab: ' + JSON.stringify(echtZaehl));
+    check('B3d', 'Live: ΔF3–4- und ΔF4–5-Kachel genau dann in Rost, wenn der Wert ungültig ist; H1−H2-Kachel filtergetrieben in Rost mit „(filtergetrieben)“ (Mikrofon mit sauberem /a/, /e/ im Rauschen 35 dB, /u/ 120 Hz, dazu je eine gezielte Marke); Chronik-Spur ΔF3–4 zeichnet nur gültige Werte (N12, N13)',
+      !bad.length, (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + 'Takte ' + takte + ', stimmhaft geprüft ' + JSON.stringify(echtZaehl) + ' | Spur: ' + grau + ' Punkte, gültig ' + gueltig + ', ungültig ' + ungueltig);
+  } catch (e) { check('B3d', 'Ablauf Live-Rost und Chronik-Spur läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B3e · Band „Oktave offen“ bei Periodenverdopplung ---------- */
+  try {
+    /* Amplitudenwechsel 14 % (Testprofil 8–14 %): die Reihe bei F0/2 liegt zwischen −25 und −20 dB, also knapp unter der
+       Oktavschwelle. Die Lesart F0 ist dann eine Entscheidung, keine Messung: „Oktave offen“. Gegenprobe 3 %: die
+       Subharmonische liegt weit darunter, keine Marke, keine Teilung. Vier Vokale, 130–247 Hz, je 11 Rahmen. */
+    const VOK4 = [[[700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200]], [[300, 2200, 2900, 3500, 4300], [60, 100, 130, 160, 200]],
+      [[320, 800, 2400, 3300, 4200], [60, 90, 120, 150, 200]], [[450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200]]];
+    const satz = alt => {
+      const z = { n: 0, offen: 0, geteilt: 0, f0falsch: 0 };
+      for (const [Fm, B] of VOK4) for (const f0 of [130, 165, 196, 247]) {
+        const ds = D.resample(D.synthVowel(f0, Fm, B, 0.5, SR, { altRatio: alt, gain: 0.3 }), SR, TSR);
+        for (let c = 1500; c <= 4500; c += 300) {
+          const r = D.analyseAt(ds, TSR, c, { orders: [14] });
+          if (!r.voiced) continue;
+          z.n++; if (r.octaveAmbiguous) z.offen++; if (r.octaveCorrected) z.geteilt++;
+          if (!(Math.abs(r.f0 / f0 - 1) < 0.03 || Math.abs(2 * r.f0 / f0 - 1) < 0.03)) z.f0falsch++;
+        }
+      }
+      return z;
+    };
+    const s14 = satz(0.86), s03 = satz(0.97);
+    check('B3e', 'Periodenverdopplung, Amplitudenwechsel 14 % (Subharmonische zwischen −25 und −20 dB), /a/ /i/ /u/ /o/ 130–247 Hz: mindestens 2/3 der Rahmen „Oktave offen“; Gegenprobe 3 %: keine Marke, keine Teilung (N22)',
+      s14.n >= 150 && s14.offen >= Math.ceil(2 / 3 * s14.n) && s03.n >= 150 && s03.offen === 0 && s03.geteilt === 0,
+      '14 %: ' + s14.offen + '/' + s14.n + ' offen, ' + s14.geteilt + ' geteilt, Grundton weder F0 noch F0/2 ' + s14.f0falsch + ' | 3 %: ' + s03.offen + '/' + s03.n + ' offen, ' + s03.geteilt + ' geteilt, falsch ' + s03.f0falsch);
+  } catch (e) { check('B3e', 'Ablauf Oktave offen läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B3f · Zweideutig-Anteil in freien und angepinnten Referenzen ---------- */
+  try {
+    const bad = [], CA = csb.VAREANALYSIS;
+    const mk = (id, d34, amb) => {
+      const b = { d34Med: d34, startS: 1, lenS: 1, n: 100 }; if (amb !== undefined) b.ambiguousShare = amb;
+      return { id, code: id, createdAt: '2026-10-01T10:00:00Z', summary: { perVowel: { a: { bestSegment: b } } } };
+    };
+    const tabelle = refs => { const el = new E('refs'); CHR.renderRefs(el, refs, {}, {}); return el.innerHTML; };
+    // Frei (aus dem Bestsegment) und angepinnt (aus dem Bestsegment des eigenen Takes aufgefrischt).
+    const frei = CA.computeRefs([mk('X', 700, 0.3)], {}), pin = CA.computeRefs([mk('X', 700, 0.3)], { a: { d34: 700, takeId: 'X', code: 'X', pinned: true } });
+    const nodeFrei = A.computeRefs([mk('X', 700, 0.3)], {});
+    if (!(frei.a && frei.a.ambiguousShare === 0.3 && !frei.a.pinned)) bad.push('frei: ' + JSON.stringify(frei.a));
+    if (!(nodeFrei.a && nodeFrei.a.ambiguousShare === 0.3)) bad.push('frei (Node): ' + JSON.stringify(nodeFrei.a));
+    if (!(pin.a && pin.a.ambiguousShare === 0.3 && pin.a.pinned && !pin.a.verwaist)) bad.push('angepinnt: ' + JSON.stringify(pin.a));
+    const tf = tabelle(frei), tp = tabelle(pin);
+    for (const [nm, t] of [['frei', tf], ['angepinnt', tp]]) if (!/700 <span class="rust[^"]*">zweideutig 30 %<\/span>/.test(t)) bad.push('Tabelle ' + nm + ': ' + t.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 120));
+    // Ohne Anteil (ältere Zusammenfassung) und bei 0 % kein erfundenes „zweideutig“.
+    const alt = CA.computeRefs([mk('Y', 650)], {}), null0 = CA.computeRefs([mk('Z', 640, 0)], {});
+    if (!alt.a || 'ambiguousShare' in alt.a || /zweideutig/.test(tabelle(alt))) bad.push('ohne Anteil: ' + JSON.stringify(alt.a));
+    if (!null0.a || null0.a.ambiguousShare !== 0 || /zweideutig/.test(tabelle(null0))) bad.push('0 %: ' + JSON.stringify(null0.a));
+    check('B3f', 'Referenzen tragen den Zweideutig-Anteil ihres Bestsegments: frei und angepinnt 30 % → Tabelle „zweideutig 30 %“ in Rost; ohne Anteil oder bei 0 % nichts (N23)',
+      !bad.length, bad.length ? bad.join(' | ') : 'frei ' + frei.a.ambiguousShare + ', angepinnt ' + pin.a.ambiguousShare + ' | ' + tf.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100));
+  } catch (e) { check('B3f', 'Ablauf Zweideutig-Anteil der Referenzen läuft durch', false, kurzFehler(e)); }
+
+  const neueFehler = fehlerListe.slice(fehlerVorher);
+  check('B3z', 'Keine Ausnahme in der Seite während der B3-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
+}
 module.exports.hilfen = { idbNeu, seiteNeu, recorderNeu, E };
 module.exports.b2 = kriterienB2;
+module.exports.b3 = kriterienB3;
