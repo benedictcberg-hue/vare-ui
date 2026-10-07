@@ -95,16 +95,19 @@
     return { db: Math.max(-95, levels[0] - 24), known: false, gapDb: gap };
   }
 
-  /* Speicher je Rahmen: 39 Float32, 8 Byte-Felder und die Flags (Uint16), 166 Byte (vorher 139). Eine Stunde bei 10 ms
+  /* Speicher je Rahmen: 39 Float32, 10 Byte-Felder und die Flags (Uint16), 168 Byte (vorher 139). Eine Stunde bei 10 ms
      sind 360 000 Rahmen, also 60 MB statt 50 MB im Speicher; die Gründe kosten als Codes 3 Byte. Ältere
-     gespeicherte Serien haben die Felder f0Cep … shrGrund nicht: Wer sie liest, muss das Fehlen als
-     „nicht gemessen“ behandeln, nicht als 0 (csv.js, chronik.js). */
+     gespeicherte Serien haben die Felder f0Cep … shrGrund, slotVerschmolzen und rauschBoden nicht: Wer sie
+     liest, muss das Fehlen als „nicht gemessen“ behandeln, nicht als 0 (csv.js, chronik.js).
+     Warum ein Slot unsicher ist (dsp.js slotGrund), steht als Maske wie valid und slotUnsure, Bit k für Fk+1:
+     slotVerschmolzen = Grund 'verschmolzen' (zwei Resonanzen in einem Gipfel möglich); ein gesetztes
+     slotUnsure-Bit ohne dieses Bit heißt 'nummer'. rauschBoden = Gipfel im Rauschboden, unabhängig davon. */
   function makeSeries(n) {
     var f = function () { return new Float32Array(n); };
     var s = { t: f(), f0: f(), ap: f(), rms: f(), d34: f(), d45: f(), score: f(), sfr: f(), sfrn: f(), shr: f(), cpp: f(), h1h2: f(), h1h2c: f(),
       f0Cep: f(), f0Yin: f(), shrGrid: f(), shrOther: f(), shrKamm: f(), shrZweitpuls: f(),
       f0Grund: new Uint8Array(n), f0Korrektur: new Uint8Array(n), shrGrund: new Uint8Array(n),
-      valid: new Uint8Array(n), slotUnsure: new Uint8Array(n), nPeaks: new Uint8Array(n),
+      valid: new Uint8Array(n), slotUnsure: new Uint8Array(n), slotVerschmolzen: new Uint8Array(n), rauschBoden: new Uint8Array(n), nPeaks: new Uint8Array(n),
       gate: new Uint8Array(n), flags: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
     return s;
@@ -129,9 +132,13 @@
       if (r.valid[k]) vmask |= (1 << k);
     }
     series.valid[i] = vmask;
-    var umask = 0;
-    for (var u = 0; u < 5; u++) if (r.slotUnsure && r.slotUnsure[u]) umask |= (1 << u);
-    series.slotUnsure[i] = umask;
+    var umask = 0, vmerk = 0, bmask = 0;
+    for (var u = 0; u < 5; u++) {
+      if (r.slotUnsure && r.slotUnsure[u]) umask |= (1 << u);
+      if (r.slotGrund && r.slotGrund[u] === 'verschmolzen') vmerk |= (1 << u);
+      if (r.rauschBoden && r.rauschBoden[u]) bmask |= (1 << u);
+    }
+    series.slotUnsure[i] = umask; series.slotVerschmolzen[i] = vmerk; series.rauschBoden[i] = bmask;
     series.nPeaks[i] = r.nPeaksRef;
     series.d34[i] = r.d34; series.d45[i] = r.d45; series.sfr[i] = r.sfr; series.shr[i] = r.shr; series.cpp[i] = r.cpp; series.h1h2[i] = r.h1h2; series.h1h2c[i] = r.h1h2c;
     // Gegenprobe und SHR-Raster: was den Wert unsicher macht oder ändert, gehört zum Rahmen.

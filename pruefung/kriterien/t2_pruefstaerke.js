@@ -69,6 +69,9 @@ FRAME_SOLL.push(
   ['sfr_db', 'feld', 'sfr', 2], ['sfr_norm_db', 'feld', 'sfrn', 2], ['shr_db', 'feld', 'shr', 2], ['cpp_db', 'feld', 'cpp', 2],
   ['h1h2_db', 'feld', 'h1h2', 2], ['h1h2c_db', 'feld', 'h1h2c', 2],
   ['slot_unsure', 'feld', 'slotUnsure', 0], ['n_peaks', 'feld', 'nPeaks', 0],
+  ['slot_grund1', 'slotgrund', 0], ['slot_grund2', 'slotgrund', 1], ['slot_grund3', 'slotgrund', 2], ['slot_grund4', 'slotgrund', 3], ['slot_grund5', 'slotgrund', 4],
+  ['rauschboden1', 'bit', ['rauschBoden', 1]], ['rauschboden2', 'bit', ['rauschBoden', 2]], ['rauschboden3', 'bit', ['rauschBoden', 4]],
+  ['rauschboden4', 'bit', ['rauschBoden', 8]], ['rauschboden5', 'bit', ['rauschBoden', 16]],
   ['octave_corrected', 'bit', ['flags', 'OCTAVE']], ['octave_ambiguous', 'bit', ['flags', 'OCTAMBIG']],
   ['h1h2_unsure', 'bit', ['flags', 'H1H2UNSURE']],
   ['f0_unsure', 'bit', ['flags', 'F0UNSURE']], ['f0_grund', 'grund', 'f0Grund'], ['f0_korrektur', 'grund', 'f0Korrektur'],
@@ -84,6 +87,20 @@ const GRUND_ZEILEN = {
   f0Korrektur: ['', 'teiltonreihe', '', 'cepstrum', 'cepstrum', ''],
   shrGrund: ['kamm', 'zweitpuls', 'kamm+zweitpuls', 'grundton', 'kamm+zweitpuls+grundton', 'zweitpuls+grundton']
 };
+
+/* Grund je Slot (Vertrag K2, dsp.js slotGrund) je Zeile, als Sollwert der Spalten slot_grund1…5. Daraus werden
+   slotUnsure und slotVerschmolzen der Serie gebaut, nicht umgekehrt. Jede Spalte hat ein eigenes Muster, und
+   'nummer' und 'verschmolzen' stehen in verschiedenen Zeilen, damit vertauschte Spalten oder Texte auffallen.
+   Rauschboden je Zeile als Maske (Bit k = Fk+1), Muster verschieden von valid1…5 und voneinander. */
+const SLOTGRUND_ZEILEN = [
+  ['nummer', '', 'verschmolzen', '', ''],
+  ['', 'verschmolzen', '', 'nummer', ''],
+  ['verschmolzen', '', 'nummer', '', 'verschmolzen'],
+  ['', '', '', 'nummer', ''],
+  ['', 'nummer', '', '', 'verschmolzen'],
+  ['nummer', 'nummer', '', '', '']
+];
+const RAUSCHBODEN_ZEILEN = [2 | 16, 1 | 4, 4, 1 | 8, 16 | 8, 2 | 16 | 8];
 
 /* CSV nach RFC 4180 lesen: Anführungszeichen, verdoppelte Anführungszeichen, Zeilenumbruch im Feld.
    Meldet Formfehler (Anführungszeichen mitten im ungequoteten Feld, LF ohne CR als Zeilenende). */
@@ -166,7 +183,12 @@ function buildSeries(A) {
     }
     c++;
   }
-  [1, 2, 4, 8, 16, 0].forEach((v, r) => { s.slotUnsure[r] = v; });
+  SLOTGRUND_ZEILEN.forEach((z, r) => {
+    let u = 0, m = 0;
+    z.forEach((t, k) => { if (t) u |= 1 << k; if (t === 'verschmolzen') m |= 1 << k; });
+    s.slotUnsure[r] = u; if (s.slotVerschmolzen) s.slotVerschmolzen[r] = m;
+  });
+  if (s.rauschBoden) RAUSCHBODEN_ZEILEN.forEach((v, r) => { s.rauschBoden[r] = v; });
   [5, 4, 3, 2, 1, 0].forEach((v, r) => { s.nPeaks[r] = v; });
   [1, 2, 4, 8, 16, 22].forEach((v, r) => { s.valid[r] = v; });
   [F.VOICED, F.OCTAVE | F.SCORE, F.H1H2UNSURE | F.SUBGRID, F.OCTAMBIG | F.D34VALID,
@@ -186,6 +208,7 @@ function expectFrame(entry, s, r, dialect, A, V) {
   if (kind === 'gate') { for (const w in A.GATE_CODE) if (A.GATE_CODE[w] === s.gate[r]) return w; return '?'; }
   if (kind === 'vokal') return s.cls[r] >= 0 ? V.CENTROIDS[s.cls[r]].cls : '';
   if (kind === 'grund') return GRUND_ZEILEN[src][r];
+  if (kind === 'slotgrund') return SLOTGRUND_ZEILEN[r][src];
   throw new Error('Art ' + kind);
 }
 
@@ -345,7 +368,7 @@ module.exports = async function (H) {
     const sum = takeZwei.summary, ser = takeZwei.series, n = ser.t.length, fehlt = [];
     for (const [key, path] of TAKE_SOLL) if (path.indexOf('summary.') === 0 && !resolvePath({ summary: sum }, path).found) fehlt.push(key + '←' + path);
     for (const [name, kind, src] of FRAME_SOLL) {
-      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : 'cls';
+      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : kind === 'slotgrund' ? 'slotVerschmolzen' : 'cls';
       if (!(ArrayBuffer.isView(ser[field]) && ser[field].length === n)) fehlt.push(name + '←' + field);
       if (kind === 'bit' && typeof src[1] === 'string' && typeof A.FLAG[src[1]] !== 'number') fehlt.push(name + '←FLAG.' + src[1]);
     }

@@ -130,6 +130,21 @@
      das mit den Bits zusammen geschrieben wird (f0Grund für den Grundton, shrGrund für SHR). */
   function bitMit(merkmal, bit) { return function (s, i) { return s[merkmal] ? ((s.flags[i] & bit) ? 1 : 0) : null; }; }
   function grundSpalte(feld) { return function (s, i) { return s[feld] ? grundText(feld, s[feld][i]) : null; }; }
+  /* Warum ein Formant ungültig ist, je Slot neben valid1…valid5 — als eigene Spalten, nicht als Maske wie
+     slot_unsure: Eine Maske verlangt Bitrechnung (12 heißt F3 und F4), und genau dort verrechnet man sich
+     beim Nachprüfen. slot_grundK trägt den Text des Kerns (dsp.js slotGrund): 'nummer' (Nummer mehrdeutig)
+     oder 'verschmolzen' (zwei Resonanzen in einem Gipfel möglich), leer bei eindeutiger Nummer. Eine ältere
+     Serie kennt nur „unsicher“, nicht warum: dann '?', nie still 'nummer'. rauschbodenK ist 0/1 und
+     unabhängig davon (ein Gipfel kann beides sein); ältere Serien −99. Streuung über Fenster und Ordnungen
+     steht schon in sdwK und sdoK. */
+  function slotGrundSpalte(k) {
+    var b = 1 << k;
+    return function (s, i) {
+      if (!s.slotUnsure || !(s.slotUnsure[i] & b)) return '';
+      return s.slotVerschmolzen ? ((s.slotVerschmolzen[i] & b) ? 'verschmolzen' : 'nummer') : '?';
+    };
+  }
+  function maskenSpalte(feld, k) { var b = 1 << k; return function (s, i) { return s[feld] ? ((s[feld][i] & b) ? 1 : 0) : null; }; }
 
   // Rahmenweise Spalten: Name → Serienfeld (oder Funktion) und Nachkommastellen.
   var FRAME_COLUMNS = [
@@ -147,6 +162,9 @@
     ['d34', 'd34', 1], ['d45', 'd45', 1], ['score_d34', 'score', 1],
     ['sfr_db', 'sfr', 2], ['sfr_norm_db', 'sfrn', 2], ['shr_db', 'shr', 2], ['cpp_db', 'cpp', 2], ['h1h2_db', 'h1h2', 2], ['h1h2c_db', 'h1h2c', 2],
     ['slot_unsure', 'slotUnsure', 0], ['n_peaks', 'nPeaks', 0],
+    ['slot_grund1', slotGrundSpalte(0)], ['slot_grund2', slotGrundSpalte(1)], ['slot_grund3', slotGrundSpalte(2)], ['slot_grund4', slotGrundSpalte(3)], ['slot_grund5', slotGrundSpalte(4)],
+    ['rauschboden1', maskenSpalte('rauschBoden', 0), 0], ['rauschboden2', maskenSpalte('rauschBoden', 1), 0], ['rauschboden3', maskenSpalte('rauschBoden', 2), 0],
+    ['rauschboden4', maskenSpalte('rauschBoden', 3), 0], ['rauschboden5', maskenSpalte('rauschBoden', 4), 0],
     ['octave_corrected', function (s, i) { return (s.flags[i] & 2) ? 1 : 0; }, 0],
     ['octave_ambiguous', function (s, i) { return (s.flags[i] & 128) ? 1 : 0; }, 0],
     ['h1h2_unsure', function (s, i) { return (s.flags[i] & 8) ? 1 : 0; }, 0],
