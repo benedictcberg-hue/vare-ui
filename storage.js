@@ -1,6 +1,6 @@
 /* VARE — lokale Chronik in IndexedDB (nur Browser). Nichts verlässt das Gerät.
    Datenbank „vare“, Version 1. Läden: takes (Zusammenfassung), series (Rahmenverlauf als typisierte
-   Arrays), audio (WAV-Blob), calibrations, meta (refs, settings, nextCode).
+   Arrays), audio (WAV-Blob), calibrations, meta (refs, settings, nextCode, sitzung).
    Achtung: IndexedDB gehört zur Adresse (Origin). Was unter localhost:8000 aufgenommen wurde, ist
    unter github.io nicht sichtbar — Übertragung per JSON-Sicherung. */
 (function (root) {
@@ -70,7 +70,16 @@
     deleteCalibration: function (id) { return del('calibrations', id); },
     getMeta: function (key, fallback) { return get('meta', key).then(function (v) { return v ? v.value : fallback; }); },
     setMeta: function (key, value) { return put('meta', { key: key, value: value }); },
-    clearAll: function () { return tx(['takes', 'series', 'audio', 'calibrations', 'meta'], 'readwrite', function (t) { ['takes', 'series', 'audio', 'calibrations', 'meta'].forEach(function (s) { t.objectStore(s).clear(); }); }); },
+    /* Leert alle Läden. Was in metaBehalten steht ({Schlüssel: Wert}), wird in DERSELBEN Transaktion
+       zurückgeschrieben: schließt jemand die Seite mitten im Löschen, ist entweder nichts gelöscht
+       oder der Code-Zähler schon wieder da — nie ein leerer Zähler neben einer leeren Chronik. */
+    clearAll: function (metaBehalten) {
+      var alle = ['takes', 'series', 'audio', 'calibrations', 'meta'];
+      return tx(alle, 'readwrite', function (t) {
+        alle.forEach(function (s) { t.objectStore(s).clear(); });
+        for (var k in (metaBehalten || {})) if (metaBehalten[k] !== undefined) t.objectStore('meta').put({ key: k, value: metaBehalten[k] });
+      });
+    },
     estimate: function () { return (root.navigator && navigator.storage && navigator.storage.estimate) ? navigator.storage.estimate() : Promise.resolve(null); },
     persist: function () { return (root.navigator && navigator.storage && navigator.storage.persist) ? navigator.storage.persist() : Promise.resolve(false); },
     persisted: function () { return (root.navigator && navigator.storage && navigator.storage.persisted) ? navigator.storage.persisted() : Promise.resolve(false); }

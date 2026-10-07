@@ -83,7 +83,8 @@ function speicherNeu() {
     deleteCalibration: id => { d.cal.delete(id); return P(); },
     getMeta: (k, fb) => P(d.meta.has(k) ? kopie(d.meta.get(k)) : fb),
     setMeta: (k, v) => { d.meta.set(k, kopie(v)); return P(); },
-    clearAll: () => { Object.values(d).forEach(m => m.clear()); return P(); },
+    // Wie storage.js: alles leeren, dann die mitgegebenen Meta-Einträge zurückschreiben.
+    clearAll: behalten => { Object.values(d).forEach(m => m.clear()); for (const k in (behalten || {})) if (behalten[k] !== undefined) d.meta.set(k, kopie(behalten[k])); return P(); },
     estimate: () => P(null), persist: () => P(false), persisted: () => P(false)
   };
   return { d, api };
@@ -174,7 +175,7 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
 }
 
 module.exports = async function (H) {
-  const { D, SR, concat, noise, BW5 } = H;
+  const { D, C, SR, concat, noise, BW5 } = H;
   // test_dsp.js füllt die ID auf 5 Zeichen auf; bei „U1.10“ fehlte sonst der Abstand zum Namen.
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
   process.on('unhandledRejection', aufFehler);
@@ -362,6 +363,63 @@ module.exports = async function (H) {
       'gesperrt=' + gesperrt + ' | Klick startete Take=' + gestartet + ' | Hinweis „' + hint + '“');
     p.schliessen();
   } catch (e) { check('U2.1', 'Ablauf „Alles löschen“ läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U2 · „Alles löschen“ behält Code-Zähler, Sitzung und Einstellungen ---------- */
+  const codes = sp => [...sp.d.takes.values()].map(t => t.code).sort();
+  const sicherung = takes => C.serializeBackup({ takes, series: {}, refs: {}, calibrations: [], settings: null, kernelVersion: D.VERSION, exportedAt: new Date(T0).toISOString(), audio: {} });
+  // JSON-Sicherung über das Dateifeld einspielen, wie nach der Dateiauswahl.
+  async function importieren(p, json) {
+    if (p.st().statusEl) p.st().statusEl.textContent = '';
+    p.el('file-import').files = [{ text: () => Promise.resolve(json) }];
+    p.el('file-import').feuern('change');
+    return p.warte(() => /Import/.test(statusText(p)), 10000);
+  }
+  async function loeschen(p, sp) { p.klick('btn-clear-all'); return p.warte(() => sp.d.takes.size === 0 && /gelöscht/.test(statusText(p))); }
+  try {
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 6 * 86400e3);
+    // Ein verstellter Regler, gespeichert wie von saveSettings.
+    sp.d.meta.set('settings', { f3MinHz: 2700, __touched: { f3MinHz: true } });
+    let p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-K1'); await p.mikrofon();
+    const A = await p.take(); uhr.vor(20000);
+    const B = await p.take(); uhr.vor(20000);
+    const json = sicherung([A, B]), sitzungVor = p.st().sitzung.id;
+    await loeschen(p, sp);
+    p.schliessen(); uhr.vor(5000);
+    p = await seiteOeffnen(sp, uhr, SIG, SR);
+    await p.ruhe(20);
+    const nach = { f3MinHz: p.st().settings.f3MinHz, selbeSitzung: p.st().sitzung.id === sitzungVor, nr: p.st().sitzung.nr, naechsteNummer: p.el('ctx-position').textContent };
+    check('U2.2', '„Alles löschen“, dann Neuladen: Sitzung und verstellte Einstellung bleiben, die Stelle in der Sitzung zählt weiter',
+      nach.f3MinHz === 2700 && nach.selbeSitzung && nach.naechsteNummer === '3', JSON.stringify(nach));
+    p.kalibriert('cal-K2'); await p.mikrofon();
+    const N = await p.take();
+    await importieren(p, json);
+    const cs = codes(sp);
+    check('U2.3', '„Alles löschen“, neuer Take, Sicherung eingespielt: Codes laufen weiter, keiner doppelt',
+      N.code === 'C' && cs.join(',') === 'A,B,C', 'neuer Take ' + N.code + ' | Codes nach dem Import ' + cs.join(','));
+    p.schliessen();
+    // Nur importierte Takes im Browser: der behaltene Zähler muss auch ihre Codes kennen.
+    const sp2 = speicherNeu(), uhr2 = uhrNeu(T0 + 7 * 86400e3);
+    p = await seiteOeffnen(sp2, uhr2, SIG, SR);
+    await importieren(p, json);
+    const importiert = codes(sp2).join(',');
+    await loeschen(p, sp2);
+    p.kalibriert('cal-K3'); await p.mikrofon();
+    const M = await p.take();
+    check('U2.4', 'Sicherung eingespielt, dann „Alles löschen“: der neue Take bekommt keinen Code der Sicherung',
+      importiert === 'A,B' && M.code === 'C', 'importiert ' + importiert + ' | neuer Take ' + M.code);
+    // „Alles löschen“ mitten in der Analyse: abweisen, sonst landet der Take nach dem Löschen.
+    p.st().settings.hopS = 0.010;
+    const vorher = sp2.d.takes.size;
+    p.klick('btn-take'); uhr2.vor(2000); p.klick('btn-take');
+    const busy = p.st().busy;
+    p.klick('btn-clear-all');
+    const txt = statusText(p);
+    await p.warte(() => !p.st().busy, 60000); await p.ruhe(20);
+    check('U2.5', '„Alles löschen“ während der Analyse wird abgewiesen: nichts gelöscht, der Take danach gespeichert',
+      busy === true && sp2.d.takes.size === vorher + 1 && /abwarten/.test(txt), 'Analyse lief=' + busy + ' | Takes vorher ' + vorher + ', danach ' + sp2.d.takes.size + ' | Meldung „' + txt + '“');
+    p.schliessen();
+  } catch (e) { check('U2.2', 'Ablauf „Alles löschen“ mit Zähler läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);

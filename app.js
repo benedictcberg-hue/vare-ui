@@ -764,16 +764,30 @@
       });
     }).catch(function (e) { status('Import fehlgeschlagen: ' + (e && e.message || e), true); });
   }
+  /* „Alles löschen“ löscht die Chronik — Takes, Verläufe, Audio, Kalibrierungen, Referenzen —, aber
+     nicht ihre Zählung. Ginge der Code-Zähler mit, hieße der nächste Take wieder A, und nach dem
+     Einspielen der Sicherung stünden zwei Takes A in der Chronik. Behalten wird der höhere von
+     gespeichertem Zähler und vorhandenen Codes, damit auch importierte Takes zählen.
+     Sitzung und Einstellungen sind keine Chronik: im Speicher der Seite laufen sie weiter, gelöscht
+     kämen sie nach dem Neuladen still als „Sitzung 1“ und als Vorgabewerte zurück. */
   function clearAll() {
+    // Ein Take, der gerade aufgenommen oder analysiert wird, würde nach dem Löschen gespeichert —
+    // mit einem Code, den der behaltene Zähler nicht kennt.
+    if (st.taking || st.busy) { status('Erst Take und Analyse abwarten, dann löschen.', true); return; }
     if (!window.confirm('Wirklich die gesamte Chronik dieses Browsers löschen? Vorher JSON-Sicherung anlegen!')) return;
     if (!window.confirm('Letzte Frage: alles löschen?')) return;
-    S.clearAll().then(function () {
+    Promise.all([S.allTakes(), S.getMeta('nextCode', 0), S.getMeta('settings', null)]).then(function (r) {
+      var behalten = { nextCode: A.nextCodeIndex(r[0], r[1]) };
+      if (r[2]) behalten.settings = r[2];
+      if (st.sitzung) behalten.sitzung = st.sitzung;
+      return S.clearAll(behalten);
+    }).then(function () {
       st.refs = {}; st.cal = null; st.calSession = false; renderCalStatus([]);
       // Die Kalibrierung ist mitgelöscht. Ohne diesen Aufruf bliebe der Take-Knopf frei, während
       // daneben „Ohne Kalibrierung ist kein Take möglich“ steht.
       updateTakeButton();
-      refreshChronik(); status('Chronik gelöscht.');
-    });
+      refreshChronik(); status('Chronik gelöscht. Codes und Stelle in der Sitzung zählen weiter.');
+    }).catch(function (e) { status('Löschen fehlgeschlagen: ' + (e && e.message || e), true); });
   }
 
   /* ---------- Prüfsignal ---------- */
