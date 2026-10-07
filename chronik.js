@@ -28,8 +28,7 @@
   function statRange(s) { return s && zahl(s.med) ? fmt(s.med) + ' [' + fmt(s.q1) + '–' + fmt(s.q3) + ']' : '–'; }
   function statRangeShare(summary, s) {
     if (!s || !zahl(s.med)) return '–';
-    var sh = validShareOf(summary, s);
-    return statRange(s) + ' · gültig in ' + fmt(sh * 100) + ' %';
+    return statRange(s) + ' · ' + formantBeleg(summary, s);
   }
 
   /* F1–F5: Median als Punkt, Quartilspanne als Balken, 0–4500 Hz, Sängerformantband hinterlegt. */
@@ -41,6 +40,14 @@
     var v = (summary && summary.voicedShare && summary.nFrames) ? Math.round(summary.voicedShare * summary.nFrames) : 0;
     return (v && st) ? st.n / v : 1;
   }
+  /* Schwach belegt: in weniger als der Hälfte der stimmhaften Rahmen gültig oder weniger als 10 gültige Rahmen.
+     Eine Regel für Liste, Detail und Take-Ergebnis — vorher zeigte das Ergebnis direkt nach dem Take denselben
+     Median ohne Marke, den das Detail in Rost führte (Befund N8). Ein fehlender Formant ist es auch. */
+  function formantSchwach(summary, f) { return !f || !(f.n >= 10) || validShareOf(summary, f) < 0.5; }
+  // Woraus der Median stammt, als Text: Anteil gültiger Rahmen, bei weniger als 10 auch ihre Zahl.
+  function formantBeleg(summary, f) {
+    return 'gültig in ' + prozentHtml(validShareOf(summary, f)) + ' %' + (f && zahl(f.n) && f.n > 0 && f.n < 10 ? ', n = ' + fmt(f.n) : '');
+  }
   function drawFormantBars(cv, summary, cssH) {
     var c = setupCanvas(cv, cssH || 28), ctx = c.ctx, w = c.w, h = c.h, fmax = 4500;
     var x = function (f) { return f / fmax * w; };
@@ -48,7 +55,7 @@
     for (var k = 0; k < 5; k++) {
       var s = summary && summary.F && summary.F[k];
       if (!s || !zahl(s.med)) continue;
-      var weak = s.n < 10 || validShareOf(summary, s) < 0.5;
+      var weak = formantSchwach(summary, s);
       if (weak) { ctx.strokeStyle = COL.rust; ctx.lineWidth = 1; ctx.setLineDash([2, 2]); ctx.strokeRect(x(s.q1), h / 2 - 4, Math.max(2, x(s.q3) - x(s.q1)), 8); ctx.setLineDash([]); }
       else { ctx.fillStyle = COL.line; ctx.fillRect(x(s.q1), h / 2 - 4, Math.max(2, x(s.q3) - x(s.q1)), 8); }
       ctx.beginPath(); ctx.arc(x(s.med), h / 2, 4, 0, 2 * Math.PI);
@@ -387,7 +394,7 @@
       cell('Dauer · Rahmen', fmt(take.durationS, 1) + ' s · ' + fmt(s.nFrames)) +
       cell('stimmhaft · gültig · stabil', fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' %') +
       cell('F0 Median [q1–q3]', statRange(s.f0) + ' ' + esc(s.f0 && s.f0.note || '') + f0Zusatz(s), f0Unsicher(s)) +
-      cell('F1', statRangeShare(s, s.F && s.F[0]), s.F && s.F[0] && validShareOf(s, s.F[0]) < 0.5) + cell('F2', statRangeShare(s, s.F && s.F[1]), s.F && s.F[1] && validShareOf(s, s.F[1]) < 0.5) + cell('F3', statRangeShare(s, s.F && s.F[2]), s.F && s.F[2] && validShareOf(s, s.F[2]) < 0.5) + cell('F4', statRangeShare(s, s.F && s.F[3]), s.F && s.F[3] && validShareOf(s, s.F[3]) < 0.5) + cell('F5', statRangeShare(s, s.F && s.F[4]), s.F && s.F[4] && validShareOf(s, s.F[4]) < 0.5) +
+      [0, 1, 2, 3, 4].map(function (k) { var f = s.F && s.F[k]; return cell('F' + (k + 1), statRangeShare(s, f), formantSchwach(s, f)); }).join('') +
       cell('ΔF3–4 alle gültigen', statRange(s.d34)) +
       // Keine Wertung, weil F3 sicher unter dem Mindestwert liegt, ist ein Befund, kein unsicherer Wert.
       ((s.d34stable && s.d34stable.n) ? cell('ΔF3–4 stabil, F3 ≥ ' + (thr != null ? fmt(thr) + ' Hz' : 'Minimum'), statRange(s.d34stable) + ' n=' + fmt(s.d34stable.n))
@@ -506,5 +513,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

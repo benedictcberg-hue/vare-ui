@@ -681,5 +681,79 @@ module.exports = async function (H) {
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
+  await kriterienB2(H);
 };
+
+/* Kriterien B2 — Anzeige, CSV und Doku sagen dasselbe wie die Messung.
+   B2a: Das Take-Ergebnis zeigt schwach belegte Formanten und ein zweideutiges Bestsegment wie das Detail (N8). */
+async function kriterienB2(H) {
+  const { D, SR, noise } = H;
+  const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
+  const fehlerVorher = fehlerListe.length;
+  const rms = x => { let e = 0; for (let i = 0; i < x.length; i++) e += x[i] * x[i]; return Math.sqrt(e / x.length); };
+  const rostTeile = html => html.split(' · ').map(t => ({ rost: /class="rust/.test(t), text: t.replace(/<[^>]+>/g, '') }));
+
+  /* ---------- B2a · Take-Ergebnis wie Detail: schwach belegte Formanten, zweideutiges Bestsegment ---------- */
+  try {
+    // /o/ auf A2, 2,5 s, davor 0,5 s Raumrauschen; Rauschen 30 dB unter dem Vokal. F1 und F2 sind fast überall
+    // gültig, F3 und F4 nur in einem Teil der Rahmen (bei realistischem Abstand von 30–50 dB üblich).
+    const o = D.synthVowel(110, [430, 800, 2450, 3200, 4000], [60, 80, 120, 150, 200], 2.5, SR, { gain: 0.3 });
+    const z = noise(o.length + SR / 2, 1, 51), g = rms(o) / rms(z) * Math.pow(10, -30 / 20), sig = new Float32Array(z.length);
+    for (let i = 0; i < sig.length; i++) sig[i] = g * z[i] + (i >= SR / 2 ? o[i - SR / 2] : 0);
+    let liefer = () => ({ samples: Float32Array.from(sig), sampleRate: SR, durationS: sig.length / SR });
+    const br = idbNeu(), p = await seiteNeu(br, () => liefer(), SR);
+    p.kalibriert('cal-1'); await p.mikrofon();
+    const bad = [], belege = [];
+    // Soll unabhängig von chronik.js: schwach = weniger als 10 gültige Rahmen oder Anteil unter 0,5; dann Rost mit Anteil.
+    const schwachSoll = f => !(f.n >= 10) || !(f.share >= 0.5);
+    const pruefeTake = async (T, name) => {
+      const ks = U.kacheln(p.el('take-result').innerHTML), fk = ks.find(k => /^F1–F5 Median/.test(k.k));
+      if (!fk) { bad.push(name + ': keine Kachel F1–F5'); return { ks }; }
+      const teile = rostTeile(fk.vHtml), schwach = [];
+      T.summary.F.forEach((f, k) => {
+        const soll = schwachSoll(f), t = teile[k] || { rost: null, text: '?' };
+        const anteil = 'gültig in ' + (f.share > 0 && f.share < 0.01 ? '< 1' : String(Math.round(f.share * 100))) + ' %';
+        if (soll) schwach.push(k);
+        if (t.rost !== soll || (soll && t.text.indexOf(anteil) < 0) || (soll && f.n > 0 && f.n < 10 && t.text.indexOf('n = ' + f.n) < 0)) bad.push(name + ' F' + (k + 1) + ' (n=' + f.n + ', ' + (100 * f.share).toFixed(0) + ' %): „' + t.text + '“ ' + (t.rost ? 'in Rost' : 'ohne Rost'));
+      });
+      // Das Detail desselben Takes führt dieselben Formanten in Rost.
+      p.geheZu('#/take/' + T.id);
+      await p.warte(() => p.el('take-detail').innerHTML.indexOf('<h2>' + T.code + ' ') >= 0, 3000);
+      const dk = U.kacheln(p.el('take-detail').innerHTML), dSchwach = [0, 1, 2, 3, 4].filter(k => { const x = dk.find(c => c.k === 'F' + (k + 1)); return x && /\bunsure\b/.test(x.klasse); });
+      if (dSchwach.join() !== schwach.join()) bad.push(name + ': Detail in Rost F' + dSchwach.map(k => k + 1).join(',') + ', Ergebnis F' + schwach.map(k => k + 1).join(','));
+      belege.push(name + ' „' + fk.v + '“');
+      p.geheZu('#/aufnahme');
+      return { ks, schwach };
+    };
+    const T1 = await p.take();
+    const r1 = await pruefeTake(T1, 'Rauschen');
+    // Eingespeiste Zusammenfassung: F2 mit hohem Anteil, aber nur 8 Rahmen; F5 nicht gefunden; Bestsegment /a/ zu
+    // 30 % zweideutig, /o/ nur aus zweideutigen Segmenten.
+    liefer = () => ({ samples: Float32Array.from(sig), sampleRate: SR, durationS: sig.length / SR });
+    const AA = p.sb.VAREANALYSIS, echt = AA.analyseTake;
+    AA.analyseTake = function () {
+      return echt.apply(this, arguments).then(r => {
+        r.summary.F[1].n = 8; r.summary.F[1].share = 0.9; r.summary.F[4] = { med: NaN, q1: NaN, q3: NaN, n: 0, share: 0 };
+        r.summary.perVowel = { a: { nStable: 40, segments: 1, segmentsAmbiguous: 0, d34: null, bestSegment: { d34Med: 812, startS: 0.6, lenS: 0.8, n: 40, ambiguousShare: 0.3 } },
+          o: { nStable: 20, segments: 1, segmentsAmbiguous: 1, d34: null, bestSegment: null } };
+        return r;
+      });
+    };
+    const T2 = await p.take();
+    AA.analyseTake = echt;
+    const r2 = await pruefeTake(T2, 'eingespeist');
+    const best = (r2.ks || []).find(k => /^Bestes Segment/.test(k.k)) || { vHtml: '', v: '' };
+    if (!/\/a\/ 812 <span class="rust[^"]*">zweideutig 30 %<\/span>/.test(best.vHtml) || !/\/o\/ –.*nur zweideutig zugeordnete Segmente/.test(best.v)) bad.push('Bestsegment „' + best.v + '“');
+    belege.push('Bestsegment „' + best.v + '“');
+    const gemischt = r1.schwach && r1.schwach.length > 0 && r1.schwach.length < 5;
+    check('B2a', 'Take-Ergebnis wie Detail: schwach belegte Formanten (unter 10 Rahmen oder unter 50 % gültig) in Rost mit Anteil, die übrigen ohne; Bestsegment mit Zweideutig-Anteil in Rost (N8)',
+      !bad.length && gemischt && [1, 4].every(k => (r2.schwach || []).indexOf(k) >= 0),
+      (bad.length ? bad.slice(0, 4).join(' | ') + ' || ' : '') + 'schwach im Rauschtake F' + (r1.schwach || []).map(k => k + 1).join(',') + ' | ' + belege.join(' | '));
+    p.schliessen();
+  } catch (e) { check('B2a', 'Ablauf Take-Ergebnis läuft durch', false, kurzFehler(e)); }
+
+  const neueFehler = fehlerListe.slice(fehlerVorher);
+  check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
+}
 module.exports.hilfen = { idbNeu, seiteNeu, recorderNeu, E };
+module.exports.b2 = kriterienB2;
