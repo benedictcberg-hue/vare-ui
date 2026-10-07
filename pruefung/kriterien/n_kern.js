@@ -972,8 +972,10 @@ module.exports = async function (H) {
 
   /* A4c Oktave darüber: Im Hauch steht von der ungeraden Reihe bei f/2 nur der tiefe Teil über dem Rauschen; die
      Teilerkontrolle teilte nicht und meldete nichts, YIN oder die Korrektur blieben auf 2·F0 (/o/ /e/ mit F1 nahe
-     2·F0). Jetzt „Oktave offen“ (octaveAmbiguous). Der Anteil richtiger Grundtöne mit dieser Marke steht im
-     Bericht (er stammt überwiegend aus dem schmalen Band −25…−20 dB, das es schon vorher gab). */
+     2·F0), und SHR las die ungeraden Teiltöne als Subharmonische (−13 bis −14 dB als Befund). Jetzt „Oktave offen“
+     (octaveAmbiguous) und Grundton unsicher (f0Grund 'oktave' oder aus der Gegenprobe), damit auch SHR unsicher.
+     Der Anteil richtiger Grundtöne mit „Oktave offen“ steht im Bericht (überwiegend aus dem schmalen Band
+     −25…−20 dB, das es schon vorher gab); mit Grund 'oktave' höchstens 1 %. */
   {
     let s4 = 42000; const R = [];
     for (const v of ['o', 'e']) for (const f0 of [196, 208, 220, 233]) for (const hnr of [5, 8]) for (const vib of [0, 40]) for (let sd = 0; sd < 2; sd++) {
@@ -983,10 +985,15 @@ module.exports = async function (H) {
     }
     const hoch = R.filter(r => Math.abs(r.f0 / (2 * r.soll) - 1) <= 0.03), richtig = R.filter(r => Math.abs(r.f0 / r.soll - 1) <= 0.03);
     const ohne = hoch.filter(r => !markiert4(r)), korr = hoch.filter(r => r.f0Korrektur), amb = richtig.filter(r => r.octaveAmbiguous);
+    const nurOffen = hoch.filter(r => !r.f0Unsure || !r.shrUnsure), okt = richtig.filter(r => r.f0Grund === 'oktave');
     check('A4c', 'behauchte Stimme mit F1 nahe 2·F0 (/o/ /e/ 196–233 Hz, HNR 5/8 dB, mit Vibrato, Raumrauschen 40 dB), Grundton eine Oktave zu hoch: jeder trägt octaveAmbiguous oder f0Unsure, keiner durch die Korrektur dorthin gesetzt',
       R.length >= 1000 && hoch.length >= 30 && ohne.length === 0 && korr.length === 0,
       R.length + ' Rahmen, Oktave zu hoch ' + hoch.length + ', ohne Marke ' + ohne.length + ', dorthin korrigiert ' + korr.length + (ohne.length + korr.length ? ' — ' + ohne.concat(korr).slice(0, 4).map(r => r.nm).join(' | ') : '') +
       '; Bericht: richtige Grundtöne mit „Oktave offen“ ' + amb.length + ' von ' + richtig.length);
+    check('A4c', 'derselbe Satz: jeder Grundton eine Oktave zu hoch ist unsicher (f0Unsure), und sein SHR auch (shrUnsure); richtige Grundtöne höchstens zu 1 % mit Grund \'oktave\'',
+      hoch.length >= 30 && nurOffen.length === 0 && okt.length <= 0.01 * richtig.length,
+      'Oktave zu hoch ' + hoch.length + ', davon Grundton oder SHR ohne Unsicherheit ' + nurOffen.length + (nurOffen.length ? ' (' + nurOffen.slice(0, 3).map(r => r.nm + ' SHR ' + r1(r.shr) + (r.shrUnsure ? ' [' + r.shrGrund + ']' : '')).join(' | ') + ')' : '') +
+      ', richtige mit \'oktave\' ' + okt.length + ' von ' + richtig.length);
   }
 
   /* ---------- A4d: SFR und CPP neben Frikativen (Befund N16) ----------

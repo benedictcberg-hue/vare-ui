@@ -776,7 +776,7 @@
   }
 
   function subMultipleTest(spec, f, m, marginDb, oddEvenDb) {
-    var out = { m: m, pass: false, ambiguous: false, unterGrenze: false, newMinusNoise: NaN, newMinusOld: NaN };
+    var out = { m: m, pass: false, ambiguous: false, teilweise: false, unterGrenze: false, newMinusNoise: NaN, newMinusOld: NaN };
     var g = f / m;
     if (!(g >= 30)) return out;
     var t = teiltonreihe(spec, g, m, marginDb);
@@ -788,10 +788,13 @@
          (Hauch stärkt H1). Dann reicht es nicht zu den 60 %, und YIN behielt die Oktave darüber ohne Marke
          (/o/ /e/ 196–233 Hz, HNR 5–8 dB: Grundton auf 2·F0, auch als Korrektur). Liegen die neuen Linien im
          Mittel marginDb über dem Zwischenrauschen, mindestens 40 % (wenigstens zwei) einzeln darüber und im
-         Mittel weniger als marginDb unter den bekannten, ist f/m weder belegt noch ausgeschlossen: ambiguous.
+         Mittel weniger als marginDb unter den bekannten, ist f/m weder belegt noch ausgeschlossen: ambiguous,
+         dazu teilweise. analyseAt macht den Grundton dann unsicher (Grund 'oktave'): Die Reihe ist fast so
+         stark wie die bekannten Linien, der tiefere Ton ist wahrscheinlich, und SHR auf dem Raster f läse die
+         ungeraden Teiltöne als Subharmonische (gemessen −13 bis −14 dB, als Befund ohne Marke).
          Gemessen: 31 von 32 Rahmen auf 2·F0 erfasst; auf richtigen Grundtönen 5 zusätzliche Marken in 8058
          behauchten Rahmen, keine in sauberen. */
-      out.ambiguous = out.newMinusNoise > marginDb && t.above >= Math.max(2, Math.ceil(0.4 * t.nNew)) && out.newMinusOld > -marginDb;
+      out.ambiguous = out.teilweise = out.newMinusNoise > marginDb && t.above >= Math.max(2, Math.ceil(0.4 * t.nNew)) && out.newMinusOld > -marginDb;
       out.unterGrenze = out.ambiguous && g < F0_MIN_HZ;
       return out;
     }
@@ -814,7 +817,7 @@
     for (var m = maxM; m >= 2; m--) {
       var t = subMultipleTest(spec, f, m, marginDb, oddEvenDb);
       if (t.pass) return { m: m, halve: true, ambiguous: false, unterGrenze: false, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
-      if (t.ambiguous && !best.ambiguous) best = { m: 1, halve: false, ambiguous: true, unterGrenze: t.unterGrenze, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
+      if (t.ambiguous && !best.ambiguous) best = { m: 1, halve: false, ambiguous: true, teilweise: t.teilweise, unterGrenze: t.unterGrenze, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
     }
     return best;
   }
@@ -1472,6 +1475,8 @@
     // Mischwert am Tonwechsel: die Gegenprobe kann bestehen (der zweite Ton liefert die Linien des
     // gemeinsamen Untertons). Ein schon gerissener Grundton behält seinen ersten Grund.
     if (!out.f0Unsure && fensterMischwert(fp, f0)) { out.f0Unsure = true; out.f0Grund = 'wechsel'; }
+    // Teilweise belegte Reihe bei f/m (subMultipleTest): Der tiefere Ton ist wahrscheinlich, der Wert unsicher
+    if (!out.f0Unsure && !kor && sub.teilweise) { out.f0Unsure = true; out.f0Grund = 'oktave'; }
     out.f0 = f0; out.note = hzToNote(f0);
     // Bei hohem Grundton rastet ein LPC-Gipfel auf dem nächsten Teilton ein: die Lage eines
     // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
