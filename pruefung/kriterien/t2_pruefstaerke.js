@@ -204,7 +204,8 @@ function buildSeries(A) {
 function expectFrame(entry, s, r, dialect, A, V) {
   const [, kind, src, dec] = entry;
   if (kind === 'feld') return expectCell(dec, s[src][r], dialect);
-  if (kind === 'bit') { const mask = typeof src[1] === 'number' ? src[1] : A.FLAG[src[1]]; return (s[src[0]][r] & mask) ? '1' : '0'; }
+  // Fehlt das Serienfeld, reißt die Zelle (P2f/P2g) statt einer Ausnahme, die die übrigen Kriterien verdeckt.
+  if (kind === 'bit') { const mask = typeof src[1] === 'number' ? src[1] : A.FLAG[src[1]]; return s[src[0]] ? ((s[src[0]][r] & mask) ? '1' : '0') : '(Serienfeld ' + src[0] + ' fehlt)'; }
   if (kind === 'gate') { for (const w in A.GATE_CODE) if (A.GATE_CODE[w] === s.gate[r]) return w; return '?'; }
   if (kind === 'vokal') return s.cls[r] >= 0 ? V.CENTROIDS[s.cls[r]].cls : '';
   if (kind === 'grund') return GRUND_ZEILEN[src][r];
