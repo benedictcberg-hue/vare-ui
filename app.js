@@ -133,6 +133,14 @@
       var rateTxt = (info.trackSampleRate && info.trackSampleRate !== info.sampleRate)
         ? ('Gerät ' + info.trackSampleRate + ' Hz → Kontext ' + info.sampleRate + ' Hz') : (info.sampleRate + ' Hz');
       $('mic-info').textContent = info.deviceLabel + ' · ' + rateTxt + ' · ' + info.capture;
+      /* Eine Kalibrierung gilt nur für die Kette, mit der sie gemessen wurde. Nach einem Gerätewechsel
+         stünde sonst der Rauschboden des alten Geräts als „kalibriert“ da, und Takes trügen dessen
+         calibrationId: SNR und Stimmschwelle bezögen sich auf das falsche Mikrofon. */
+      var abw = ketteAbweichung(st.cal, info);
+      if (abw.length) {
+        st.cal = null; st.calSession = false; renderCalStatus(abw);
+        status('Kalibrierung verworfen: ' + abw.join(' · ') + '. Bitte mit diesem Gerät neu kalibrieren.', true);
+      }
       if (info.trackSampleRate && info.trackSampleRate < 16000) status('Das Gerät liefert nur ' + info.trackSampleRate + ' Hz (Freisprechprofil eines Bluetooth-Headsets?). Oberhalb von ' + Math.round(info.trackSampleRate / 2) + ' Hz ist dann nichts mehr messbar — F3 bis F5 sind damit wertlos.', true);
       var on = [];
       if (info.echoCancellation === true) on.push('Echo-Unterdrückung'); if (info.noiseSuppression === true) on.push('Rauschunterdrückung'); if (info.autoGainControl === true) on.push('automatische Verstärkung');
@@ -335,9 +343,25 @@
   }
 
   /* ---------- Kalibrierung ---------- */
+  /* Was die Seite über die Kette weiß: Gerät (Kennung und Name), Abtastrate von Kontext und Gerät,
+     Bearbeitung durch den Browser. Weicht eins davon von der Kalibrierung ab, ist es eine andere
+     Kette. Dasselbe Mikrofon einmal über „Standard“ und einmal über seinen Namen gewählt gilt dabei
+     auch als anders — lieber einmal zu oft kalibrieren als mit fremdem Boden messen. */
+  var KETTE_BEARBEITUNG = [['echoCancellation', 'Echo-Unterdrückung'], ['noiseSuppression', 'Rauschunterdrückung'], ['autoGainControl', 'automatische Verstärkung']];
+  function anAus(v) { return v === true ? 'an' : v === false ? 'aus' : 'unbekannt'; }
+  function ketteAbweichung(cal, info) {
+    var w = [];
+    if (!cal || !info) return w;
+    if ((cal.deviceId || '') !== (info.deviceId || '') || (cal.deviceLabel || '') !== (info.deviceLabel || '')) w.push('anderes Gerät („' + (cal.deviceLabel || '?') + '“ → „' + (info.deviceLabel || '?') + '“)');
+    if (cal.sampleRate !== info.sampleRate) w.push('Abtastrate ' + cal.sampleRate + ' → ' + info.sampleRate + ' Hz');
+    if ((cal.trackSampleRate || null) !== (info.trackSampleRate || null)) w.push('Geräte-Abtastrate ' + (cal.trackSampleRate || '?') + ' → ' + (info.trackSampleRate || '?') + ' Hz');
+    var f = cal.captureFlags || {};
+    KETTE_BEARBEITUNG.forEach(function (k) { if (f[k[0]] !== info[k[0]]) w.push(k[1] + ' ' + anAus(f[k[0]]) + ' → ' + anAus(info[k[0]])); });
+    return w;
+  }
   function renderCalStatus(warnings) {
     var c = st.cal, el = $('cal-status');
-    if (!c) { el.innerHTML = 'Noch keine Kalibrierung in dieser Sitzung.' + (st.settings.requireCal ? ' <span class="rust">Ohne Kalibrierung ist kein Take möglich.</span>' : ''); }
+    if (!c) { el.innerHTML = (warnings && warnings.length ? 'Kalibrierung verworfen — sie gilt nur für Gerät und Einstellungen, mit denen sie gemessen wurde.' : 'Noch keine Kalibrierung in dieser Sitzung.') + (st.settings.requireCal ? ' <span class="rust">Ohne Kalibrierung ist kein Take möglich.</span>' : ''); }
     else el.innerHTML = 'Kalibriert ' + CH.esc(CH.dateShort(c.createdAt)) + ' · ' + CH.esc(c.deviceLabel) + ' · Rauschboden <span class="mono">' + fmt(c.floorDb, 1) + ' dBFS</span> · /a/ <span class="mono">' + fmt(c.levelDb, 1) + ' dBFS</span> · SNR <span class="mono">' + fmt(c.snrDb, 1) + ' dB</span> (Band 2,4–3,2 kHz <span class="mono">' + fmt(c.bandSnr && c.bandSnr.sf, 1) + ' dB</span>) · Ausklang <span class="mono">' + fmt(c.decayDbPerS, 0) + ' dB/s</span> · F1–F3 des /a/ <span class="mono">' + (c.F || []).slice(0, 3).map(function (v) { return fmt(v); }).join(' / ') + '</span>' + (c.snrDb < 30 ? ' <span class="rust">SNR unter 30 dB — Messungen im Sängerformantband unsicher.</span>' : '');
     $('cal-warnings').innerHTML = warnings && warnings.length ? 'Kette gegenüber der letzten Kalibrierung verändert: ' + warnings.map(CH.esc).join(' · ') : '';
   }
@@ -365,6 +389,8 @@
           try {
             var info = st.rec.info, rec = K.analyseCalibration(take.samples, take.sampleRate, { deviceLabel: info.deviceLabel, deviceId: info.deviceId, createdAt: new Date().toISOString(), id: 'cal-' + uuid() });
             rec.captureFlags = { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl };
+            // Gehört zur Kette (ketteAbweichung): ein Headset im Freisprechprofil liefert eine andere Rate.
+            rec.trackSampleRate = info.trackSampleRate || null;
             /* Eine Kalibrierung, die keine Zahlen hergibt, darf nicht als Bezug gelten: sonst
                rechnet jeder Take danach gegen einen Rauschboden, den es nicht gibt. */
             var fehlt = [];

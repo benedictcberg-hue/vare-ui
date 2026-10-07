@@ -90,14 +90,17 @@ function speicherNeu() {
   return { d, api };
 }
 // Mikrofon-Ersatz: jeder Take liefert dasselbe Signal. Geräte-ID wählt den Gerätenamen.
+// ueber: Angaben, die der nächste Start abweichend meldet (dasselbe Gerät, andere Rate oder Bearbeitung).
 function recorderNeu(signal, sr) {
+  const ueber = {};
   return {
+    ueber,
     createRecorder() {
       const r = {
         active: false, info: null, sampleRate: sr, samplesSeen: 0, recordedSeconds: 0,
         start(devId) {
           r.active = true;
-          r.info = { deviceLabel: devId ? 'Zweitgerät' : 'Testmikrofon', deviceId: devId || 'standard', sampleRate: sr, trackSampleRate: sr, capture: 'worklet', echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+          r.info = Object.assign({ deviceLabel: devId ? 'Zweitgerät' : 'Testmikrofon', deviceId: devId || 'standard', sampleRate: sr, trackSampleRate: sr, capture: 'worklet', echoCancellation: false, noiseSuppression: false, autoGainControl: false }, ueber);
           return Promise.resolve(r.info);
         },
         stop() { r.active = false; return Promise.resolve(); },
@@ -151,8 +154,16 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
     klick(id) { try { el(id).click(); } catch (e) { aufFehler(e); } },
     aendern(id, wert) { el(id).value = wert; try { el(id).feuern('change'); } catch (e) { aufFehler(e); } },
     // Kalibrierung setzen, ohne die 8 s Ablauf: die Kalibrierung selbst prüft der Browser-Lauf.
-    kalibriert(id) { const s = st(); s.cal = { id, floorDb: -72, levelDb: -20, snrDb: 52, createdAt: new uhr.Date().toISOString(), deviceLabel: 'Testmikrofon', deviceId: 'standard', F: [700, 1200, 2500] }; s.calSession = true; },
+    // Die Kette ist die des nachgebildeten Standardmikrofons (recorderNeu ohne Geräte-ID).
+    kalibriert(id) {
+      const s = st();
+      s.cal = { id, floorDb: -72, levelDb: -20, snrDb: 52, createdAt: new uhr.Date().toISOString(), deviceLabel: 'Testmikrofon', deviceId: 'standard', sampleRate: sr, trackSampleRate: sr,
+        captureFlags: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, F: [700, 1200, 2500] };
+      s.calSession = true;
+    },
     async mikrofon() { p.klick('btn-mic'); return p.warte(() => st().rec && st().rec.active && !el('btn-mic').disabled); },
+    // Mikrofon aus und wieder an (mit dem Gerät, das gerade im Menü steht).
+    async mikrofonNeu() { p.klick('btn-mic'); await p.warte(() => !st().rec.active); return p.mikrofon(); },
     // Ein Take: Start, Singdauer auf der Uhr, Stopp, dann was „während der Analyse“ geschieht.
     async take(waehrend, dauerMs) {
       if (!(await p.warte(() => !el('btn-take').disabled, 3000))) throw new Error('Take-Knopf blieb gesperrt: ' + el('take-hint').textContent);
@@ -427,6 +438,42 @@ module.exports = async function (H) {
       busy === true && sp2.d.takes.size === vorher + 1 && /abwarten/.test(txt), 'Analyse lief=' + busy + ' | Takes vorher ' + vorher + ', danach ' + sp2.d.takes.size + ' | Meldung „' + txt + '“');
     p.schliessen();
   } catch (e) { check('U2.2', 'Ablauf „Alles löschen“ mit Zähler läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U2 · Eine Kalibrierung gilt nur für ihre Kette ---------- */
+  try {
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 8 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-G1'); await p.mikrofon();
+    // Dasselbe Gerät neu gestartet: nichts zu verwerfen.
+    await p.mikrofonNeu();
+    const gleich = { cal: p.st().cal && p.st().cal.id, gesperrt: p.el('btn-take').disabled };
+    check('U2.7', 'Mikrofon mit demselben Gerät neu gestartet: Kalibrierung bleibt, Take frei', gleich.cal === 'cal-G1' && gleich.gesperrt === false, JSON.stringify(gleich));
+    // Anderes Gerät gewählt.
+    p.klick('btn-mic'); await p.warte(() => !p.st().rec.active);
+    p.el('mic-device').value = 'zweit'; await p.mikrofon();
+    const w = { cal: p.st().cal, calSession: p.st().calSession, gesperrt: p.el('btn-take').disabled, warnungen: p.el('cal-warnings').innerHTML, meldung: statusText(p), hint: p.el('take-hint').textContent };
+    check('U2.8', 'Anderes Gerät: Kalibrierung verworfen, Take gesperrt, beide Geräte benannt',
+      w.cal === null && w.calSession === false && w.gesperrt && /Testmikrofon/.test(w.warnungen) && /Zweitgerät/.test(w.warnungen) && /neu kalibrieren/.test(w.meldung) && /Kalibrierung/.test(w.hint),
+      'cal=' + (w.cal && w.cal.id) + ' gesperrt=' + w.gesperrt + ' | „' + w.warnungen + '“ | „' + w.meldung + '“');
+    // Ohne Kalibrierpflicht darf der Take laufen — aber nicht mit dem Boden des anderen Geräts.
+    p.st().settings.requireCal = false; await p.mikrofonNeu();
+    const T = await p.take();
+    check('U2.9', 'Ohne Kalibrierpflicht nach dem Gerätewechsel: Take trägt weder calibrationId noch Boden des alten Geräts',
+      T.deviceLabel === 'Zweitgerät' && T.calibrationId === null && T.analysis.floorSource !== 'calibration',
+      'Gerät ' + T.deviceLabel + ' | calibrationId=' + T.calibrationId + ' | floorSource=' + T.analysis.floorSource);
+    // Dasselbe Gerät, aber andere Geräte-Abtastrate und automatische Verstärkung an.
+    p.st().settings.requireCal = true;
+    p.el('mic-device').value = ''; await p.mikrofonNeu();
+    p.kalibriert('cal-G2'); await p.mikrofonNeu();
+    const vorAenderung = p.st().cal && p.st().cal.id;
+    Object.assign(p.sb.VARERECORDER.ueber, { trackSampleRate: 16000, autoGainControl: true });
+    await p.mikrofonNeu();
+    const w2 = p.el('cal-warnings').innerHTML;
+    check('U2.10', 'Dasselbe Gerät mit anderer Abtastrate und Bearbeitung: Kalibrierung verworfen, Abweichung benannt',
+      vorAenderung === 'cal-G2' && p.st().cal === null && p.el('btn-take').disabled && /16000/.test(w2) && /automatische Verstärkung aus → an/.test(w2),
+      'vorher ' + vorAenderung + ' | cal=' + (p.st().cal && p.st().cal.id) + ' | „' + w2 + '“');
+    p.schliessen();
+  } catch (e) { check('U2.7', 'Ablauf Gerätewechsel läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
