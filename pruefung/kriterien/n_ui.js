@@ -4,7 +4,8 @@
    Schreibvorgänge; die Daten überstehen das Neuladen der Seite. Eine „geschlossene“ Seite rechnet nicht weiter
    (ihre Zeitgeber und Datenbankrückrufe laufen ins Leere), so wie ein Tab, der neu geladen wird.
    B1a: Take und Rahmenverlauf in einer Transaktion (Take, Neu-Analyse).
-   B1b: Bearbeiten im Detail überschreibt keine laufende oder abgeschlossene Neu-Analyse. */
+   B1b: Bearbeiten im Detail überschreibt keine laufende oder abgeschlossene Neu-Analyse.
+   B1c: Export und Import sind während „Alle neu analysieren“ gesperrt, mit Hinweis. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto');
 const { Blob } = require('buffer');
@@ -315,6 +316,36 @@ module.exports = async function (H) {
       'Läufe beobachtet=' + imLauf1 + '/' + imLauf2 + ', Detail B zeigte beim Öffnen Kern 3.0.0=' + bOffenAlt + ' | nach dem Lauf gespeichert ' + z(b) + ' | im Lauf gespeichert ' + z(a));
     p.schliessen();
   } catch (e) { check('B1b', 'Ablauf Speichern im Detail während der Neu-Analyse läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1c · Export und Import während „Alle neu analysieren“ ---------- */
+  try {
+    const br = idbNeu(), p = await seiteNeu(br, normal, SR);
+    p.kalibriert('cal-1'); await p.mikrofon();
+    await p.take(); await p.take();
+    const fremd = { id: 'b1c-import', code: 'Z', label: 'Import', createdAt: '2026-03-02T09:00:00.000Z', durationS: 1, sampleRate: SR, analysis: { kernelVersion: D.VERSION }, history: [], summary: {} };
+    const sicherung = C.serializeBackup({ takes: [fremd], series: {}, refs: null, calibrations: [], settings: null, kernelVersion: D.VERSION });
+    p.geheZu('#/chronik');
+    p.klick('btn-reanalyse-all');
+    const imLauf = await p.warte(() => /Neu-Analyse 1 von 2: A .* — \d+ \/ \d+ Rahmen/.test(p.el('reanalyse-all-text').textContent), 10000);
+    p.halt();
+    const gesperrt = ['btn-export-csv', 'btn-export-json', 'btn-import-json'].filter(id => p.el(id).disabled);
+    const dl0 = p.downloads.length;
+    p.klick('btn-export-csv'); p.klick('btn-export-json');
+    p.el('file-import').files = [{ text: () => Promise.resolve(sicherung) }]; p.el('file-import').feuern('change');
+    await new Promise(r => setTimeout(r, 50));
+    const hinweis = p.status();
+    p.weiter();
+    await p.warte(() => !p.st().busy && /Alle neu analysiert/.test(p.el('reanalyse-all-text').textContent), 60000);
+    const dlLauf = p.downloads.length - dl0;
+    const importiert = !!(await p.S.getTake('b1c-import'));
+    const frei = ['btn-export-csv', 'btn-export-json', 'btn-import-json'].filter(id => !p.el(id).disabled);
+    p.klick('btn-export-csv');
+    const nachher = await p.warte(() => p.downloads.length > dl0 + dlLauf, 3000);
+    check('B1c', 'Während „Alle neu analysieren“: Export und Import gesperrt (Knöpfe und Aufruf), mit Hinweis; danach wieder frei',
+      imLauf && gesperrt.length === 3 && dlLauf === 0 && !importiert && /Alle neu analysieren/.test(hinweis) && /gesperrt|abwarten/.test(hinweis) && frei.length === 3 && nachher,
+      'Lauf beobachtet=' + imLauf + ' | gesperrte Knöpfe ' + gesperrt.length + '/3 | Downloads im Lauf ' + dlLauf + ' | Import übernommen=' + importiert + ' | Hinweis „' + hinweis.slice(0, 90) + '“ | danach frei ' + frei.length + '/3, Export geht=' + nachher);
+    p.schliessen();
+  } catch (e) { check('B1c', 'Ablauf Export/Import während der Neu-Analyse läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

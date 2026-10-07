@@ -800,6 +800,16 @@
      gerechnet, wenn sie es waren. Abbrechen wirkt vor dem nächsten Block, auch mitten in einem Take; dieser
      bleibt dann unverändert, die schon fertigen bleiben neu. Danach werden die Referenzen neu bestimmt. */
   var alleLauf = null;
+  /* Während des Laufs keine Sicherung und kein Import: Ein Export hielte einen Zwischenstand fest (halb alte,
+     halb neue Takes), ein Import fügte Takes hinzu, die der Lauf nicht mehr rechnet. Knöpfe gesperrt, und
+     wer die Funktion trotzdem erreicht, bekommt den Grund statt eines halben Ergebnisses. */
+  var SPERR_KNOEPFE = ['btn-export-csv', 'btn-export-json', 'btn-import-json'];
+  function alleSperre(an) { SPERR_KNOEPFE.forEach(function (id) { $(id).disabled = an; }); }
+  function gesperrtImLauf() {
+    if (!alleLauf) return false;
+    status('Während „Alle neu analysieren“ läuft, sind Export und Import gesperrt — den Lauf abwarten oder abbrechen.', true);
+    return true;
+  }
   function alleNeuAnalysieren() {
     if (st.busy || st.taking) { status('Erst Take, Analyse oder Neu-Analyse abwarten.', true); return; }
     var box = $('reanalyse-all'), text = $('reanalyse-all-text'), knopf = $('btn-reanalyse-all'), stopp = $('btn-reanalyse-abbruch');
@@ -818,7 +828,7 @@
       if (!window.confirm('Alle ' + liste.length + ' Takes mit Audio (zusammen ' + dauerText(sek) + ') mit Kern ' + D.VERSION + ' und den jetzigen Einstellungen neu analysieren? Die bisherige Auswertung bleibt je Take in der Historie.'
         + (ohne.length ? ' ' + ohne.length + ' Takes ohne Audio bleiben, wie sie sind.' : ''))) return;
       var lauf = alleLauf = { abbruch: false }, neu = [], fehl = [], i = 0;
-      st.busy = true; updateTakeButton();
+      st.busy = true; updateTakeButton(); alleSperre(true);
       knopf.disabled = true; stopp.hidden = false; stopp.disabled = false; box.hidden = false;
       var zeige = function (t, done, total) { text.textContent = 'Neu-Analyse ' + i + ' von ' + liste.length + ': ' + takeName(t) + (total ? ' — ' + done + ' / ' + total + ' Rahmen' : ' …'); };
       function naechster() {
@@ -837,7 +847,7 @@
           + (fehl.length ? ' Fehlgeschlagen, unverändert: ' + fehl.join('; ') + '.' : '') + ohneText() + ' Referenzen neu bestimmt.';
         text.textContent = msg; status(msg, lauf.abbruch || fehl.length > 0 || ohne.some(function (t) { return unvergleichbar(t); }));
       }).catch(function (e) { text.textContent = 'Neu-Analyse gestoppt: ' + (e && e.message || e); status(text.textContent, true); })
-        .then(function () { st.busy = false; alleLauf = null; knopf.disabled = false; stopp.hidden = true; updateTakeButton(); if (location.hash === '#/chronik') refreshChronik(); });
+        .then(function () { st.busy = false; alleLauf = null; alleSperre(false); knopf.disabled = false; stopp.hidden = true; updateTakeButton(); if (location.hash === '#/chronik') refreshChronik(); });
     }).catch(function (e) { status('Chronik nicht lesbar: ' + (e && e.message || e), true); });
   }
   function alleAbbrechen() {
@@ -906,8 +916,9 @@
       CH.renderDetail(el, r[0], r[1], st.refs, r[2], handlers);
     }).catch(function (e) { el.innerHTML = '<p class="rust">' + CH.esc(e && e.message || e) + '</p>'; });
   }
-  function exportCsv() { S.allTakes().then(function (takes) { download('vare-chronik-' + stamp(new Date()) + '.csv', new Blob([C.takesToCsv(takes, st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); }); }
+  function exportCsv() { if (gesperrtImLauf()) return; S.allTakes().then(function (takes) { download('vare-chronik-' + stamp(new Date()) + '.csv', new Blob([C.takesToCsv(takes, st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); }); }
   function exportJson() {
+    if (gesperrtImLauf()) return;
     Promise.all([S.allTakes(), S.allCalibrations(), S.getMeta('refs', {}), S.audioIds()]).then(function (r) {
       var takes = r[0], withAudio = false, ids = r[3] || [];
       var seriesP = Promise.all(takes.map(function (t) { return S.getSeries(t.id); }));
@@ -938,6 +949,7 @@
     }).catch(function (e) { status('Sicherung fehlgeschlagen: ' + (e && e.message || e), true); });
   }
   function importJson(file) {
+    if (gesperrtImLauf()) return;
     file.text().then(function (text) {
       var b = C.parseBackup(text), added = 0, skipped = 0, doppelt = [];
       return S.allTakes().then(function (existing) {
@@ -1149,7 +1161,7 @@
     });
     $('btn-export-csv').addEventListener('click', exportCsv);
     $('btn-export-json').addEventListener('click', exportJson);
-    $('btn-import-json').addEventListener('click', function () { $('file-import').click(); });
+    $('btn-import-json').addEventListener('click', function () { if (!gesperrtImLauf()) $('file-import').click(); });
     $('file-import').addEventListener('change', function (e) { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ''; });
     $('btn-clear-all').addEventListener('click', clearAll);
     $('btn-reanalyse-all').addEventListener('click', alleNeuAnalysieren);
