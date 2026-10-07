@@ -454,6 +454,14 @@ const WAV = path.join(SP, 'fake.wav');
       // Aussetzer nachstellen: Solange window.__drop gilt, kommen die Nachrichten des AudioWorklets nicht an (wie ein
       // übergelaufener Eingangspuffer bei einem Gerätewechsel); der Kontext läuft weiter.
       await ctx4.addInitScript(() => {
+        /* Anhalten: Solange window.__halt gilt, wartet jeder fällige Zeitgeber der Seite. So steht eine Analyse
+           zwischen zwei Blöcken still, und das Neuladen trifft sie sicher mitten darin, wie lange sie auch dauert. */
+        window.__halt = false;
+        const zeitgeber = window.setTimeout.bind(window);
+        window.setTimeout = function (f, ms) {
+          const rest = Array.prototype.slice.call(arguments, 2);
+          return zeitgeber(function lauf() { if (window.__halt) { zeitgeber(lauf, 20); return; } if (typeof f === 'function') f.apply(null, rest); }, ms);
+        };
         window.__drop = false;
         const Orig = window.AudioWorkletNode;
         if (!Orig) return;
@@ -483,14 +491,14 @@ const WAV = path.join(SP, 'fake.wav');
       await p4.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 10000 });
       const v1 = await p4.evaluate(() => Promise.all([VARESTORE.allTakes(), VARESTORE.allPending()]).then(r => ({ takes: r[0].map(t => t.id), pending: r[1].length })));
       neuladenCheck(0, v1.takes.includes('v1-take') && v1.pending === 0, JSON.stringify(v1));
-      // Ohne Kalibrierpflicht (Schalter in den Einstellungen); ein Take von 7 s, damit die Analyse lange genug läuft.
+      // Ohne Kalibrierpflicht (Schalter in den Einstellungen); ein Take von 3 s, die Analyse wird mittendrin angehalten.
       await p4.$eval('#s-requireCal', el => { el.checked = false; el.dispatchEvent(new Event('change')); });
       await p4.click('#btn-mic');
       await p4.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
       await p4.waitForTimeout(500);
       await p4.fill('#take-label', 'Neuladen-Probe');
-      await p4.click('#btn-take'); await p4.waitForTimeout(7000); await p4.click('#btn-take');
-      await p4.waitForFunction(() => /Analyse \d+ \/ \d+ Rahmen/.test((document.getElementById('take-progress-text') || {}).textContent || ''), null, { timeout: 30000 });
+      await p4.click('#btn-take'); await p4.waitForTimeout(3000); await p4.click('#btn-take');
+      await p4.waitForFunction(() => /Analyse \d+ \/ \d+ Rahmen/.test((document.getElementById('take-progress-text') || {}).textContent || '') && (window.__halt = true), null, { timeout: 30000, polling: 'raf' });
       const vor = await p4.evaluate(() => Promise.all([VARESTORE.allPending(), VARESTORE.audioIds(), VARESTORE.allTakes()]).then(r => ({ pending: r[0].map(o => o.id), audio: r[1], takes: r[2].length, busy: VAREAPP.state.busy })));
       // Neuladen mitten in der Analyse: Der Browser fragt nach; abgelehnt, läuft die Analyse weiter.
       await p4.evaluate(() => { location.reload(); });
