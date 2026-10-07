@@ -62,9 +62,12 @@ const WAV = path.join(SP, 'fake.wav');
   const KORPUS = JSON.stringify({ format: 'vare-korpus', version: 1, stand: '2026-10-03', notiz: 'Testkorpus',
     marken: { d34: [{ hz: 404, text: 'erfundener Prueftwert' }, { hz: 707 }, { hz: 1111 }] },
     gatter: { f3MinHz: 2500, spreadMaxHz: 130 } });
+  // Anfragen mit dem richtigen Token, die den Korpus ausliefern: vor der Verbindung muss es 0 sein.
+  let korpusAusgeliefert = 0;
   const korpusRoute = route => {
     const auth = route.request().headers()['authorization'] || '';
     if (auth !== 'Bearer ' + TOKEN) { route.fulfill({ status: 401, contentType: 'application/json', body: '{"message":"Bad credentials"}' }); return; }
+    korpusAusgeliefert++;
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ content: Buffer.from(KORPUS, 'utf8').toString('base64'), encoding: 'base64' }) });
   };
   await ctx.route('https://api.github.com/**', korpusRoute);
@@ -73,23 +76,53 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForFunction(() => document.getElementById('anmeldung') && !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
     check('Oeffentliche Huelle: vor der Verbindung nur die Token-Eingabe', await page.isHidden('#app') && await page.isHidden('#nav') && await page.isVisible('#token'));
     check('Huelle nennt das private Repo', (await page.textContent('#korpus-repo')).includes('vare-tools'), await page.textContent('#korpus-repo'));
-    // Die Seite nennt ihre Adresse (#origin-name). Der freie Port kann selbst 404 oder 1111 enthalten
-    // und täuschte dann ein Leck vor; geprüft wird deshalb der Inhalt ohne die Portnummer.
-    // Ebenso die Geräte-IDs im Mikrofonmenü: Chromium vergibt je Profil zufällige 64 Hexziffern, die in etwa jedem
-    // 20. Lauf „404“ enthalten (Sonde: 2 von 40 Ladevorgängen). Eine Marke stünde als Text da, nicht als solche ID.
-    const port = String(server.address().port), ohnePort = (await page.content()).split(port).join('').replace(/\b[0-9a-f]{64}\b/g, '<Geräte-ID>');
-    const markeBei = ['404', '1111'].map(m => ohnePort.indexOf(m) >= 0 ? m + ': …' + ohnePort.slice(Math.max(0, ohnePort.indexOf(m) - 60), ohnePort.indexOf(m) + 20).replace(/\s+/g, ' ') + '…' : '').filter(Boolean);
-    check('Huelle enthaelt die Marken nicht im Quelltext', !markeBei.length, 'Port ' + port + (markeBei.length ? ' | ' + markeBei.join(' | ') : ''));
+    /* Vor der Verbindung steht nichts aus dem Korpus in der Seite. Gesucht wird nach ALLEN Marken des Testkorpus und
+       nach Stand, Notiz und Markentext, aus KORPUS abgeleitet statt von Hand aufgezählt (früher nur 404 und 1111, 707
+       fehlte). Gesucht wird überall, wo die Seite sie ablegen könnte: Quelltext der Seite (auch verborgene Teile und
+       Attribute), sichtbarer Text, Eingabewerte, localStorage, sessionStorage und der Korpus im Seitenzustand; vor und
+       nach einem falschen Token. Eine Marke zählt nur als eigene Zahl: Port der Prüfseite (frei vergeben) und die
+       Geräte-IDs im Mikrofonmenü (64 zufällige Hexziffern, in etwa jedem 20. Lauf mit „404“ darin) täuschten sonst ein
+       Leck vor. Ob die Suche greift, zeigt die Gegenprobe nach der Verbindung: Dort findet sie jede Marke im Zustand und
+       den Stand in der Kopfzeile. */
+    const KO = JSON.parse(KORPUS), MARKEN = KO.marken.d34.map(m => String(m.hz)), KTEXTE = [KO.stand, KO.notiz].concat(KO.marken.d34.map(m => m.text).filter(Boolean));
+    const zahlRe = z => new RegExp('(?<![\\w.,])' + z + '(?!\\w)');
+    async function korpusFunde() {
+      const port = String(server.address().port);
+      const orte = await page.evaluate(() => {
+        const speicher = s => { const o = []; for (let i = 0; i < s.length; i++) o.push(s.key(i) + '=' + s.getItem(s.key(i))); return o.join('\n'); };
+        return { quelltext: document.documentElement.outerHTML, text: document.body.innerText,
+          eingaben: Array.from(document.querySelectorAll('input, textarea, select')).map(e => e.id + '=' + e.value).join('\n'),
+          localStorage: speicher(localStorage), sessionStorage: speicher(sessionStorage),
+          zustand: JSON.stringify((window.VAREAPP && VAREAPP.state && VAREAPP.state.korpus) || null) };
+      });
+      const funde = [];
+      for (const wo of Object.keys(orte)) {
+        const inhalt = orte[wo].split(port).join('<Port>'), stelle = i => '…' + inhalt.slice(Math.max(0, i - 50), i + 20).replace(/\s+/g, ' ') + '…';
+        for (const z of MARKEN) { const m = zahlRe(z).exec(inhalt); if (m) funde.push({ wo, was: z, wie: stelle(m.index) }); }
+        for (const t of KTEXTE) { const i = inhalt.indexOf(t); if (i >= 0) funde.push({ wo, was: t, wie: stelle(i) }); }
+      }
+      return funde;
+    }
+    const zeigeFunde = f => f.map(x => x.wo + ' ' + x.was + ': ' + x.wie).join(' | ');
+    const fundeVorher = await korpusFunde();
     await page.fill('#token', 'falsches-token-mit-genug-zeichen');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => (document.getElementById('anmeldung-fehler').textContent || '').length > 0, null, { timeout: 10000 });
     check('Falsches Token: Meldung, Oberflaeche bleibt zu', await page.isHidden('#app'), (await page.textContent('#anmeldung-fehler')).slice(0, 80));
+    const fundeFalsch = await korpusFunde();
+    check('Huelle enthaelt keine Korpusdaten (alle Marken, Stand, Notiz; Quelltext, Text, Eingaben, Speicher, Zustand), vor und nach falschem Token; kein Korpus ausgeliefert',
+      !fundeVorher.length && !fundeFalsch.length && korpusAusgeliefert === 0,
+      'gesucht ' + MARKEN.join('/') + ' und ' + KTEXTE.length + ' Texte, Korpus ausgeliefert ' + korpusAusgeliefert + (fundeVorher.length ? ' | vorher: ' + zeigeFunde(fundeVorher) : '') + (fundeFalsch.length ? ' | nach falschem Token: ' + zeigeFunde(fundeFalsch) : ''));
     await page.fill('#token', TOKEN);
     await page.check('#token-merken');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 10000 });
     check('Richtiges Token: Oberflaeche erscheint', await page.isVisible('#nav'));
     check('Korpus-Stand in der Kopfzeile', /Marken/.test(await page.textContent('#korpus-stand')), await page.textContent('#korpus-stand'));
+    const fundeNach = await korpusFunde(), imZustand = new Set(fundeNach.filter(f => f.wo === 'zustand').map(f => f.was));
+    check('Gegenprobe der Korpussuche: nach der Verbindung findet sie jede Marke, Stand und Notiz im Zustand und den Stand im Quelltext',
+      MARKEN.concat(KTEXTE).every(w => imZustand.has(w)) && fundeNach.some(f => f.wo === 'quelltext' && f.was === KO.stand) && korpusAusgeliefert >= 1,
+      'im Zustand: ' + [...imZustand].join(', ') + ' | Quelltext: ' + fundeNach.filter(f => f.wo === 'quelltext').map(f => f.was).join(', '));
     await page.waitForFunction(() => document.getElementById('kernel-version').textContent !== '–', null, { timeout: 10000 });
     check('Seite lädt, Kern-Version sichtbar', true, await page.textContent('#kernel-version'));
     check('file://-Hinweis über http verborgen', await page.isHidden('#notice-file'));
@@ -117,15 +150,46 @@ const WAV = path.join(SP, 'fake.wav');
     await page.fill('#take-label', 'E2E /a/ G3');
     await page.selectOption('#take-intent', 'a');
     await page.fill('#take-comment', 'automatischer Durchlauf');
+    /* Live-Anzeige über die ganze Aufnahme mitschreiben, jede Änderung mit Zeit: Gatterwort, ΔF3–4-Text und -Klasse.
+       Früher las die Prüfung einen einzigen Augenblick 3 s nach dem Start. Fiel dort ein kurzer Aussetzer des
+       nachgestellten Mikrofons hinein, stand ΔF3–4 120–160 ms richtig in Rost als „nicht gewertet“, und die Prüfung riss
+       (I2, 1 von 8 Läufen). */
+    await page.evaluate(() => {
+      const log = window.__liveLog = [], t0 = window.__liveT0 = performance.now(), $ = id => document.getElementById(id);
+      const nimm = () => { const e = { g: $('gate-state').textContent, d: $('v-d34').textContent, k: $('st-d34').className }, l = log[log.length - 1]; if (!l || l.g !== e.g || l.d !== e.d || l.k !== e.k) { e.t = performance.now() - t0; log.push(e); } };
+      window.__liveBeob = new MutationObserver(nimm);
+      for (const id of ['gate-state', 'v-d34', 'st-d34']) window.__liveBeob.observe($(id), { childList: true, characterData: true, subtree: true, attributes: true });
+      nimm();
+    });
     await page.click('#btn-take');
     await page.waitForTimeout(3000);
     const live = await page.evaluate(() => ({ state: document.getElementById('gate-state').textContent, f0: document.getElementById('v-f0').textContent, f1: document.getElementById('v-f1').textContent, f3: document.getElementById('v-f3').textContent, d34: document.getElementById('v-d34').textContent, ref: document.getElementById('live-ref').textContent, sfr: document.getElementById('v-sfr').textContent, shr: document.getElementById('v-shr').textContent, floor: document.getElementById('v-floor').textContent }));
     check('Live während /a/: stimmhaft, F0 ≈ 196', /19[4-8]/.test(live.f0), JSON.stringify(live));
-    // Nur „<Zahl> Hz gewertet“ zählt; /gewertet/ allein traf auch „— nicht gewertet: …“ und prüfte nichts.
-    check('Live: Gatter stabil /a/ und ΔF3–4 gewertet', /stabil \/a\//.test(live.state) && /^\s*-?\d[\d.,]* Hz gewertet\s*$/.test(live.d34), live.state + ' | ' + live.d34);
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
+    const liveLog = await page.evaluate(() => { window.__liveBeob.disconnect(); window.__liveLog.push({ t: performance.now() - window.__liveT0, ende: true }); return window.__liveLog; });
     await page.click('#btn-take');
+    {
+      /* Über das Zeitfenster der Aufnahme: Das Gatter steht zusammen mindestens 1,5 s, davon mindestens 0,5 s am Stück,
+         auf „stabil /a/“ mit „<Zahl> Hz gewertet“ (mehr als ein Augenblick; ein Aussetzer von 150 ms bricht das nicht).
+         Jede Wertung liegt beim wahren ΔF3–4 des Prüfsignals (3300 − 2500 = 800 Hz, ±60), nie in Rost und nie außerhalb
+         von „stabil /a/“. Nur „<Zahl> Hz gewertet“ zählt; /gewertet/ allein traf auch „— nicht gewertet: …“. */
+      const gew = e => /^\s*-?\d[\d.,]* Hz gewertet\s*$/.test(e.d), stabA = e => /stabil \/a\//.test(e.g);
+      let lauf = 0, laengster = 0, summe = 0, stuecke = 0;
+      const falsch = [];
+      for (let i = 0; i + 1 < liveLog.length; i++) {
+        const e = liveLog[i], dauer = liveLog[i + 1].t - e.t;
+        if (gew(e) && stabA(e)) { if (!lauf) stuecke++; lauf += dauer; summe += dauer; laengster = Math.max(laengster, lauf); } else lauf = 0;
+        if (gew(e)) {
+          const hz = parseFloat(e.d.replace(',', '.'));
+          if (!stabA(e) || /\bunsure\b/.test(e.k) || !(Math.abs(hz - 800) <= 60)) falsch.push((e.t / 1000).toFixed(2) + ' s: ' + e.g + ' | ' + e.d + ' (' + e.k + ')');
+        }
+      }
+      check('Live: Gatter stabil /a/ und ΔF3–4 gewertet, zusammen mindestens 1,5 s, am Stück mindestens 0,5 s; jede Wertung bei 800 ± 60 Hz, nie in Rost, nie außerhalb von stabil /a/',
+        summe >= 1500 && laengster >= 500 && !falsch.length,
+        'zusammen ' + (summe / 1000).toFixed(2) + ' s in ' + stuecke + ' Stück(en), am Stück ' + (laengster / 1000).toFixed(2) + ' s, ' + liveLog.length + ' Änderungen' + (falsch.length ? ' | falsch: ' + falsch.slice(0, 4).join(' | ') : '') +
+        (summe < 1500 || laengster < 500 ? ' | Verlauf: ' + liveLog.slice(0, 40).map(e => (e.t / 1000).toFixed(2) + ' ' + (e.g || '') + ' / ' + (e.d || '')).join(' ; ').slice(0, 900) : ''));
+    }
     // Während der Analyse schon den nächsten Take beschriften: das gehört nicht in diesen Take.
     const busyBeiEingabe = await page.evaluate(() => VAREAPP.state.busy);
     await page.fill('#take-label', 'NAECHSTER');
