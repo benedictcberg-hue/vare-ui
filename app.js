@@ -892,13 +892,15 @@
          stand nach einem Abbruch zwischen beiden eine neue Zusammenfassung neben dem alten Verlauf. */
       var geaendert = [];
       return S.updateTakeSeries(id, function (take) {
-        var neu = analysisMeta(res.meta, new Date()), alt = take.analysis || {};
-        geaendert = [];
+        var neu = analysisMeta(res.meta, new Date()), bodenAlt = take.summary && take.summary.floorSource, bodenNeu = res.summary.floorSource;
+        /* Was sich geändert hat, kommt aus derselben Prüfung wie „anders gerechnet“ (A.aenderungen), gegen den Take
+           vor dem Überschreiben: alle Gatterwerte und Zentroide, nicht nur F3-Mindestwert, Streuung, Rahmenabstand
+           und Kern. Sonst hieß es „gleiche Einstellungen“, während der Stabil-Anteil um 18 Punkte fiel (Befund N20).
+           Der Rauschboden gehört nicht zur Rechenweise, ändert aber die Werte: fehlt die Kalibrierung, wird er
+           geschätzt — auch das steht da. */
+        geaendert = A.aenderungen(take, { kernelVersion: neu.kernelVersion, gate: neu.gate, spreadMaxHz: neu.spreadMaxHz, hopS: neu.hopS });
+        if (bodenAlt !== bodenNeu) geaendert.push('Rauschboden ' + (BODEN_WORT[bodenAlt] || 'nicht gespeichert') + ' → ' + (BODEN_WORT[bodenNeu] || bodenNeu));
         take.history = (take.history || []).concat([{ analysis: take.analysis, summary: take.summary }]);
-        if (alt.gate && neu.gate && alt.gate.f3MinHz !== neu.gate.f3MinHz) geaendert.push('F3-Mindestwert ' + alt.gate.f3MinHz + ' → ' + neu.gate.f3MinHz + ' Hz');
-        if (alt.spreadMaxHz !== neu.spreadMaxHz) geaendert.push('Streuungsgrenze ' + alt.spreadMaxHz + ' → ' + neu.spreadMaxHz + ' Hz');
-        if (alt.hopS !== neu.hopS) geaendert.push('Rahmenabstand ' + alt.hopS + ' → ' + neu.hopS + ' s');
-        if (alt.kernelVersion !== neu.kernelVersion) geaendert.push('Kern ' + alt.kernelVersion + ' → ' + neu.kernelVersion);
         take.summary = res.summary; take.analysis = neu; take.reanalysisNote = geaendert.join(', ');
         return take;
       }, res.series).then(function (take) {
@@ -907,6 +909,7 @@
       });
     });
   }
+  var BODEN_WORT = { calibration: 'kalibriert', estimate: 'geschätzt', unknown: 'unbekannt' };
   function takeName(t) { return t.code + ' (' + CH.dateShort(t.createdAt) + ')'; }
   /* „Alle neu analysieren“: jeder Take mit gespeichertem Audio nacheinander, genau wie die Einzel-Neu-Analyse.
      Takes ohne Audio lassen sich nicht neu rechnen: Sie werden genannt und bleiben, wie sie sind — anders
@@ -974,10 +977,11 @@
     downloadWav: function (take) { S.getAudio(take.id).then(function (a) { if (a) download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.wav', a.blob); }); },
     reanalyse: function (take) {
       if (st.busy) { status('Gerade läuft eine Analyse — Neu-Analyse von ' + take.code + ' danach.', true); return; }
-      st.busy = true; status('Neu-Analyse von ' + take.code + ' …');
+      // Wie bei jeder Analyse ist der Take-Knopf gesperrt, bis sie fertig ist (updateTakeButton verlangt !busy).
+      st.busy = true; updateTakeButton(); status('Neu-Analyse von ' + take.code + ' …');
       neuAuswerten(take.id, null, null).then(function (x) { return recomputeRefs().then(function () { return x.geaendert; }); })
-        .then(function (geaendert) { status('Neu analysiert: ' + take.code + (geaendert && geaendert.length ? ' — geändert: ' + geaendert.join(', ') : ' (gleiche Einstellungen)')); st.busy = false; route(); })
-        .catch(function (e) { st.busy = false; status('Neu-Analyse fehlgeschlagen: ' + (e && e.message || e), true); });
+        .then(function (geaendert) { status('Neu analysiert: ' + take.code + (geaendert && geaendert.length ? ' — geändert: ' + geaendert.join(', ') : ' (gleiche Einstellungen)')); st.busy = false; updateTakeButton(); route(); })
+        .catch(function (e) { st.busy = false; updateTakeButton(); status('Neu-Analyse fehlgeschlagen: ' + (e && e.message || e), true); });
     },
     remove: function (take) {
       if (!window.confirm('Take ' + take.code + ' „' + take.label + '“ endgültig löschen?')) return;

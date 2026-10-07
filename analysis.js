@@ -462,10 +462,15 @@
   ];
   function istZahl(v) { return typeof v === 'number' && isFinite(v); }
   function zahlGleich(a, b) { return istZahl(a) && istZahl(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)); }
+  /* Eine Abweichung in zwei Fassungen: statt = „Name alt statt jetzt“ (unvergleichbar), pfeil = „Name alt → neu“
+     (aenderungen, Meldung nach der Neu-Analyse). Beide aus derselben Prüfung, damit die Neu-Analyse nie
+     „gleiche Einstellungen“ meldet, wo die Vergleichsprüfung eine Abweichung sieht (Befund N20). */
   function abweichung(name, alt, neu, einheit) {
     var txt = function (v) { return String(v).replace('.', ','); };
-    return istZahl(alt) ? name + ' ' + txt(alt) + ' statt ' + txt(neu) + einheit : name + ' nicht gespeichert';
+    return { statt: istZahl(alt) ? name + ' ' + txt(alt) + ' statt ' + txt(neu) + einheit : name + ' nicht gespeichert',
+      pfeil: name + ' ' + (istZahl(alt) ? txt(alt) : 'nicht gespeichert') + ' → ' + txt(neu) + einheit };
   }
+  function beides(t) { return { statt: t, pfeil: t }; }
   function zentroideGleich(a, b) {
     if (!a || !b || a.length !== b.length) return false;
     for (var i = 0; i < a.length; i++) if (!a[i] || !b[i] || a[i].cls !== b[i].cls || !zahlGleich(a[i].F1, b[i].F1) || !zahlGleich(a[i].F2, b[i].F2)) return false;
@@ -474,25 +479,33 @@
   /* '' = vergleichbar, sonst die Abweichungen als Text. aktuell = { kernelVersion, gate, spreadMaxHz,
      hopS }: was analyseTake jetzt bekäme; fehlende Angaben gelten wie dort als Vorgabe. Ohne aktuell
      wird nichts geprüft. */
-  function unvergleichbar(take, aktuell) {
-    if (!aktuell) return '';
+  function abweichungen(take, aktuell) {
     var an = take && take.analysis, su = take && take.summary, ag = aktuell.gate || {}, d = [], i;
-    if (!an) return 'Rechenweise nicht gespeichert';
+    if (!an) return [beides('Rechenweise nicht gespeichert')];
     var kern = aktuell.kernelVersion != null ? aktuell.kernelVersion : D.VERSION;
-    if (an.kernelVersion !== kern) d.push(an.kernelVersion ? 'Kern ' + an.kernelVersion + ' statt ' + kern : 'Kernversion nicht gespeichert');
+    if (an.kernelVersion !== kern) d.push({ statt: an.kernelVersion ? 'Kern ' + an.kernelVersion + ' statt ' + kern : 'Kernversion nicht gespeichert', pfeil: 'Kern ' + (an.kernelVersion || 'nicht gespeichert') + ' → ' + kern });
     var sv = su && su.summaryVersion != null ? su.summaryVersion : 1;
-    if (sv !== SUMMARY_VERSION) d.push('Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (Object.prototype.hasOwnProperty.call(FASSUNG_FEHLT, sv) ? ' (' + FASSUNG_FEHLT[sv] + ')' : ''));
+    if (sv !== SUMMARY_VERSION) d.push({ statt: 'Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (Object.prototype.hasOwnProperty.call(FASSUNG_FEHLT, sv) ? ' (' + FASSUNG_FEHLT[sv] + ')' : ''), pfeil: 'Zusammenfassung Fassung ' + sv + ' → ' + SUMMARY_VERSION });
     var hop = aktuell.hopS != null ? aktuell.hopS : DEFAULTS.hopS, spr = aktuell.spreadMaxHz != null ? aktuell.spreadMaxHz : DEFAULTS.spreadMaxHz;
     if (!zahlGleich(an.hopS, hop)) d.push(abweichung('Rahmenabstand', an.hopS, hop, ' s'));
     if (!zahlGleich(an.spreadMaxHz, spr)) d.push(abweichung('Gültigkeitsgrenze Streuung', an.spreadMaxHz, spr, ' Hz'));
     var tg = an.gate;
-    if (!tg) { d.push('Gatterwerte nicht gespeichert'); return d.join(', '); }
+    if (!tg) { d.push(beides('Gatterwerte nicht gespeichert')); return d; }
     for (i = 0; i < GATTER_VERGLEICH.length; i++) {
       var f = GATTER_VERGLEICH[i], soll = ag[f[0]] != null ? ag[f[0]] : V.DEFAULTS[f[0]];
       if (!zahlGleich(tg[f[0]], soll)) d.push(abweichung(f[1], tg[f[0]], soll, f[2]));
     }
-    if (!zentroideGleich(tg.centroids, ag.centroids || V.CENTROIDS)) d.push(tg.centroids ? 'andere Vokalzentroide' : 'Vokalzentroide nicht gespeichert');
-    return d.join(', ');
+    if (!zentroideGleich(tg.centroids, ag.centroids || V.CENTROIDS)) d.push(tg.centroids ? { statt: 'andere Vokalzentroide', pfeil: 'Vokalzentroide geändert' } : beides('Vokalzentroide nicht gespeichert'));
+    return d;
+  }
+  function unvergleichbar(take, aktuell) {
+    if (!aktuell) return '';
+    return abweichungen(take, aktuell).map(function (e) { return e.statt; }).join(', ');
+  }
+  /* Was sich an der Rechenweise geändert hat, wenn ein Take jetzt mit aktuell gerechnet wird: Liste „Name alt → neu“,
+     leer bei gleicher Rechenweise. Dieselben Größen wie unvergleichbar, also auch alle Gatterwerte und Zentroide. */
+  function aenderungen(take, aktuell) {
+    return aktuell ? abweichungen(take, aktuell).map(function (e) { return e.pfeil; }) : [];
   }
 
   function refAus(t, b, pinned) {
@@ -575,7 +588,7 @@
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -685,7 +685,8 @@ module.exports = async function (H) {
 };
 
 /* Kriterien B2 — Anzeige, CSV und Doku sagen dasselbe wie die Messung.
-   B2a: Das Take-Ergebnis zeigt schwach belegte Formanten und ein zweideutiges Bestsegment wie das Detail (N8). */
+   B2a: Das Take-Ergebnis zeigt schwach belegte Formanten und ein zweideutiges Bestsegment wie das Detail (N8).
+   B2b: Die Neu-Analyse nennt jede geänderte Rechenweise und sperrt währenddessen den Take-Knopf (N20). */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -751,6 +752,47 @@ async function kriterienB2(H) {
       (bad.length ? bad.slice(0, 4).join(' | ') + ' || ' : '') + 'schwach im Rauschtake F' + (r1.schwach || []).map(k => k + 1).join(',') + ' | ' + belege.join(' | '));
     p.schliessen();
   } catch (e) { check('B2a', 'Ablauf Take-Ergebnis läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2b · Neu-Analyse: Meldung nennt jede geänderte Rechenweise, Take-Knopf währenddessen gesperrt ---------- */
+  try {
+    const SIGb = H.concat([noise(Math.round(0.1 * SR), 2e-4, 61), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], H.BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 62)]);
+    const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(SIGb), sampleRate: SR, durationS: SIGb.length / SR }), SR);
+    p.kalibriert('cal-b'); await p.S.putCalibration(p.st().cal); await p.mikrofon();
+    const T = await p.take();
+    const vorher = T.analysis.gate;
+    // Regler so bewegen, wie es die Hand tut: input-Ereignis am Schieber, den renderSettings angelegt hat.
+    const regler = (key, wert) => {
+      const wrap = (p.el('settings').kinder || []).find(w => (w.innerHTML || '').indexOf('id="s-' + key + '"') >= 0);
+      if (!wrap) throw new Error('Regler ' + key + ' fehlt');
+      const inp = wrap.querySelector('input'); inp.value = String(wert); inp.feuern('input');
+    };
+    regler('windowS', 0.6); regler('sdF2Max', 40); regler('minValidShare', 1);
+    // Neu-Analyse starten und mitten in ihr anhalten: Ist der Take-Knopf gesperrt?
+    const neu = async () => {
+      const t = await p.S.getTake(T.id);
+      p.sb.VAREAPP.handlers.reanalyse(t);
+      const lief = p.st().busy;
+      p.halt();
+      await new Promise(r => setTimeout(r, 20));
+      const gesperrt = p.el('btn-take').disabled;
+      p.weiter();
+      await p.warte(() => !p.st().busy && /Neu analysiert|fehlgeschlagen/.test(p.status()), 30000);
+      return { lief, gesperrt, status: p.status(), take: await p.S.getTake(T.id), frei: !p.el('btn-take').disabled };
+    };
+    const r1 = await neu();
+    const r2 = await neu();   // nichts verstellt: gleiche Einstellungen
+    await p.S.deleteCalibration('cal-b');
+    const r3 = await neu();   // Kalibrierung fehlt: der Boden wird geschätzt
+    const soll1 = ['Gatter-Fenster 0,3 → 0,6 s', 'F2-Bewegungsgrenze 100 → 40 Hz', 'Mindestanteil gültiger F1/F2 0,8 → 1'];
+    const ok1 = r1.lief && r1.gesperrt && r1.frei && soll1.every(x => r1.status.indexOf(x) >= 0 && r1.take.reanalysisNote.indexOf(x) >= 0) && !/gleiche Einstellungen/.test(r1.status) && !/Rauschboden/.test(r1.status);
+    const ok2 = r2.gesperrt && r2.frei && /\(gleiche Einstellungen\)/.test(r2.status) && r2.take.reanalysisNote === '';
+    const ok3 = r3.gesperrt && r3.frei && /geändert: Rauschboden kalibriert → (geschätzt|unbekannt)$/.test(r3.status) && /^Rauschboden kalibriert → /.test(r3.take.reanalysisNote);
+    const z = r => 'Take-Knopf ' + (r.gesperrt ? 'gesperrt' : 'frei') + ' während, ' + (r.frei ? 'frei' : 'gesperrt') + ' danach; „' + r.status + '“';
+    check('B2b', 'Neu-Analyse: Meldung und Historie nennen jeden geänderten Gatterwert („alt → neu“) und einen geänderten Rauschboden, „gleiche Einstellungen“ nur ohne Änderung; der Take-Knopf ist während der Neu-Analyse gesperrt (N20)',
+      vorher && vorher.windowS === 0.3 && ok1 && ok2 && ok3,
+      'gerechnet mit Fenster ' + (vorher && vorher.windowS) + ' | verstellt: ' + z(r1) + ' | unverändert: ' + z(r2) + ' | ohne Kalibrierung: ' + z(r3));
+    p.schliessen();
+  } catch (e) { check('B2b', 'Ablauf Neu-Analyse läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
