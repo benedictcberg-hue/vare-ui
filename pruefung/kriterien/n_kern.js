@@ -1,7 +1,7 @@
 /* Kriterien der Nachprüfung, Rechenkern.
    A1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps) —
      A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0), A1b Mischrahmen, 1,5·F0 und Schwelle am legato Tonwechsel,
-     A1c Atempause im Raum und mit Brumm.
+     A1c Atempause im Raum und mit Brumm, A1d Naht im Signal (digitale Stille, harter Schnitt).
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -275,5 +275,28 @@ module.exports = async function (H) {
     }
     r = sammle(gegen);
     check('A1c', 'Gegenprobe Pegel: Decrescendo bis 14 dB vor Konsonantenlücke mit Sprung danach, Messa di voce, Tremolo, Subito piano, leise Phrase nach lauter: richtig gezählt', r.ok === r.n, r.detail);
+  }
+  /* ---------- A1d: Naht im Signal ----------
+     Ein Aussetzer des Geräts liefert entweder digitale Stille (exakte Nullen) oder setzt das Signal ohne
+     die fehlenden Abtastwerte zusammen (harter Sprung). Mitten in einem Ton darf beides keinen Sprung
+     erzeugen; 100 ms Nullen zwischen zwei Tönen trennen wie eine Atempause (bisher gehaltener Sprung).
+     Eine Naht zwischen zwei verschiedenen Tönen ohne Nullen sieht aus wie ein legato Sprung; deren
+     Stellen kennt nur die Aufnahme (analysis.js). */
+  {
+    const nullen = (x, ab, dauer) => { const y = Float64Array.from(x); for (let i = Math.round(ab * SR); i < Math.round((ab + dauer) * SR) && i < y.length; i++) y[i] = 0; return y; };
+    const schnitt = (x, ab, dauer) => H.concat([x.subarray(0, Math.round(ab * SR)), x.subarray(Math.round((ab + dauer) * SR))]);
+    const keinGehalten = e => !e.some(x => x.art === 'gehalten');
+    const mitte = [], zwischen = [];
+    for (const f of [98, 165, 262]) for (const v of ['a', 'i']) for (const vib of [0, 50]) {
+      const t = real(vib ? vibrato(() => f, 6, vib, 0.3) : () => f, 3, v, 'rosenberg', saat++);
+      for (const d of [0.05, 0.1, 0.2]) mitte.push({ name: 'Nullen ' + d * 1000 + ' ms in ' + f + ' ' + NAME[v] + (vib ? ' Vibrato' : ''), sig: nullen(t, 1.2, d), soll: keinGehalten });
+      mitte.push({ name: 'Schnitt in ' + f + ' ' + NAME[v] + (vib ? ' Vibrato' : ''), sig: schnitt(t, 1.07, 1.0137), soll: keinGehalten });
+    }
+    let r = sammle(mitte);
+    check('A1d', 'Naht mitten im Ton (Nullen 50–200 ms oder harter Schnitt, 98–262 Hz, mit Vibrato): kein gehaltenes Ereignis', r.ok === r.n, r.detail);
+    for (const [a, ht] of [[220, -7], [196, 7], [147, 12], [262, -5]]) for (const v of ['a', 'o']) for (const d of [0.09, 0.1, 0.15])
+      zwischen.push({ name: a + (ht > 0 ? '+' : '') + ht + ' ' + NAME[v] + ' Nullen ' + d * 1000 + ' ms', sig: H.concat([real(() => a, 1.5, v, 'rosenberg', saat++), new Float64Array(Math.round(d * SR)), real(() => HT(a, ht), 1.5, v, 'rosenberg', saat++)]), soll: keins });
+    r = sammle(zwischen);
+    check('A1d', 'digitale Stille 90–150 ms zwischen zwei Tönen (±5…12 HT): kein Ereignis, die Nullen trennen wie eine Atempause', r.ok === r.n, r.detail);
   }
 };

@@ -1179,10 +1179,17 @@
      Teiltonreihe bei 2f/3 (Teiler 3 von 2f): Bei F1 nahe 3·F0 nimmt YIN auch 2/3 der Periode (Rahmen
      auf 1,5·F0, nur 61 % richtig); bei einem richtigen f liegen dort keine Linien.
      pegel: Pegel des gefilterten Fensters in dB (mittlere Leistung, 0 dB = Vollaussteuerung); ihn
-     braucht detectJumps, um Ausklang und Brumm von Gesang zu trennen. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
+     braucht detectJumps, um Ausklang und Brumm von Gesang zu trennen.
+     stille: 1, wenn das Fenster digitale Stille enthält (exakte Nullen über mindestens FINE_NULL_S).
+     Ein Mikrofon liefert in einer Lücke Raumrauschen, nie exakte Nullen; Nullen stammen aus einem
+     Aussetzer des Geräts (Befund N7). Solche Rahmen gelten in detectJumps als stimmlos wie Randrahmen:
+     Bisher zählte eine Nullstrecke von 100 ms zwischen zwei Tönen nur mit rund 100 ms stimmloser Rahmen,
+     unter der 120-ms-Pausengrenze, und der neue Ton wurde zum gehaltenen Sprung. Jetzt zählt jedes
+     Fenster, das die Nullen berührt; Nullen ab etwa 85 ms trennen wie eine Atempause, eine Lücke bis
+     80 ms bleibt eine Lücke in der Phrase. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
      Hann-Fenster Linien erst ab etwa 60 Hz Abstand, mehr Stützstellen ändern daran nichts; mit 2048
      rechnete die Feinspur rund 1,5-mal so lange wie mit 1024. */
-  var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1, FINE_FFT_N = 1024;
+  var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1, FINE_FFT_N = 1024, FINE_NULL_S = 0.005;
 
   // Nullphasige FIR-Filterung mit symmetrischem Kern: verschiebt keine Zeitmarken der Spur.
   function firSymmetric(x, h) {
@@ -1206,9 +1213,18 @@
     var n = Math.round(winS * sr), hop = Math.max(1, Math.round(hopS * sr)), h2 = n >> 1;
     var cs = new Float64Array(x.length + 1), k;
     for (k = 0; k < x.length; k++) cs[k + 1] = cs[k] + x[k] * x[k];
+    // Digitale Stille: Abtastwerte in Läufen exakter Nullen ab FINE_NULL_S, als Präfixsumme
+    var nullMin = Math.max(1, Math.round(FINE_NULL_S * sr)), cz = new Int32Array(ds.length + 1), a0, a1;
+    for (a0 = 0; a0 < ds.length; a0 = a1) {
+      a1 = a0 + 1;
+      if (ds[a0] !== 0) continue;
+      while (a1 < ds.length && ds[a1] === 0) a1++;
+      if (a1 - a0 >= nullMin) for (k = a0; k < a1; k++) cz[k + 1] = 1;
+    }
+    for (k = 0; k < ds.length; k++) cz[k + 1] += cz[k];
     var m = 0, c;
     for (c = n >> 1; c + (n >> 1) <= ds.length; c += hop) m++;
-    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), rand = new Uint8Array(m), pegel = new Float64Array(m), i = 0;
+    var t = new Float64Array(m), f0 = new Float64Array(m), ap = new Float64Array(m), rand = new Uint8Array(m), pegel = new Float64Array(m), stille = new Uint8Array(m), i = 0;
     for (c = n >> 1; c + (n >> 1) <= ds.length && i < m; c += hop, i++) {
       var s0 = c - (n >> 1), p = detectF0(x.subarray(s0, s0 + n), sr, fmin, fmax, opts.yinThresh);
       var e1 = cs[s0 + h2] - cs[s0], e2 = cs[s0 + n] - cs[s0 + h2];
@@ -1222,8 +1238,9 @@
       t[i] = c / sr; f0[i] = fx; ap[i] = p.ap;
       rand[i] = (randR > 0 && Math.min(e1, e2) < randR * Math.max(e1, e2)) ? 1 : 0;
       pegel[i] = 10 * Math.log10((e1 + e2) / n + 1e-20);
+      stille[i] = (cz[s0 + n] - cz[s0] > 0) ? 1 : 0;
     }
-    return { t: t, f0: f0, ap: ap, rand: rand, pegel: pegel, hopS: hopS, windowS: winS, fmin: fmin, lowpassHz: lpHz };
+    return { t: t, f0: f0, ap: ap, rand: rand, pegel: pegel, stille: stille, hopS: hopS, windowS: winS, fmin: fmin, lowpassHz: lpHz };
   }
 
   /* Weite eines Laufs: Median der größten Gruppe von Rahmen, die auf ±1 HT übereinstimmen.
@@ -1329,7 +1346,7 @@
       for (var k = 0; k < ruhe.length; k++) if (Math.abs(12 * Math.log2(ruhe[k] / m)) < ruheSt) z++;
       return z >= minRef ? m : NaN;
     }
-    function periodisch(k) { return isFinite(track.f0[k]) && track.ap[k] < apMax && !(track.rand && track.rand[k]); }
+    function periodisch(k) { return isFinite(track.f0[k]) && track.ap[k] < apMax && !(track.rand && track.rand[k]) && !(track.stille && track.stille[k]); }
     var misch = mischRahmen(track, periodisch, opts);
     function gueltig(k) { return periodisch(k) && !misch[k]; }
     // Mittlere Lage (log) der Bezugsrahmen bis 1 HT um den Median: mit Vibrato genauer als der Median allein.
