@@ -1,6 +1,9 @@
 /* V-Kriterien: Live-Gatter (vowel.js createGate) im Vokalwechsel, bei Vibrato und kleinem Fenster.
    Live heißt hier wie in app.js tick(): je Takt die letzten 0,2 s, auf 12 kHz, analyseAt mit
-   align 'end'. Testsignale mit allgemeinen Baritonwerten (98–250 Hz), Rauschabstand 40–60 dB. */
+   align 'end'. Testsignale mit allgemeinen Baritonwerten (98–250 Hz), Rauschabstand 60–70 dB, /o/ ohne
+   Rauschen: Das Gatter wertet nur Rahmen mit gültigem ΔF3–4, und das gibt der Rechenkern seit der
+   Zusammenführung bei 40–50 dB nicht mehr her (F5 nicht aufgelöst, F3/F4 ehrlich mehrdeutig). Ohne
+   Wertung liefe die Rahmenprüfung nie, und die Kriterien hätten nichts geprüft. */
 'use strict';
 module.exports = async function (H) {
   const { check, D, V, SR, TSR, noise, BW5 } = H;
@@ -73,12 +76,17 @@ module.exports = async function (H) {
     eu: [[0.15, 0.033, 196, 0], [0.3, 0.05, 147, 50], [0.5, 0.042, 110, 0]]
   };
   const FENSTER_WECHSEL = [0.15, 0.3, 0.6];
+  // Rauschabstand je Paar. /o/ (380/750, F3/F4 2600/2950, F5 4000) hat oberhalb von F2 wenig Energie:
+  // ΔF3–4 ist live bei 40–70 dB in keinem Rahmen gültig, bei 80 dB in 2–14 von 43, ohne Rauschen in
+  // 34–43 von 43. Ein Wechsel, der von /o/ ausgeht, braucht im stehenden /o/ Wertungen, sonst gibt es
+  // nichts, was beim Verlassen enden müsste — daher /o/→/a/ ohne Rauschen (300 dB wie V3c).
+  const SNR_WECHSEL = { ao: 60, ai: 60, oa: 300, eu: 60 };
   for (const p in FAELLE) {
     let verstoss = 0, beispiel = '', ohneGrund = 0, gewertetSteh = 0, folgen = 0, gewertetAb = 0;
     for (const [gl, T, f0, cent] of FAELLE[p]) {
       const g0 = 1.1, FA = VOK[p[0]], FB = VOK[p[1]], B = BV[p[0]].map((b, k) => (b + BV[p[1]][k]) / 2);
       const w = t => Math.min(1, Math.max(0, (t - g0) / gl));
-      const sig = synth(vib(f0, 6, cent), t => FA.map((v, k) => v + (FB[k] - v) * w(t)), g0 + gl + 0.75, B, 60, Math.round(f0 * 10 + gl * 100));
+      const sig = synth(vib(f0, 6, cent), t => FA.map((v, k) => v + (FB[k] - v) * w(t)), g0 + gl + 0.75, B, SNR_WECHSEL[p], Math.round(f0 * 10 + gl * 100));
       const frames = live(sig, takt(0.2, g0 + gl + 0.75, T));
       const stA = frames.filter(f => f.voiced && f.t > 0.6 && f.t <= g0), stB = frames.filter(f => f.voiced && f.t > g0 + gl + 0.35);
       const A1 = med(stA.map(f => f.F1)), A2 = med(stA.map(f => f.F2)), B1 = med(stB.map(f => f.F1)), B2 = med(stB.map(f => f.F2));
@@ -104,12 +112,18 @@ module.exports = async function (H) {
 
   /* V1c: die Toleranz trägt realistisches Vibrato. Stehende Vokale mit Vibrato 6 Hz ±50 Cent und
      Wobble 3,5 Hz ±30 Cent, auch dort, wo der Formantwert am Teilton hängt (/a/-F1 und /ɐ/ bei
-     250 Hz, /i/-F2 bei 220–250 Hz): kein Rahmen darf als „verlässt den Vokal“ gelten. */
+     250 Hz, /i/-F2 bei 220–250 Hz): kein Rahmen darf als „verlässt den Vokal“ gelten.
+     /a/ und /ɐ/ bei 70 statt 40 dB, /o/ ohne Rauschen statt 60 dB: Bei 40 dB ist ΔF3–4 seit der
+     Zusammenführung nie gültig, die Rahmenprüfung lief also nie (vorher mit dem alten Kern in 18–31 von
+     43 Rahmen). Der Abstand schwächt nichts: Die größte Abweichung eines Rahmens vom Median ist mit dem
+     neuen und dem alten Abstand gleich groß (F1 bis 2,1 bzw. 2,5 %, F2 bis 2,3 bzw. 1,8 %), das Vibrato
+     bestimmt sie, nicht das Rauschen. Die Rahmenprüfung läuft jetzt in 1379 Rahmen, mit dem Kern vor der
+     Zusammenführung und den alten Abständen in 956. */
   const FENSTER_VIBRATO = [0.15, 0.3, 0.6];
   {
     let falsch = 0, gewertet = 0, beispiel = '';
     const leer = [];
-    for (const [v, f0, snr] of [['a', 98, 40], ['a', 196, 40], ['a', 250, 40], ['ɐ', 250, 40], ['o', 196, 60], ['i', 220, 60], ['i', 250, 60]]) for (const [rate, cent] of [[6, 50], [3.5, 30]]) {
+    for (const [v, f0, snr] of [['a', 98, 70], ['a', 196, 70], ['a', 250, 70], ['ɐ', 250, 70], ['o', 196, 300], ['i', 220, 60], ['i', 250, 60]]) for (const [rate, cent] of [[6, 50], [3.5, 30]]) {
       const sig = synth(vib(f0, rate, cent), () => VOK[v], 2.0, BV[v], snr, f0 + rate * 7);
       const frames = live(sig, takt(0.2, 2.0, 0.042));
       for (const windowS of FENSTER_VIBRATO) {
@@ -164,12 +178,15 @@ module.exports = async function (H) {
   /* ---------- V2: Bestwerte und Referenzen (analysis.js segments, summarise, computeRefs) ---------- */
   const { A } = H;
   // Ganzer Take wie in app.js: 0,4 s Raumrauschen, Vokal, 0,4 s Raumrauschen, Boden kalibriert.
-  // 60 dB Abstand: bei 35–55 dB entsteht an diesen /a/-Takes derzeit kaum ein Segment (ΔF3–4 selten
-  // gültig, Rechenkern) — hier geht es um die Zusammenfassung, nicht um den Kern.
+  // 70 dB Abstand: hier geht es um die Zusammenfassung, nicht um den Kern. Bei 60 dB sieht in diesen
+  // /a/-Takes oft nur eine LPC-Ordnung F5; seit der Zusammenführung darf ein solcher Gipfel entfallen,
+  // dann ist auch die Lesart „tiefes enges Cluster“ zulässig und F3/F4 sind ehrlich unsicher (eindeutiges
+  // /a/ 127 von 206 Rahmen mit gültigem ΔF3–4, kein Segment; Take L 0 von 206). Bei 65 dB fehlt L noch
+  // (60 von 206), ab 70 dB sind alle vier Takes durchgehend gültig.
   async function takeAus(id, f0, F, gate, snrDb) {
     const v = D.synthVowel(f0, F, BW5, 2.0, SR, { gain: 0.3 });
     let e = 0; for (let i = 0; i < v.length; i++) e += v[i] * v[i];
-    const amp = Math.sqrt(e / v.length) * Math.pow(10, -(snrDb || 60) / 20) * Math.sqrt(3);
+    const amp = Math.sqrt(e / v.length) * Math.pow(10, -(snrDb || 70) / 20) * Math.sqrt(3);
     const pad = Math.round(0.4 * SR), y = new Float64Array(v.length + 2 * pad), nz = noise(y.length, amp, 9);
     y.set(v, pad); for (let i = 0; i < y.length; i++) y[i] += nz[i];
     const r = await A.analyseTake(y, SR, { floorDb: 20 * Math.log10(amp / Math.sqrt(3)), gate: gate || {} });
@@ -251,11 +268,12 @@ module.exports = async function (H) {
   {
     // Echte Neu-Analyse: angepinnt war das /a/ eines Takes; die neue Auswertung findet dort nur noch
     // ein zweideutig zugeordnetes Segment (hier: der Grenzvokal unter derselben Id).
-    const pin = A.computeRefs([T_EIN], {}); pin.a.pinned = true;
+    // Ohne Referenz aus T_EIN gibt es nichts anzupinnen: dann reißt das Kriterium, statt das Modul abzubrechen.
+    const pin = A.computeRefs([T_EIN], {}); if (pin.a) pin.a.pinned = true;
     const neu = Object.assign({}, T_GRENZ, { id: 'E', code: 'E' });
     const r = A.computeRefs([neu], pin);
     check('V2', 'Neu-Analyse ergibt nur ein zweideutiges Segment → angepinnte Referenz verwaist mit diesem Grund',
-      ohneZiel(r.a) && /zweideutig/.test(r.a.grund) && isFinite(r.a.d34Zuletzt), JSON.stringify(r.a));
+      !!pin.a && ohneZiel(r.a) && /zweideutig/.test(r.a.grund) && isFinite(r.a.d34Zuletzt), pin.a ? JSON.stringify(r.a) : 'keine Referenz aus dem eindeutigen Take zum Anpinnen');
   }
 
   /* V2j–m: Referenz nur aus Takes gleicher Rechenweise (Bericht 2, Befund 2; Manual: „Vergleiche nur
