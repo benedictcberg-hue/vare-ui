@@ -1,4 +1,4 @@
-/* VARE — Rechenkern v3
+/* VARE — Rechenkern v4
    Reines JavaScript, keine Abhängigkeiten. Läuft im Browser (window.VAREDSP) und unter Node (module.exports).
    Alle Frequenzen in Hz, alle Pegel in dB. Jede Zahl, die hier herauskommt, ist ein Messwert oder NaN —
    nie ein geglätteter Ersatz. Die Darstellung entscheidet, wie sie NaN zeigt (Sentinel −99,00 = „Pause“).
@@ -13,7 +13,11 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '3.0.0';
+  /* Kernversion = Rechenweise. Takes mit anderer Version gelten als anders gerechnet (analysis.js
+     unvergleichbar) und speisen keine Referenz. 4.0.0: Sprungzählung (K1), Formantgültigkeit (K2),
+     Grundton-Gegenprobe (K3) und SHR-Raster (K4) rechnen anders als 3.0.0. Jede Änderung, die einen
+     Rahmenwert ändert, erhöht die Version (Prüfung I4a, Kern-Fingerabdruck). */
+  var VERSION = '4.0.0';
   var TARGET_SR = 12000;          // Nyquist 6000 Hz, F5 bleibt im Durchlassband
   var ORDERS = [12, 14, 16];      // Ordnungssweep
   var WINDOWS = [0.06, 0.08, 0.10, 0.14]; // Fensterlängensweep in s

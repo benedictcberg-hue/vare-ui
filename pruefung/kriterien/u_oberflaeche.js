@@ -908,3 +908,5 @@ module.exports = async function (H) {
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
 };
+// Die Nachbildung für andere Kriterienmodule (i4_rechenweise.js): dieselbe Seite, derselbe Speicher, dieselben Leser.
+module.exports.hilfen = { El, seiteOeffnen, speicherNeu, uhrNeu, chronikNeu, kacheln, listenZellen, fehler };
