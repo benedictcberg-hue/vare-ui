@@ -552,6 +552,65 @@ const WAV = path.join(SP, 'fake.wav');
     } catch (e) { NEULADEN_NAMEN.forEach((n, k) => { if (neuladenErledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
     if (ctx4) await ctx4.close();
 
+    // ---------- B2: Take-Ergebnis mit schwach belegten Formanten; Neu-Analyse nach verstellten Gatter-Reglern ----------
+    const B2_NAMEN = ['Take-Ergebnis im Browser: schwach belegte Formanten in Rost mit Anteil, die übrigen ohne, wie im Detail (N8)',
+      'Neu-Analyse nach verstellten Gatter-Reglern: Meldung nennt jede Änderung, der Take-Knopf ist währenddessen gesperrt (N20)'];
+    const b2Erledigt = [], b2Check = (k, ok, d) => { b2Erledigt.push(k); check(B2_NAMEN[k], ok, d); };
+    let ctx5 = null;
+    try {
+      ctx5 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
+      await ctx5.route('https://api.github.com/**', korpusRoute);
+      // Anhalten wie oben: Solange window.__halt gilt, wartet jeder fällige Zeitgeber, die Analyse steht zwischen zwei Blöcken.
+      await ctx5.addInitScript(() => {
+        window.__halt = false;
+        const zeitgeber = window.setTimeout.bind(window);
+        window.setTimeout = function (f, ms) {
+          const rest = Array.prototype.slice.call(arguments, 2);
+          return zeitgeber(function lauf() { if (window.__halt) { zeitgeber(lauf, 20); return; } if (typeof f === 'function') f.apply(null, rest); }, ms);
+        };
+      });
+      const p5 = await ctx5.newPage();
+      p5.on('pageerror', e => errors.push(String(e && e.stack || e)));
+      p5.on('dialog', d => d.dismiss());
+      await p5.goto(BASE + '/index.html#/aufnahme');
+      await p5.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+      await p5.fill('#token', TOKEN); await p5.uncheck('#token-merken'); await p5.click('#btn-verbinden');
+      await p5.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 10000 });
+      await p5.$eval('#s-requireCal', el => { el.checked = false; el.dispatchEvent(new Event('change')); });
+      await p5.click('#btn-mic');
+      await p5.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
+      // /o/ auf A2, 2,5 s nach 0,5 s Raumrauschen, Rauschen 30 dB unter dem Vokal: F3 und F4 nur in einem Teil der Rahmen gültig.
+      const sr = 48000, o = D.synthVowel(110, [430, 800, 2450, 3200, 4000], [60, 80, 120, 150, 200], 2.5, sr, { gain: 0.3 });
+      let x = 7, pe = 0; for (const v of o) pe += v * v; pe /= o.length;
+      const amp = Math.sqrt(pe / Math.pow(10, 30 / 10) * 3), sam = new Array(o.length + sr / 2);
+      for (let i = 0; i < sam.length; i++) { x = (x * 1664525 + 1013904223) >>> 0; sam[i] = amp * ((x / 4294967296) * 2 - 1) + (i >= sr / 2 ? o[i - sr / 2] : 0); }
+      await p5.evaluate(a => { VAREAPP.finishTake(new Float32Array(a), 48000); }, sam);
+      await p5.waitForFunction(() => !VAREAPP.state.busy && document.querySelector('#take-result .notice'), null, { timeout: 120000 });
+      const r8 = await p5.evaluate(() => VARESTORE.allTakes().then(ts => {
+        const t = ts[0], s = t.summary, k = Array.from(document.querySelectorAll('#take-result .stat')).find(e => /F1–F5/.test(e.textContent));
+        const rost = k ? Array.from(k.querySelectorAll('.rust')).map(e => ({ text: e.textContent, farbe: getComputedStyle(e).color })) : [];
+        return { id: t.id, F: s.F.map(f => ({ n: f.n, share: f.share, med: f.med })), text: k ? k.querySelector('.v').textContent : '', rost };
+      }));
+      const schwach = r8.F.map((f, k) => (!(f.n >= 10) || !(f.share >= 0.5)) ? k : -1).filter(k => k >= 0);
+      await p5.evaluate(id => { location.hash = '#/take/' + id; }, r8.id);
+      await p5.waitForFunction(() => document.querySelector('#take-detail .grid'), null, { timeout: 10000 });
+      const detailSchwach = await p5.evaluate(() => Array.from(document.querySelectorAll('#take-detail .stat')).map(e => [(e.querySelector('.k') || {}).textContent, e.className]).filter(z => /^F[1-5]$/.test(z[0]) && /\bunsure\b/.test(z[1])).map(z => +z[0].slice(1) - 1));
+      b2Check(0, schwach.length > 0 && schwach.length < 5 && r8.rost.length === schwach.length && r8.rost.every(e => e.farbe === 'rgb(168, 90, 60)' && /gültig in/.test(e.text)) && detailSchwach.join() === schwach.join(),
+        JSON.stringify({ schwach: schwach.map(k => 'F' + (k + 1)), text: r8.text, rost: r8.rost, detail: detailSchwach.map(k => 'F' + (k + 1)) }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+      // Regler so bewegen, wie es die Hand tut, dann „Neu analysieren“ im Detail; mitten in der Neu-Analyse anhalten.
+      for (const [id, v] of [['#s-windowS', '0.6'], ['#s-sdF2Max', '40'], ['#s-minValidShare', '1']]) await p5.$eval(id, (el, w) => { el.value = w; el.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+      await p5.waitForSelector('#d-re', { timeout: 10000 });
+      await p5.click('#d-re');
+      await p5.waitForFunction(() => VAREAPP.state.busy && (window.__halt = true), null, { timeout: 10000, polling: 'raf' });
+      const waehrend = await p5.evaluate(() => document.getElementById('btn-take').disabled);
+      await p5.evaluate(() => { window.__halt = false; });
+      await p5.waitForFunction(() => !VAREAPP.state.busy && /Neu analysiert|fehlgeschlagen/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 120000 });
+      const r20 = await p5.evaluate(id => VARESTORE.getTake(id).then(t => ({ status: document.querySelector('[role=status]').textContent, note: t.reanalysisNote, frei: !document.getElementById('btn-take').disabled })), r8.id);
+      b2Check(1, waehrend === true && r20.frei && ['Gatter-Fenster 0,3 → 0,6 s', 'F2-Bewegungsgrenze 100 → 40 Hz', 'Mindestanteil gültiger F1/F2 0,8 → 1'].every(t => r20.status.indexOf(t) >= 0 && r20.note.indexOf(t) >= 0) && !/gleiche Einstellungen/.test(r20.status),
+        JSON.stringify({ gesperrtWaehrend: waehrend, freiDanach: r20.frei, status: r20.status, note: r20.note }));
+    } catch (e) { B2_NAMEN.forEach((n, k) => { if (b2Erledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
+    if (ctx5) await ctx5.close();
+
     // ---------- Sicherung mit nie Gemessenem, Befund statt Rost, Sprünge, verwaiste Referenz ----------
     const C = require(path.join(ROOT, 'csv.js'));
     const stat = (med, extra) => Object.assign({ med, q1: med - 10, q3: med + 10, n: 400, share: 0.95 }, extra);
