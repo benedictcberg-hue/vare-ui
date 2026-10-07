@@ -406,8 +406,10 @@ for (const srIn of [44100, 48000, 96000]) {
       for (let i = 0; i < a.length; i++) a[i] += nz[i];
       return A.estimateFloor(D.resample(a, SR, TSR), TSR, 0.01).known === false; })(), '');
   check('T24', 'Take-Codes: nextCodeIndex setzt nach Import fort', A.nextCodeIndex([{ code: 'A' }, { code: 'M' }, { code: 'AB' }], 0) === 28 && A.nextCodeIndex([], 5) === 5 && A.indexFromCode('A') === 0 && A.indexFromCode('AA') === 26, String(A.nextCodeIndex([{ code: 'A' }, { code: 'M' }, { code: 'AB' }], 0)));
-  check('T24', 'computeRefs: angepinnte Referenz ohne ihren Take wird verworfen',
-    Object.keys(A.computeRefs([], { a: { d34: 640, takeId: 'weg', pinned: true } })).length === 0, '');
+  // Früher: „wird verworfen“ — dann trat still das Minimum der übrigen Takes an die Stelle des Pins.
+  check('T24', 'computeRefs: angepinnte Referenz ohne ihren Take bleibt sichtbar (verwaist, mit Grund), aber ohne Zielmarke',
+    (() => { const r = A.computeRefs([], { a: { d34: 640, takeId: 'weg', code: 'C', pinned: true } }).a;
+      return !!r && r.verwaist === true && r.pinned === true && !isFinite(r.d34) && r.d34Zuletzt === 640 && /gelöscht/.test(r.grund); })(), '');
   check('T24', 'computeRefs: angepinnte Referenz wird aus dem aktuellen Bestsegment aufgefrischt',
     (() => { const t = { id: 'T1', code: 'A', createdAt: '2026', summary: { perVowel: { a: { bestSegment: { d34Med: 640, startS: 1, lenS: 1 } } } } };
       const r = A.computeRefs([t], { a: { d34: 640, takeId: 'T1', code: 'A', pinned: true } });

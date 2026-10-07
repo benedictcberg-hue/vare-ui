@@ -70,8 +70,23 @@
     minVoicedShare: 0.9,    // fest
     classShare: 0.8,        // fest: Anteil der gültigen Rahmen mit der Fensterklasse
     holdS: 0.15,            // fest: Hysterese beim Klassenwechsel
-    minFrames: 5,           // fest: so viele Rahmen muss das Fenster mindestens enthalten
-    minFillShare: 0.6       // fest: und mindestens so viel von windowS abdecken
+    minFrames: 5,           // fest: so viele Rahmen muss das Fenster mindestens enthalten (offline)
+    /* Live drei statt fünf: dort kommt höchstens alle 40–50 ms ein Rahmen, in 0,15 s passen nur 3–4 —
+       mit fünf war das kleinste Fenster nie stabil. Zwei wären nur eine Differenz, kein Streuungsmaß;
+       den Einzelrahmen nach einer Lücke fängt minFillShare. Dass ein kurzes Fenster langsamen
+       Vokalwechseln folgt, fängt die Rahmenprüfung (frameLeaves, Band 2). Offline bleibt es bei fünf:
+       bei 10 ms Raster greift die Zahl dort nicht, und bei grobem Raster würde ein kurzes zentriertes
+       Fenster sonst erstmals stabil — ohne diese Rahmenprüfung. */
+    minFramesLive: 3,       // fest
+    minFillShare: 0.6,      // fest: und mindestens so viel von windowS abdecken
+    // Live: der gewertete Rahmen muss selbst noch im Vokal stehen (frameLeaves)
+    frameTolShare: 0.5,     // fest: Band um den Fenstermedian, Anteil von sdF1Max bzw. sdF2Max …
+    frameVibRel: 0.065,     // fest: … oder dieser Anteil des Medians, je nachdem, was größer ist
+    refS: 0.6,              // fest: Bezug „was der Vokal zuvor gezeigt hat“: Rahmen der letzten refS …
+    refLagS: 0.1,           // fest: … ohne die jüngsten refLagS …
+    refMinSpanS: 0.4,       // fest: … gilt erst, wenn er so lange reicht …
+    refMarginHz: 20,        // fest: … und erlaubt so viel über seine Spanne hinaus …
+    refMarginRel: 0.02      // fest: … oder diesen Anteil des Fenstermedians, je nachdem, was größer ist
   };
 
   function entry(fr, centroids) {
@@ -85,14 +100,15 @@
   }
 
   /* Die eine Prüffunktion für ein Fenster aus Rahmen-Einträgen (entry). Liefert
-     { state: 'pause'|'uebergang'|'stabil', cls, reason, F1med, F2med } — ohne Hysterese, ohne Score. */
-  function evaluateWindow(win, opts) {
-    var voiced = 0, valid = 0, f1 = [], f2 = [], i;
+     { state: 'pause'|'uebergang'|'stabil', cls, reason, F1med, F2med } — ohne Hysterese, ohne Score.
+     minFrames (optional) ersetzt opts.minFrames; live gilt minFramesLive. */
+  function evaluateWindow(win, opts, minFrames) {
+    var voiced = 0, valid = 0, f1 = [], f2 = [], i, nMin = minFrames || opts.minFrames;
     /* Ein Fenster, das kaum Rahmen enthält, kann nicht „stabil“ heißen: bei einem einzigen Rahmen
        liefert der Interdezilbereich NaN, und NaN > Grenze ist false — beide Bewegungsprüfungen
        galten damit als bestanden. Nach jeder Lücke (Registerkarte im Hintergrund, Kalibrierung,
        Mikrofonwechsel) wurde so aus einem einzelnen Rahmen sofort wieder „stabil“ mit Wertung. */
-    if (win.length < opts.minFrames) return res('uebergang', null, NaN, 'zu wenige Rahmen (' + win.length + ')');
+    if (win.length < nMin) return res('uebergang', null, NaN, 'zu wenige Rahmen (' + win.length + ')');
     var span = win[win.length - 1].t - win[0].t;
     if (span < opts.windowS * opts.minFillShare) return res('uebergang', null, NaN, 'Fenster erst ' + span.toFixed(2) + ' s voll');
     for (i = 0; i < win.length; i++) {
@@ -119,6 +135,45 @@
     if (!(e.F3 >= opts.f3MinHz)) return { score: NaN, reason: 'F3 zu tief (' + Math.round(e.F3) + ' Hz)' };
     return { score: e.d34, reason: '' };
   }
+  /* Steht der gewertete Rahmen selbst noch im Vokal? Im nachlaufenden Fenster ist der neueste Rahmen
+     der Rand: im Interdezilbereich zählt seine Abweichung bei sieben Rahmen nur mit 0,4. Ein
+     beginnender Vokalwechsel blieb so „stabil /a/“ und gewertet — mit einem schrumpfenden Cluster,
+     das wie Fortschritt aussah. Zwei Bänder, beide müssen halten:
+     1. Fenstermedian ± max(halbe Streuungsgrenze, 6,5 %). Die halbe Grenze ist das Band, das das
+        Fenster selbst einhalten muss. Vibrato ±50 Cent schiebt jeden Teilton um ±2,9 %, ein am
+        Teilton hängender Formantwert wandert mit (gemessen bis 4 %). Liegt der Formant zwischen zwei
+        Teiltönen, springt der Messwert im Takt des Vibratos zwischen ihnen: an stehenden Vokalen auf
+        jedem Halbton 87–247 Hz gemessen bis 6,25 % (/i/-F2 bei 233 Hz: 135 Hz, schon bei ±30 Cent).
+        Ein kurzes Fenster sieht oft nur eine der beiden Lagen.
+     2. Spanne dessen, was der Vokal von t − refS bis t − refLagS gezeigt hat, ± max(20 Hz, 2 %). Die
+        jüngsten 0,1 s fehlen, weil diese Rahmen ihr Analysefenster (bis 0,14 s) mit dem geprüften
+        teilen und einen beginnenden Wechsel schon mittragen. Die Spanne enthält Vibrato und Sprünge
+        des Takes selbst; gemessen überschritt ein stehender Rahmen sie um höchstens 17 Hz, bei
+        Sprüngen, deren Tiefe von Periode zu Periode schwankt, um 31 Hz bei F2 2050 Hz (1,5 %). Das
+        Band fängt den Wechsel früh, wo Band 1 zu weit ist, und hält bei kurzem Fenster, dessen
+        Median langsamen Wechseln folgt. Es gilt erst, wenn der Bezug 0,4 s überdeckt (Vokalanfang,
+        nach einer Pause).
+     Ohne eigenes F1/F2 lässt sich das nicht prüfen, dann keine Wertung. */
+  function frameLeaves(e, r, hist, opts) {
+    if (!isFinite(e.F1) || !isFinite(e.F2)) return 'F1/F2 dieses Rahmens fehlt';
+    var t1 = Math.max(opts.frameTolShare * opts.sdF1Max, opts.frameVibRel * r.F1med);
+    var t2 = Math.max(opts.frameTolShare * opts.sdF2Max, opts.frameVibRel * r.F2med);
+    if (!(Math.abs(e.F1 - r.F1med) <= t1)) return 'Rahmen verlässt den Vokal (F1 ' + Math.round(e.F1) + ' Hz, Fenster ' + Math.round(r.F1med) + ' ± ' + Math.round(t1) + ')';
+    if (!(Math.abs(e.F2 - r.F2med) <= t2)) return 'Rahmen verlässt den Vokal (F2 ' + Math.round(e.F2) + ' Hz, Fenster ' + Math.round(r.F2med) + ' ± ' + Math.round(t2) + ')';
+    var lo1 = Infinity, hi1 = -Infinity, lo2 = Infinity, hi2 = -Infinity, ta = Infinity, tb = -Infinity, i, x;
+    var m1 = Math.max(opts.refMarginHz, opts.refMarginRel * r.F1med), m2 = Math.max(opts.refMarginHz, opts.refMarginRel * r.F2med);
+    for (i = 0; i < hist.length; i++) {
+      x = hist[i];
+      if (!x.ok || x.t > e.t - opts.refLagS || x.t < e.t - opts.refS) continue;
+      if (x.F1 < lo1) lo1 = x.F1; if (x.F1 > hi1) hi1 = x.F1;
+      if (x.F2 < lo2) lo2 = x.F2; if (x.F2 > hi2) hi2 = x.F2;
+      if (x.t < ta) ta = x.t; if (x.t > tb) tb = x.t;
+    }
+    if (!(tb - ta >= opts.refMinSpanS)) return '';
+    if (e.F1 < lo1 - m1 || e.F1 > hi1 + m1) return 'Rahmen verlässt den Vokal (F1 ' + Math.round(e.F1) + ' Hz, zuvor ' + Math.round(lo1) + '–' + Math.round(hi1) + ' ± ' + Math.round(m1) + ')';
+    if (e.F2 < lo2 - m2 || e.F2 > hi2 + m2) return 'Rahmen verlässt den Vokal (F2 ' + Math.round(e.F2) + ' Hz, zuvor ' + Math.round(lo2) + '–' + Math.round(hi2) + ' ± ' + Math.round(m2) + ')';
+    return '';
+  }
   function mergeOpts(o) {
     var opts = {};
     for (var k in DEFAULTS) opts[k] = (o && o[k] != null) ? o[k] : DEFAULTS[k];
@@ -129,15 +184,16 @@
   /* LIVE: nachlaufendes Fenster [t − windowS, t] mit Hysterese beim Klassenwechsel (holdS).
      update(frame) mit frame = { t, voiced, F1, F2, F3, valid1, valid2, d34, d34valid } liefert
      { state, cls, score, reason, F1med, F2med }. score = ΔF3–4 nur im Zustand stabil, nur bei
-     gültigem F3/F4 und nur bei F3 ≥ f3MinHz. */
+     gültigem F3/F4, nur bei F3 ≥ f3MinHz und nur, wenn der Rahmen selbst noch im Vokal steht. */
   function createGate(o) {
-    var opts = mergeOpts(o), ring = [], curCls = null, candCls = null, candSince = NaN;
-    function reset() { ring = []; curCls = null; candCls = null; candSince = NaN; }
+    var opts = mergeOpts(o), ring = [], hist = [], curCls = null, candCls = null, candSince = NaN;
+    function reset() { ring = []; hist = []; curCls = null; candCls = null; candSince = NaN; }
     function update(fr) {
       var e = entry(fr, opts.centroids);
-      ring.push(e);
+      ring.push(e); hist.push(e);
       while (ring.length && ring[0].t < fr.t - opts.windowS) ring.shift();
-      var r = evaluateWindow(ring, opts);
+      while (hist.length && hist[0].t < fr.t - Math.max(opts.windowS, opts.refS)) hist.shift();
+      var r = evaluateWindow(ring, opts, opts.minFramesLive);
       if (r.state === 'pause') { curCls = null; candCls = null; return r; }
       if (r.state === 'uebergang') { r.cls = curCls; return r; }
       // Kandidat verfällt, sobald das Fenster wieder die alte Klasse meldet. Sonst wäre die
@@ -149,6 +205,8 @@
         curCls = r.cls; candCls = null;
       }
       var sc = scoreFor(e, opts);
+      var weg = isFinite(sc.score) ? frameLeaves(e, r, hist, opts) : '';
+      if (weg) sc = { score: NaN, reason: weg };
       var out = res('stabil', curCls, sc.score, sc.reason, r.F1med, r.F2med);
       // Liegt die Fensterklasse dicht an der Grenze zur Nachbarklasse, ist die Zuordnung eine
       // Entscheidung, keine Messung — dann gehört das neben den Wert.
