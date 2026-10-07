@@ -715,6 +715,38 @@ module.exports = async function (H) {
     p.schliessen();
   } catch (e) { check('U3.12', 'Ablauf Take-Ergebnis mit F3 unter dem Mindestwert läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
+  /* ---------- U3 · Historie: frühere Auswertungen mit Kern und Zeitpunkt ---------- */
+  try {
+    const sb = chronikNeu(), CHR = sb.VARECHRONIK;
+    const t = befundTake(2500, x => {
+      x.history = [{ analysis: { kernelVersion: '2.9.0', analysedAt: '2026-03-01T08:05:00.000Z' }, summary: {} },
+        { kernelVersion: '2.8.0', analysedAt: '2026-02-01T08:05:00.000Z' }, { summary: {} }];
+      x.reanalysisNote = 'F3-Mindestwert 2500 → 2600 Hz, <b>';
+    });
+    const div = new El(); CHR.renderDetail(div, t, null, {}, false, {});
+    const m = /Frühere Auswertungen: ([^<]*)<\/div>/.exec(div.innerHTML), txt = m ? m[1] : '';
+    const d1 = CHR.dateShort('2026-03-01T08:05:00.000Z'), d2 = CHR.dateShort('2026-02-01T08:05:00.000Z');
+    check('U3.14', 'Detail: frühere Auswertungen mit Kern und Zeitpunkt (neue und ältere Einträge), fehlende Angaben benannt, Änderung der letzten Neu-Analyse maskiert',
+      txt.startsWith('2.9.0 (' + d1 + '), 2.8.0 (' + d2 + '), ? (Zeitpunkt unbekannt)') && /geändert: F3-Mindestwert 2500 → 2600 Hz, &lt;b&gt;/.test(txt), '„' + txt + '“');
+    // Der ganze Weg: Take mit Audio, Regler verstellt, „Neu analysieren“, Detail öffnen.
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 12 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-H'); await p.mikrofon();
+    const T = await p.take();
+    uhr.vor(60e3);
+    p.st().settings.f3MinHz = 2600;
+    p.sb.location.hash = '#/take/' + T.id;
+    p.sb.VAREAPP.handlers.reanalyse(T);
+    await p.warte(() => /Neu analysiert/.test(p.st().statusEl ? p.st().statusEl.textContent : '') && /Frühere Auswertungen/.test(p.el('take-detail').innerHTML), 30000);
+    const nach = sp.d.takes.get(T.id), h0 = nach && nach.history && nach.history[0];
+    const m2 = /Frühere Auswertungen: ([^<]*)<\/div>/.exec(p.el('take-detail').innerHTML), txt2 = m2 ? m2[1] : '';
+    const erwartet = D.VERSION + ' (' + p.sb.VARECHRONIK.dateShort(T.createdAt) + ')';
+    check('U3.15', 'Neu-Analyse über die Seite: die Detailansicht nennt die frühere Auswertung mit Kern und Zeitpunkt und was sich geändert hat',
+      !!h0 && h0.analysis && h0.analysis.kernelVersion === D.VERSION && txt2.startsWith(erwartet) && /F3-Mindestwert 2500 → 2600 Hz/.test(txt2),
+      'erwartet „' + erwartet + ' …“ | angezeigt „' + txt2 + '“');
+    p.schliessen();
+  } catch (e) { check('U3.14', 'Ablauf Historie läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
 };

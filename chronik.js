@@ -261,6 +261,15 @@
     return teile.join(' · ');
   }
 
+  /* Ein Eintrag der Historie ist { analysis, summary }: die ganze frühere Auswertung (app.js,
+     reanalyse). Gelesen wurden aber h.kernelVersion und h.analysedAt, also stand „ ()“ da
+     (Bericht 3, Befund 8). Ältere Einträge mit den Feldern direkt bleiben lesbar; was fehlt, heißt
+     „?“ bzw. „Zeitpunkt unbekannt“ statt einer leeren Klammer. */
+  function historieText(h) {
+    var a = (h && h.analysis) || h || {}, wann = a.analysedAt ? dateShort(a.analysedAt) : '';
+    return esc(a.kernelVersion || '?') + ' (' + (wann ? esc(wann) : 'Zeitpunkt unbekannt') + ')';
+  }
+
   function renderDetail(el, take, series, refs, hasAudio, handlers) {
     var s = take.summary || {}, old = take.analysis && take.analysis.kernelVersion !== D.VERSION;
     var intents = [''].concat(V.CENTROIDS.map(function (c) { return c.cls; }));
@@ -281,7 +290,8 @@
       '<div class="panel actions"><button id="d-frames">Rahmen-CSV</button><button id="d-row">CSV-Zeile</button>' + (hasAudio ? '<button id="d-wav">WAV</button><button id="d-re">Neu analysieren (Kern ' + esc(D.VERSION) + ')</button>' : '<span class="small muted">kein Audio gespeichert — Neu-Analyse nicht möglich</span> ') +
       Object.keys(s.perVowel || {}).map(function (k) { return s.perVowel[k].bestSegment ? '<button data-pin="' + esc(k) + '">Als Referenz für /' + esc(k) + '/ anpinnen</button>' : ''; }).join('') +
       '<button id="d-del" class="danger">Take löschen</button></div>' +
-      (take.history && take.history.length ? '<div class="panel small muted">Frühere Auswertungen: ' + take.history.map(function (h) { return esc(h.kernelVersion) + ' (' + esc(dateShort(h.analysedAt)) + ')'; }).join(', ') + '</div>' : '');
+      (take.history && take.history.length ? '<div class="panel small muted">Frühere Auswertungen: ' + take.history.map(historieText).join(', ')
+        + (take.reanalysisNote ? ' · bei der letzten Neu-Analyse geändert: ' + esc(take.reanalysisNote) : '') + '</div>' : '');
     var cv = el.querySelector('#d-lanes'), geo = null, hover = el.querySelector('#d-hover');
     function redraw(idx) { geo = drawLanes(cv, series, refs, idx); }
     if (series) redraw(null); else cv.hidden = true;
