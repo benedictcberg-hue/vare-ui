@@ -597,12 +597,16 @@ module.exports = async function (H) {
 
   /* ---------- U3 · Sicherung → Import: „nicht gemessen“ bleibt nicht gemessen ---------- */
   try {
-    // /o/ bei 310 Hz ohne Stille: F2–F5, ΔF3–4, SNR und weitere Werte sind nie gemessen (NaN).
-    const sig = D.synthVowel(310, [450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200], 1.5, SR);
+    // /e/ bei 415 Hz (obere Baritonlage) ohne Stille: F1 gemessen, F2–F5, ΔF3–4, SNR und weitere Werte nie (NaN).
+    // Früher /o/ 450/800 Hz bei 310 Hz: Dort verschmelzen F1 und F2 zu einem Gipfel bei 563 Hz, der auch F2
+    // sein kann; seit der Zusammenführung sind deshalb alle fünf Slots unsicher, und es gab keinen gemessenen
+    // Formanten mehr, an dem sich „gemessen bleibt gezeichnet, nie gemessen nicht bei 0 Hz“ zeigen ließe.
+    // Bei /e/ 415 Hz liegt F1 mit 419 Hz unter jedem möglichen F2 (550 Hz), F2 sieht nur eine LPC-Ordnung.
+    const sig = D.synthVowel(415, [400, 1900, 2600, 3400, 4300], [60, 100, 130, 160, 200], 1.5, SR);
     const res = await H.A.analyseTake(sig, SR, { hopS: 0.02 });
     const summary = res.summary;
     summary.pruefUnendlich = { plus: Infinity, minus: -Infinity, liste: [NaN, 1.5, -Infinity] };
-    const take = { id: 'u3-nan', code: 'N', label: 'N 310 Hz', createdAt: new Date(T0).toISOString(), durationS: 1.5, sampleRate: SR, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } },
+    const take = { id: 'u3-nan', code: 'N', label: 'N 415 Hz', createdAt: new Date(T0).toISOString(), durationS: 1.5, sampleRate: SR, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } },
       summary, history: [{ analysis: { kernelVersion: '2.9.0', analysedAt: new Date(T0 - 864e5).toISOString() }, summary: { snrDb: NaN, F: [{ med: NaN, n: 0 }] } }] };
     const series = res.series;
     // Nicht nur, was die Analyse gerade liefert: NaN und ±Infinity auch ausdrücklich setzen.
