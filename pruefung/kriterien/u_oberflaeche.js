@@ -691,6 +691,15 @@ module.exports = async function (H) {
     check('U3.11', 'style.css: eigene Klasse befund in Gold ohne Rost und ohne Strich; unsicher bleibt Rost gestrichelt; Live-Anzeige nutzt dieselbe Klasse',
       /var\(--gold\)/.test(rBef) && !/rust|dashed/.test(rBef) && /var\(--gold\)/.test(rStat) && /var\(--rust\)/.test(rUns) && /dashed/.test(rUns) && /' befund'/.test(quelle('app.js')),
       '„' + rBef.replace(/\s+/g, ' ') + '“ | „' + rUns.replace(/\s+/g, ' ') + '“');
+    /* Beschriftung: gezählt werden Weite (≥ 5 HT) und Dauer (≥ 90 ms). Ein legato gesungener
+       Melodiesprung erfüllt das genauso — „Registerwechsel“ wäre ein Urteil, das die Zählung nicht trägt. */
+    const divS = new El(); CHR.renderDetail(divS, befundTake(2500), null, {}, false, {});
+    const ks = kacheln(divS.innerHTML), geh = ks.find(x => x.k === 'Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms'), kan = ks.find(x => x.k === 'kurze Kanten unter 90 ms');
+    const spalten = C.TAKE_COLUMNS.map(c => c.key);
+    check('U3.13', 'Sprünge neutral beschriftet: „Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms“ und „kurze Kanten unter 90 ms“, nirgends „Register“ in der Anzeige; CSV-Spalten unverändert',
+      !!geh && /^1 /.test(geh.v) && geh.klasse === 'befund' && !!kan && /^2 /.test(kan.v) && kan.klasse === '' && !/Register/.test(divS.innerHTML) && !/Register/.test(quelle('index.html'))
+      && ['jumps_held', 'jumps_edge', 'lambda_held_per_s', 'lambda_edge_per_s'].every(k => spalten.includes(k)),
+      ks.filter(x => /sprün|Sprung|Kante|Register/.test(x.k)).map(x => '„' + x.k + '“ = ' + x.v).join(' | '));
   } catch (e) { check('U3.7', 'Ablauf Befund-Kennzeichnung läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
   try {
     // Gleich nach dem Take: F3-Mindestwert 2700, das Prüfsignal hat F3 2500 — keine Wertung, Befund statt Rost.

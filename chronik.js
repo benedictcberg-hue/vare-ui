@@ -223,7 +223,11 @@
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
       cell('Oktave korrigiert · unsicher', fmt((s.octaveCorrectedShare || 0) * 100) + ' · ' + fmt((s.octaveAmbiguousShare || 0) * 100) + ' %', s.octaveCorrectedShare > 0.05 || s.octaveAmbiguousShare > 0.2) +
       cell('Slot-Zuordnung unsicher', fmt((s.slotUnsureShare || 0) * 100) + ' % der Rahmen', s.slotUnsureShare > 0.2) +
-      cell('Registerwechsel gehalten · Kanten', s.spruenge ? (fmt(s.spruenge.gehalten) + ' · ' + fmt(s.spruenge.kante) + '  (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' · ' + fmt(s.spruenge.lambdaKante, 3) + ' /s)') : '– (ältere Auswertung)', false, !!(s.spruenge && s.spruenge.gehalten > 0)) +
+      /* Gezählt wird nur Weite und Dauer. Ein legato gesungener Melodiesprung erfüllt dieselbe
+         Bedingung wie ein Registerbruch; ob es einer ist, zeigt erst ein Qualitätseinbruch am
+         Übergang. Deshalb neutrale Namen, nicht „Registerwechsel“. */
+      cell('Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms', s.spruenge ? fmt(s.spruenge.gehalten) + ' (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' /s)' : '– (ältere Auswertung)', false, !!(s.spruenge && s.spruenge.gehalten > 0)) +
+      cell('kurze Kanten unter 90 ms', s.spruenge ? fmt(s.spruenge.kante) + ' (λ ' + fmt(s.spruenge.lambdaKante, 3) + ' /s)' : '– (ältere Auswertung)') +
       '</div>';
   }
 
