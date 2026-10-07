@@ -693,18 +693,28 @@
      Verdopplung als unauffällig (150 Hz, jeder zweite Impuls halb so stark: −48,7 statt −10,0 dB);
      korrigierte die Teilerkontrolle einen Oktavfehler bei F1 = 2·F0, warnte ein sauberer Ton
      (175 Hz: −12,4 statt −72,3 dB).
-     Beleg für eine Impulsrate 2·F0, unabhängig von der Periodenwahl, ist der Kamm: Bei
-     Amplitudenwechsel liegt jede ungerade Linie gleich weit unter ihren geraden Nachbarn
-     (20·log10((1−a)/(1+a))). Ein Formant hebt nur einzelne Linien, der Median über acht Linien bleibt
-     fast unberührt — anders als die Leistungssumme des SHR, die eine einzige Formantlinie beherrscht.
-     Gemessen auf sauberen Vokalen (auch F1 = 2·F0, drei Formanten auf geraden Teiltönen, Rauschen
-     30 dB, Rosenberg, Jitter, Vibrato, Zufallsformanten): höchstens −5,5 dB tief; Amplitudenwechsel
-     0,3: −5,7 bis −6,6 dB, 0,4: ab −7,6 dB.
-     Liegt der Beleg vor, ist das Raster zweifelhaft: beide Werte werden ausgewiesen (zweifel, other).
-     Hauptwert ist das Raster 2·F0 nur bei deutlichem Kamm, sonst F0. Ohne Beleg gilt F0 ohne Zweifel.
-     Ist 2·F0 > fmax, gibt es keine Impulsrate 2·F0 im Messbereich. Die Zyklusalternation selbst
-     (physik.md §6) misst der Kern nicht; er entscheidet deshalb nie sicher auf Verdopplung. */
-  var SHR_KAMM_ZWEIFEL_DB = -4, SHR_KAMM_RASTER_DB = -6;
+     Deshalb zwei Belege für eine Impulsrate 2·F0, beide unabhängig von der Periodenwahl:
+     - Kamm: Bei Amplitudenwechsel liegt jede ungerade Linie gleich weit unter ihren geraden
+       Nachbarn (20·log10((1−a)/(1+a))). Ein Formant hebt nur einzelne Linien, der Median über acht
+       Linien bleibt fast unberührt — anders als die Leistungssumme des SHR, die eine einzige
+       Formantlinie beherrscht. Gemessen auf sauberen Vokalen (auch F1 = 2·F0, drei Formanten auf
+       geraden Teiltönen, Rauschen 30 dB, Rosenberg, Jitter, Vibrato, Zufallsformanten): höchstens
+       −5,5 dB tief; Amplitudenwechsel 0,3: −5,7 bis −6,6 dB, 0,4: ab −7,6 dB.
+     - Zweite Anregung: Das LPC-Restsignal hat bei einem Ton eine Anregung je Periode, bei
+       Verdopplung zwei. Höchste normierte Autokorrelation bei 0,35–0,65 der Periode; das erfasst
+       auch Periodenwechsel (Zyklen T(1 ± a/2)), die keinen Kamm bilden (Kamm dort −5 bis +6 dB).
+       Gemessen auf denselben sauberen Sätzen höchstens 0,243; Periodenwechsel 8–14 % rauschfrei in
+       309 von 336 Rahmen über 0,3. Rauschen senkt die normierte Korrelation: bei SNR 40 dB liegt
+       noch etwa die Hälfte darüber, bei 30 dB knapp ein Drittel. Mittenbegrenzung des Restsignals
+       und das Verhältnis zur Korrelation bei der ganzen Periode trennten im Rauschen besser, ergaben
+       aber auf sauberen Signalen Ausreißer bis 0,45 bzw. 1,9 (Rosenberg-Quelle); verworfen.
+     Liegt einer der Belege vor, ist das Raster zweifelhaft: beide Werte werden ausgewiesen (zweifel,
+     other). Hauptwert ist das Raster 2·F0 nur bei deutlichem Kamm oder bei Kamm und zweiter
+     Anregung zusammen; sonst F0. Ohne Beleg gilt F0 ohne Zweifel. Ist 2·F0 > fmax, gibt es keine
+     Impulsrate 2·F0 im Messbereich. Die Zyklusalternation selbst (physik.md §6) misst der Kern nicht;
+     er entscheidet deshalb nie sicher auf Verdopplung. */
+  var SHR_KAMM_ZWEIFEL_DB = -4, SHR_KAMM_RASTER_DB = -6, SHR_ZWEITPULS_MIN = 0.3;
+  var SHR_REST_ORDNUNG = 16;      // höchste Ordnung des Sweeps; mit 14 lagen 295 statt 309 von 336 Periodenwechsel-Rahmen über 0,3
 
   // Median über k = 1..8 von L((k−½)·g) − Mittel(L((k−1)·g), L(k·g)) in dB; für k = 1 nur L(g)
   function kammKontrast(spec, g) {
@@ -717,15 +727,34 @@
     return d.length >= 4 ? median(d) : NaN;
   }
 
-  // fmax: obere Grenze der Impulsrate
-  function shr(spec, f0, fmax) {
-    var sF = shrAgainst(spec, f0), out = { shr: sF, grid: f0, other: NaN, zweifel: false, grund: '', kamm: NaN };
+  // Zweite Anregung je Periode 1/f0: LPC-Restsignal (Preemphase, Burg auf dem Hann-gefensterten
+  // Ausschnitt, inverses Filter auf dem ungefensterten), höchste normierte Autokorrelation bei 0,35–0,65·T.
+  function zweitpuls(seg, sr, f0) {
+    var x = preemph(seg, 0.97), ord = SHR_REST_ORDNUNG, P = sr / f0, lo = Math.floor(0.35 * P), hi = Math.ceil(0.65 * P), i, k;
+    if (!(lo >= 1) || x.length - ord < 2 * hi) return NaN;
+    var a = burg(hann(x), ord), e = new Float64Array(x.length - ord), best = -Infinity;
+    for (i = ord; i < x.length; i++) { var s = x[i]; for (k = 1; k <= ord; k++) s += a[k] * x[i - k]; e[i - ord] = s; }
+    for (var L = lo; L <= hi; L++) {
+      var c = 0, p = 0, q = 0;
+      for (i = 0; i + L < e.length; i++) { c += e[i] * e[i + L]; p += e[i] * e[i]; q += e[i + L] * e[i + L]; }
+      var r = c / Math.sqrt(p * q + 1e-30);
+      if (r > best) best = r;
+    }
+    return best;
+  }
+
+  // seg: Zeitausschnitt bei sr (Hauptfenster) für die zweite Anregung; fmax: obere Grenze der Impulsrate
+  function shr(spec, f0, seg, sr, fmax) {
+    var sF = shrAgainst(spec, f0), out = { shr: sF, grid: f0, other: NaN, zweifel: false, grund: '', kamm: NaN, zweitpuls: NaN };
     if (!(2 * f0 <= (fmax || 500))) return out;
     out.kamm = kammKontrast(spec, 2 * f0);
-    if (!(out.kamm <= SHR_KAMM_ZWEIFEL_DB)) return out;
+    out.zweitpuls = seg ? zweitpuls(seg, sr, f0) : NaN;
+    var kamm = out.kamm <= SHR_KAMM_ZWEIFEL_DB, zweit = out.zweitpuls >= SHR_ZWEITPULS_MIN;
+    if (!kamm && !zweit) return out;
     var s2 = shrAgainst(spec, 2 * f0);
-    out.zweifel = true; out.grund = 'kamm';
-    if (out.kamm <= SHR_KAMM_RASTER_DB) { out.shr = s2; out.grid = 2 * f0; out.other = sF; }
+    out.zweifel = true;
+    out.grund = kamm && zweit ? 'kamm+zweitpuls' : (kamm ? 'kamm' : 'zweitpuls');
+    if (out.kamm <= SHR_KAMM_RASTER_DB || (kamm && zweit)) { out.shr = s2; out.grid = 2 * f0; out.other = sF; }
     else out.other = s2;
     return out;
   }
@@ -940,7 +969,7 @@
       slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
-      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
       f0Unsure: false, f0Grund: '', f0Cep: NaN, f0Yin: NaN, f0Korrektur: '',
       harmonicPullHz: NaN, sparseHarmonics: false,
@@ -1049,8 +1078,8 @@
     out.harmonicPullHz = f0 / 2;
     out.sparseHarmonics = f0 > 250;
     // SHR-Raster F0 oder 2·F0 aus eigenen Belegen (shr); ein unsicherer Grundton macht auch SHR unsicher
-    var sh = shr(spec, f0, opts.fmax || 500);
-    out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm;
+    var sh = shr(spec, f0, main.seg, sr, opts.fmax || 500);
+    out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm; out.shrZweitpuls = sh.zweitpuls;
     out.shrUnsure = sh.zweifel || out.f0Unsure;
     out.shrGrund = out.f0Unsure ? (sh.grund ? sh.grund + '+' : '') + 'grundton' : sh.grund;
     out.sfr = sfr(spec);
@@ -1074,8 +1103,8 @@
        fallen in Spektraltäler) und bei echter Alternation nur +0,8 dB — die Verteilungen überlappen
        vollständig. Das Physik-Skript sagt es (§7.5): spektral allein gibt es Fehlalarme, sicher ist
        nur die Zyklusalternation. Die wird hier nicht gemessen; der Kern verspricht sie auch nicht.
-       Der Kamm (shr) entscheidet deshalb nur, ob das SHR-Raster zweifelhaft ist und welcher der
-       beiden ausgewiesenen Werte vorn steht, nie sicher auf Verdopplung. */
+       Kamm und zweite Anregung (shr) entscheiden deshalb nur, ob das SHR-Raster zweifelhaft ist und
+       welcher der beiden ausgewiesenen Werte vorn steht, nie sicher auf Verdopplung. */
     return out;
   }
 
@@ -1335,8 +1364,8 @@
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
-    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast,
-    SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
+    SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,

@@ -707,7 +707,19 @@ module.exports = async function (H) {
       for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
       return y;
     }
-    const zeig = r => r1(r.shr) + ' dB (Raster ' + r0(r.shrGrid) + ', F0 ' + r1(r.f0) + ')' + (r.shrUnsure ? ' unsicher [' + r.shrGrund + '], anderes Raster ' + r1(r.shrOther) : '') + ', Kamm ' + r1(r.shrKamm);
+    // Periodenverdopplung (Testprofil): art 'amp' jeder zweite Impuls um a schwächer, 'per' Perioden abwechselnd
+    // T(1 + a/2), T(1 − a/2); ab t1 klingt jeder zweite Impuls bis t2 auf 0 aus, danach exakt f0/2
+    function verdopplung(f0, a, art, F, B, s, t1, t2) {
+      const T = 1 / f0, times = [], amps = []; let t = 0, k = 0;
+      while (t < s) {
+        let g = 1;
+        if (k % 2) { if (art === 'amp') g = 1 - a; if (t >= t1) g *= Math.max(0, 1 - (t - t1) / (t2 - t1)); }
+        if (g > 0) { times.push(t); amps.push(g); }
+        t += art === 'per' ? T * (k % 2 ? 1 - a / 2 : 1 + a / 2) : T; k++;
+      }
+      return pulse(times, amps, s, F, B);
+    }
+    const zeig = r => r1(r.shr) + ' dB (Raster ' + r0(r.shrGrid) + ', F0 ' + r1(r.f0) + ')' + (r.shrUnsure ? ' unsicher [' + r.shrGrund + '], anderes Raster ' + r1(r.shrOther) : '') + ', Kamm ' + r1(r.shrKamm) + ', Zweitpuls ' + (isFinite(r.shrZweitpuls) ? r.shrZweitpuls.toFixed(2) : '--');
     // höherer der ausgewiesenen Werte: bei Rasterzweifel der Wert auf dem Raster mit Subharmonischen
     const hoch = r => (r.shrUnsure && isFinite(r.shrOther)) ? Math.max(r.shr, r.shrOther) : r.shr;
     const unaufUnmarkiert = r => !r.shrUnsure && r.shr < -25, warnUnmarkiert = r => !r.shrUnsure && r.shr > -15;
@@ -786,6 +798,54 @@ module.exports = async function (H) {
         (zw.length ? ' (' + zw.slice(0, 4).map(x => x.nm + ' [' + x.r.shrGrund + ']').join(', ') + ')' : '') + (warn.length ? ' — ' + warn.slice(0, 3).map(x => x.nm + ': ' + zeig(x.r)).join(' | ') : ''));
     }
 
+    /* K4c: Zweite Anregung im LPC-Restsignal. Periodenwechsel (Zyklen abwechselnd länger und kürzer) bildet
+       keinen Kamm; YIN nimmt die doppelte Periode, und SHR auf dem F0-Raster liegt um −50 dB, obwohl gegen
+       die Impulsrate −9 bis −3 dB stehen. Die zweite Anregung macht das Raster zweifelhaft. */
+    {
+      const sichtbar = r => r.shr > -25 || (r.shrUnsure && r.shrOther > -25);
+      const L = [], L165 = {}, AMP = { 0.08: [], 0.11: [], 0.14: [] }, AUS = [], rasterFalsch = [];
+      for (const [v, F, B] of VOK5.slice(0, 4)) for (const f0 of [130, 150, 165, 180, 196, 220, 247]) for (const a of [0.08, 0.11, 0.14]) {
+        const xp = ds(verdopplung(f0, a, 'per', F, B, 0.6, 1, 1)), xa = ds(verdopplung(f0, a, 'amp', F, B, 1.6, 0.6, 1.0));
+        for (const c of [2400, 3000, 3600, 4200, 6000]) {
+          const r = D.analyseAt(xp, TSR, c, SCHNELL);
+          if (r.voiced) L.push({ nm: '/' + v + '/ ' + f0 + ' Hz ' + Math.round(a * 100) + ' %', r });
+          const q = D.analyseAt(xa, TSR, c, SCHNELL);
+          if (q.voiced) { AMP[a].push(q.shrGrid > 1.5 * q.f0 ? q.shr : (Math.abs(q.f0 / f0 - 1) < 0.03 ? q.shr : NaN)); if (!(Math.abs(q.shrGrid / f0 - 1) < 0.03)) rasterFalsch.push('/' + v + '/ ' + f0 + ' ' + a + ': ' + zeig(q)); }
+        }
+        for (const c of [14400, 16800]) { const q = D.analyseAt(xa, TSR, c, SCHNELL); if (q.voiced) AUS.push({ nm: '/' + v + '/ ' + f0 + ' Hz ' + a, r: q }); }
+        if (f0 === 165) for (const snr of [40, 30]) {
+          const xn = ds(mitSnr(verdopplung(f0, a, 'per', F, B, 0.6, 1, 1), snr, Math.round(f0 * a * 1000)));
+          for (const c of [2400, 3000, 3600, 4200, 6000]) { const r = D.analyseAt(xn, TSR, c, SCHNELL); if (r.voiced) (L165[snr] = L165[snr] || []).push(r); }
+        }
+      }
+      const sicht = L.filter(x => sichtbar(x.r)), unsicht = L.filter(x => !sichtbar(x.r)), bei165 = L.filter(x => / 165 Hz /.test(x.nm));
+      const rausch = [40, 30].map(snr => 'SNR ' + snr + ' dB ' + (L165[snr] || []).filter(sichtbar).length + '/' + (L165[snr] || []).length).join(', ');
+      check('K4c', 'Periodenwechsel 8–14 % (Testprofil), 130–247 Hz, Vokale a/i/u/o, rauschfrei: mindestens 9 von 10 Rahmen zeigen den Wert über −25 dB, als Hauptwert oder unsicher mit anderem Raster (vorher keiner)',
+        L.length >= 400 && sicht.length >= 0.9 * L.length,
+        'sichtbar ' + sicht.length + '/' + L.length + ', davon Warnung über −15 dB ' + L.filter(x => x.r.shr > -15 || (x.r.shrUnsure && x.r.shrOther > -15)).length + '; bei 165 Hz ' + bei165.filter(x => sichtbar(x.r)).length + '/' + bei165.length +
+        '; mit Rauschen bei 165 Hz (Bericht): ' + rausch + (unsicht.length ? ' — nicht sichtbar z. B. ' + unsicht.slice(0, 3).map(x => x.nm + ': ' + zeig(x.r)).join(' | ') : ''));
+      const m = [0.08, 0.11, 0.14].map(a => D.median(AMP[a].filter(isFinite)));
+      const ausBad = AUS.filter(x => x.r.shrUnsure || !(x.r.shr < -25));
+      check('K4c', 'Amplitudenwechsel 8–14 % (Testprofil): SHR steht auf dem Raster der Impulsrate und steigt mit der Alternation; Ausklang auf exakt f0/2: kein Zweifel, SHR unter −25 dB',
+        rasterFalsch.length === 0 && m[0] < m[1] && m[1] < m[2] && AUS.length > 100 && ausBad.length === 0,
+        'Median 8/11/14 %: ' + m.map(r1).join(' / ') + ' dB; Raster nicht Impulsrate ' + rasterFalsch.length + '; Ausklang ' + (AUS.length - ausBad.length) + '/' + AUS.length +
+        (rasterFalsch.length ? ' — ' + rasterFalsch.slice(0, 2).join(' | ') : '') + (ausBad.length ? ' — ' + ausBad.slice(0, 2).map(x => x.nm + ': ' + zeig(x.r)).join(' | ') : ''));
+      // Hauptwert der Befund-Reihe /a/: auch bei altRatio 0,3 steht vorn der Wert der Impulsrate (Kamm und zweite Anregung)
+      const zeilen = [], okA = [100, 150, 196, 247].map(f0 => {
+        const w = [0.9, 0.7, 0.5, 0.3].map(a => D.analyseAt(ds(D.synthVowel(f0, VOK5[0][1], BW5, 0.5, SR, { altRatio: a })), TSR, 3000, {}));
+        zeilen.push(f0 + ' Hz: ' + w.map(r => r1(r.shr)).join(' '));
+        return w.every((r, i) => r.voiced && (i === 0 || r.shr > w[i - 1].shr));
+      });
+      check('K4c', 'Befund-Reihe /a/ 100/150/196/247 Hz, Alternation 0,9/0,7/0,5/0,3: der Hauptwert shr selbst steigt', okA.every(Boolean), zeilen.join(' | '));
+      // Nur Rahmen mit richtigem Grundton: liegt F0 eine Oktave zu tief, hat die gemeldete Periode wirklich zwei
+      // Anregungen, und die zweite Anregung schlägt zu Recht an (dann steht SHR auf 2·F0 = wahrer Ton, f0Unsure gesetzt).
+      const recht = SAUBER.filter(x => Math.abs(x.r.f0 / x.f0 - 1) < 0.03 && !x.r.f0Unsure), okt = SAUBER.filter(x => Math.abs(x.r.f0 / x.f0 - 0.5) < 0.015);
+      const zpMax = Math.max(...recht.map(x => x.r.shrZweitpuls).filter(isFinite)), zpHoch = recht.filter(x => x.r.shrZweitpuls >= D.SHR_ZWEITPULS_MIN);
+      check('K4c', 'saubere Töne aus K4b mit richtigem Grundton: zweite Anregung nie über der Schwelle ' + D.SHR_ZWEITPULS_MIN, isFinite(zpMax) && zpHoch.length === 0,
+        'Höchstwert ' + (isFinite(zpMax) ? zpMax.toFixed(3) : '--') + ' in ' + recht.length + ' Rahmen' + (okt.length ? '; Grundton eine Oktave zu tief: ' + okt.map(x => x.nm + ' Zweitpuls ' + (isFinite(x.r.shrZweitpuls) ? x.r.shrZweitpuls.toFixed(2) : '--') + ', SHR auf ' + r0(x.r.shrGrid) + ' Hz, f0Unsure ' + x.r.f0Unsure).join(' | ') : '') +
+        (zpHoch.length ? ' — ' + zpHoch.slice(0, 3).map(x => x.nm + ' ' + x.r.shrZweitpuls.toFixed(2)).join(', ') : ''));
+    }
+
     /* K4d: Vertrag der SHR-Felder. shr steht auf shrGrid (F0 oder 2·F0); shrOther ist genau dann eine Zahl,
        wenn das Raster zweifelhaft ist, und steht auf dem anderen Raster; shrUnsure = Rasterzweifel oder
        unsicherer Grundton; Hauptwert 2·F0 nur mit Kammbeleg, bei deutlichem Kamm immer. */
@@ -810,13 +870,13 @@ module.exports = async function (H) {
           if (zweifel && !(Math.abs(r.shrOther - D.shrAgainst(sp, aufZwei ? f0 : 2 * f0)) < 1e-9)) e.push('shrOther nicht auf dem anderen Raster');
           if (!zweifel && aufZwei) e.push('2·F0 ohne Zweifel');
           if (r.shrUnsure !== (zweifel || r.f0Unsure)) e.push('shrUnsure ' + r.shrUnsure);
-          if ((r.shrGrund.indexOf('grundton') >= 0) !== r.f0Unsure) e.push('Grund ' + r.shrGrund);
+          if ((String(r.shrGrund).indexOf('grundton') >= 0) !== r.f0Unsure) e.push('Grund ' + r.shrGrund);
           if (in2) {
             const k = D.kammKontrast(sp, 2 * f0);
             if (!(Math.abs(r.shrKamm - k) < 1e-9)) e.push('shrKamm ' + r1(r.shrKamm) + ' statt ' + r1(k));
             if (k <= D.SHR_KAMM_RASTER_DB && !aufZwei) e.push('deutlicher Kamm ohne Raster 2·F0');
             if (aufZwei && !(k <= D.SHR_KAMM_ZWEIFEL_DB)) e.push('Raster 2·F0 ohne Kamm');
-            if ((r.shrGrund.indexOf('kamm') >= 0) !== (k <= D.SHR_KAMM_ZWEIFEL_DB)) e.push('Grund kamm ' + r.shrGrund);
+            if ((String(r.shrGrund).indexOf('kamm') >= 0) !== (k <= D.SHR_KAMM_ZWEIFEL_DB)) e.push('Grund kamm ' + r.shrGrund);
           } else if (zweifel || aufZwei || !Number.isNaN(r.shrKamm)) e.push('2·F0 über fmax, trotzdem Raster 2·F0 erwogen');
           if (zweifel) nZw++; if (aufZwei) n2++; if (!in2) nG++;
         }
@@ -831,6 +891,26 @@ module.exports = async function (H) {
         if (['shr', 'shrGrid', 'shrUnsure', 'shrOther', 'shrGrund', 'shrKamm'].every(k => Object.is(a[k], b[k]))) gleich++;
       }
       check('K4d', 'SHR-Felder hängen nicht vom LPC-Ordnungssweep ab (Grundlage der schnellen Prüfsätze)', gleich === 40, gleich + '/40');
+      // zweite Anregung: shrZweitpuls aus dem Hauptfenster (0,10 s um den Rahmen), Grund 'zweitpuls' ab der Schwelle,
+      // Raster 2·F0 genau bei deutlichem Kamm oder bei Kamm und zweiter Anregung zusammen
+      const fehlZ = []; let nZ = 0, nKZ = 0, gleichZ = 0;
+      for (const p of proben) {
+        const r = p.r, e = [];
+        if (!r.voiced) { if (!Number.isNaN(r.shrZweitpuls)) e.push('stimmlos mit Zweitpuls'); }
+        else if (2 * r.f0 <= 500) {
+          const n = Math.round(D.MAIN_WINDOW * TSR), z = D.zweitpuls(p.x.subarray(p.c - (n >> 1), p.c - (n >> 1) + n), TSR, r.f0);
+          const kamm = r.shrKamm <= D.SHR_KAMM_ZWEIFEL_DB, zweit = z >= D.SHR_ZWEITPULS_MIN, aufZwei = r.shrGrid === 2 * r.f0;
+          if (!(Math.abs(r.shrZweitpuls - z) < 1e-12)) e.push('shrZweitpuls ' + r.shrZweitpuls + ' statt ' + z);
+          if ((String(r.shrGrund).indexOf('zweitpuls') >= 0) !== zweit) e.push('Grund ' + r.shrGrund);
+          if (isFinite(r.shrOther) !== (kamm || zweit)) e.push('Zweifel ' + isFinite(r.shrOther));
+          if (aufZwei !== (r.shrKamm <= D.SHR_KAMM_RASTER_DB || (kamm && zweit))) e.push('Raster ' + r0(r.shrGrid));
+          if (zweit) nZ++; if (kamm && zweit) nKZ++;
+        } else if (!Number.isNaN(r.shrZweitpuls)) e.push('2·F0 über 500 Hz mit Zweitpuls');
+        if (e.length) fehlZ.push(p.nm + ': ' + e.join(', '));
+      }
+      for (const p of proben.slice(0, 40)) if (Object.is(p.r.shrZweitpuls, D.analyseAt(p.x, TSR, p.c, SCHNELL).shrZweitpuls)) gleichZ++;
+      check('K4d', 'Vertrag zweite Anregung: shrZweitpuls aus dem Hauptfenster, Grund \'zweitpuls\' ab ' + D.SHR_ZWEITPULS_MIN + ', Zweifel = Kamm oder zweite Anregung, Raster 2·F0 = deutlicher Kamm oder Kamm und zweite Anregung; unabhängig vom Ordnungssweep',
+        fehlZ.length === 0 && nZ > 0 && nKZ > 0 && gleichZ === 40, proben.length + ' Proben, zweite Anregung ' + nZ + ', mit Kamm ' + nKZ + ', Ordnungssweep gleich ' + gleichZ + '/40' + (fehlZ.length ? ' — ' + fehlZ.slice(0, 4).join(' | ') : ''));
     }
   }
 };
