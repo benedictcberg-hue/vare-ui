@@ -1074,6 +1074,12 @@
      (1) Teiltonreihe des gemeldeten Werts selbst: Liegen die Linien bei k·f0, k kein Vielfaches von
          m (m = 2, 3), im Mittel 20 dB oder mehr unter den Vielfachen von m, ist f0 ein Unterton —
          dieselbe Grenze, die die Teilerkontrolle für eine neue Reihe verlangt (OCTAVE_ODD_EVEN_DB).
+         Dazu m = 4 bis F0_UNTERTON_MAX, aber nur, wenn m·f0 im YIN-Bereich liegt (bis fmax): In hoher
+         Lage mit starkem Hauch und Raumrauschen (/i/ 404–468 Hz, Befund N17) nehmen YIN und Cepstrum
+         gemeinsam f0/4 bis f0/7. Bei m = 2 und 3 ist dann nur jede zweite bzw. dritte bekannte Linie ein
+         echter Teilton, die übrigen sind Rauschen wie die neuen, und der Abstand bleibt bei −13 bis
+         −18 dB; erst beim richtigen m liegen alle bekannten Linien auf Teiltönen (gemessen −25 bis
+         −28 dB). Ohne die Grenze m·f0 ≤ fmax gab es Fehlalarme an sauberen Tönen von 310–427 Hz.
     (1b) Im Rauschen (starker Hauch, Raumrauschen) erreicht der Abstand die 20 dB nie: Die neuen Linien
          liegen im Rauschen, die bekannten nur so weit darüber, wie die Teiltöne aus ihm ragen (gemessen
          −6 bis −20 dB bei f0/2 und f0/3 statt f0, behaucht HNR 5–12 dB, 98–262 Hz; 5 % der Rahmen ohne
@@ -1085,7 +1091,7 @@
          Lage (/u/ 449–466 Hz) Korrekturen auf f0/2. Fehlt die Reihe und liegt sie im Mittel mindestens
          F0_REIHE_DB unter den bekannten Linien, ist f0 ein Unterton. Richtige Grundtöne lagen in allen
          Messungen (behaucht HNR 5–20 dB, sauber, Raumrauschen 30–40 dB) höchstens 7,4 dB darunter.
-         Erst wird die scharfe Grenze für beide m geprüft, damit aufM das m trägt, das den Unterton
+         Erst wird die scharfe Grenze über alle m geprüft, damit aufM das m trägt, das den Unterton
          erklärt (die Korrektur rechnet mit aufM·f0).
      (2) Cepstrum (unabhängige Periodenschätzung auf dem 0,14-s-Fenster): Es muss auf dieselbe Periode
          zeigen (±0,5 HT) oder auf ein Vielfaches q·T (q bis 5, Rahmonik). Bei einem Vielfachen
@@ -1095,7 +1101,7 @@
          0,46 HT Abstand gemessen) zählt, ob das Cepstrum auf denselben YIN-Dip zeigt.
      Was davon reißt, steht in grund: 'teiltonreihe', 'cepstrum' oder 'kein cepstrum' (kein Gipfel
      im Suchbereich, also keine Gegenprobe möglich). */
-  var F0_CEP_TOL_HT = 0.5, F0_CEP_GRAU_HT = 1.0, F0_RAHMONIK_MAX = 5, F0_REIHE_DB = 8;
+  var F0_CEP_TOL_HT = 0.5, F0_CEP_GRAU_HT = 1.0, F0_RAHMONIK_MAX = 5, F0_UNTERTON_MAX = 7, F0_REIHE_DB = 8;
 
   /* Neue Linien k·g (k kein Vielfaches von m, k bis 4m) gegen das Rauschen neben jeder Linie: Median der
      Bins in (k ± 0,2…0,45)·g. So weit von der Linie, dass ihre Hauptkeule (0,14-s-Hann: ±14 Hz) ab
@@ -1126,11 +1132,14 @@
     return bi;
   }
 
-  // tauY: Periode des gemeldeten Werts in Abtastwerten (subFactor · YIN-Verzögerung), dips: YIN-Dips
-  function f0Gegenprobe(spec, f0, fCep, tauY, dips, sr) {
+  // tauY: Periode des gemeldeten Werts in Abtastwerten (subFactor · YIN-Verzögerung), dips: YIN-Dips,
+  // fmax: Obergrenze des YIN-Bereichs (Vorgabe 500 Hz)
+  function f0Gegenprobe(spec, f0, fCep, tauY, dips, sr, fmax) {
     var out = { unsure: false, grund: '', aufM: 0 };
     var reihen = [], m, t, lk;
-    for (m = 2; m <= 3; m++) {
+    fmax = fmax || 500;
+    for (m = 2; m <= F0_UNTERTON_MAX; m++) {
+      if (m > 3 && m * f0 > fmax) break;
       reihen.push(t = teiltonreihe(spec, f0, m, F0_REIHE_DB)); t.m = m;
       if (!out.aufM && t.newMinusOld <= OCTAVE_ODD_EVEN_DB) out.aufM = m;
     }
@@ -1194,7 +1203,7 @@
       if (!(Math.abs(12 * Math.log2(fCep / cf)) <= F0_CEP_TOL_HT)) continue;
       var s2 = subMultipleInfo(spec, cf);
       if (s2.halve || s2.ambiguous) continue;
-      if (f0Gegenprobe(spec, cf, fCep, sr / cf, p.dips, sr).unsure) continue;
+      if (f0Gegenprobe(spec, cf, fCep, sr / cf, p.dips, sr, fmax).unsure) continue;
       var ab = 0, auf = 0;
       for (var q = 2; q <= SUB_MULTIPLE_MAX; q++) {
         if (Math.abs(12 * Math.log2(q * cf / f0)) <= F0_CEP_TOL_HT) ab = q;
@@ -1384,7 +1393,7 @@
     if (sub.halve) f0 = f0 / sub.m;
     var cp = cpp(spec, opts.fmin || 60, opts.fmax || 500);
     out.f0Cep = cp.f0Fein;
-    var gp = f0Gegenprobe(spec, f0, out.f0Cep, out.subFactor * p.tau, p.dips, sr);
+    var gp = f0Gegenprobe(spec, f0, out.f0Cep, out.subFactor * p.tau, p.dips, sr, opts.fmax || 500);
     out.f0Yin = f0; out.f0Unsure = gp.unsure; out.f0Grund = gp.grund;
     var kor = gp.unsure ? f0Korrektur(spec, f0, out.f0Cep, gp, p, sr, opts.fmax || 500) : null;
     // Die Korrektur stützt sich auf dasselbe gemischte Spektrum; ein Mischwert ist keine Korrektur.

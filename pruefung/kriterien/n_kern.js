@@ -10,7 +10,7 @@
      Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag, A3g tiefes enges
      Cluster, das nur eine LPC-Ordnung trennt, A3h Vokalwechsel im Fenster.
    A4: Grundton bei starkem Hauch (analyseAt: Gegenprobe und Teilerkontrolle im Rauschen) —
-     A4b Unterton in behauchter Stimme.
+     A4a hohe Lage (Befund N17), A4b Unterton in behauchter Stimme.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -931,6 +931,25 @@ module.exports = async function (H) {
   const zeiten4 = (a, b, d) => { const t = []; for (let x = a; x <= b + 1e-9; x += d) t.push(+x.toFixed(3)); return t; };
   const name4 = (r, v, rest) => NAME[v] + ' ' + rest + ' t ' + r.t.toFixed(2) + ': f0 ' + r1(r.f0) + ' (YIN ' + r1(r.f0Yin) + ', Cepstrum ' + r1(r.f0Cep) + ')' + (r.f0Korrektur ? ' korrigiert' : '');
   const markiert4 = r => r.f0Unsure || r.octaveAmbiguous;
+
+  /* A4a Hohe Lage (Befund N17): Qualitätseinbruch am oberen Ende eines Bruchs, hier über den ganzen Ton gehalten.
+     YIN und Cepstrum nahmen gemeinsam f0/4 bis f0/7 (404 Hz → 101 Hz), oder die Korrektur setzte einen
+     Unterton. /e/ mit F1 ≈ F0 steht 3–6 % zu hoch ohne Marke — kein Unterton, ein anderer Mechanismus (offen,
+     im Bericht). */
+  {
+    let s4 = 40000; const R = [], E = [];
+    for (const v of ['i', 'u', 'e']) for (const f0 of [404, 413, 425, 440, 449, 452, 458, 466]) for (const hnr of [5, 6]) for (const snr of [30, 35]) for (let sd = 0; sd < 2; sd++) {
+      const x = raum4(H.concat([pause4(0.2), rampen4(q4({ f0, dur: 0.6, jit: 0.015, shim: 0.03, hnr, seed: s4++ }, v), 0.02, 0.02), pause4(0.15)]), snr, s4++);
+      for (const r of rahmen4(x, zeiten4(0.28, 0.72, 0.02))) if (r.voiced) { r.soll = f0; r.nm = name4(r, v, f0 + ' HNR ' + hnr + ' SNR ' + snr); (v === 'e' ? E : R).push(r); }
+    }
+    const daneben = r => Math.abs(r.f0 / r.soll - 1) > 0.03, ohne = R.filter(r => daneben(r) && !markiert4(r)), korr = R.filter(r => daneben(r) && r.f0Korrektur);
+    const unterE = E.filter(r => daneben(r) && !markiert4(r) && r.f0 < 0.8 * r.soll), nahE = E.filter(r => daneben(r) && !markiert4(r) && r.f0 >= 0.8 * r.soll), korrE = E.filter(r => daneben(r) && r.f0Korrektur);
+    check('A4a', 'hohe Lage mit starkem Hauch (Befund N17: /i/ /u/ 404–466 Hz, Rosenberg, HNR 5/6 dB, Jitter 1,5 %, Shimmer 3 %, rosa Raumrauschen 30/35 dB): kein Grundton mehr als 3 % neben dem Sollton ohne f0Unsure oder octaveAmbiguous, keine Korrektur auf einen falschen Wert; bei /e/ kein Unterton ohne Marke',
+      R.length >= 1500 && ohne.length === 0 && korr.length === 0 && unterE.length === 0,
+      R.length + ' Rahmen /i/ /u/, daneben ohne Marke ' + ohne.length + ', falsch korrigiert ' + korr.length + ', /e/ Unterton ohne Marke ' + unterE.length +
+      (ohne.length + korr.length + unterE.length ? ' — ' + ohne.concat(korr, unterE).slice(0, 4).map(r => r.nm).join(' | ') : '') +
+      '; offen: /e/ (F1 ≈ F0) 3–6 % zu hoch ohne Marke ' + nahE.length + ', dorthin korrigiert ' + korrE.length + ' von ' + E.length + (nahE.length ? ', z. B. ' + nahE[0].nm : ''));
+  }
 
   /* A4b Unterton in behauchter Stimme: /a e i o u/ 98–247 Hz, HNR 5/8/12 dB. Vorher standen 28 % der Rahmen auf
      f0/2 … f0/7 ohne Marke, dazu Korrekturen auf einen Unterton. Rest an der Nachweisgrenze (Rauschspitzen täuschen
