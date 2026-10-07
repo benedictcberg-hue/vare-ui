@@ -39,71 +39,92 @@ function groesse(v) {
   return n;
 }
 const vergleich = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-// Ein Browserprofil: Datenbanken bleiben über Seiten hinweg. ctl.quote in Byte, ctl.putFehler(laden, wert) → Fehler oder null.
+/* Ein Browserprofil: Datenbanken bleiben über Seiten hinweg. ctl.quote in Byte, ctl.putFehler(laden, wert) → Fehler
+   oder null. Wie IndexedDB: Schreibtransaktionen mit überlappenden Läden laufen nacheinander (eine spätere wartet,
+   bis die frühere fertig ist), Anfragen einer Transaktion der Reihe nach; scheitert eine Anfrage, wird alles
+   zurückgenommen, was die Transaktion geschrieben hat. Wird eine Seite geschlossen, brechen ihre offenen
+   Transaktionen ab, und ihre Rückrufe laufen nicht mehr. */
 function idbNeu() {
-  const dbs = new Map(), ctl = { quote: Infinity, putFehler: null };
-  function nutzung(stage) {
-    let n = 0;
-    for (const d of dbs.values()) for (const [name, st] of d.stores) { const m = (stage && stage.d === d && stage.m.has(name)) ? stage.m.get(name) : st.data; for (const v of m.values()) n += groesse(v); }
-    return n;
+  const dbs = new Map(), ctl = { quote: Infinity, putFehler: null }, offen = [];
+  function nutzung() { let n = 0; for (const d of dbs.values()) for (const st of d.stores.values()) for (const v of st.data.values()) n += groesse(v); return n; }
+  const ueberlappt = (a, b) => a.d === b.d && a.namen.some(n => b.namen.indexOf(n) >= 0);
+  function plane() {
+    for (let i = 0; i < offen.length; i++) {
+      const t = offen[i];
+      if (t.gestartet) continue;
+      const frei = offen.slice(0, i).every(u => !ueberlappt(u, t) || (u.modus !== 'readwrite' && t.modus !== 'readwrite'));
+      if (frei) { t.gestartet = true; t.weiter(); }
+    }
   }
   function fabrik(seite) {
     const spaeter = f => setImmediate(() => { if (!seite.tot) f(); });
     const rufe = (h, ev) => { if (typeof h !== 'function') return true; try { h(ev); return true; } catch (e) { aufFehler(e); return false; } };
+    seite.idbAbbruch = () => offen.filter(t => t.seite === seite).forEach(t => t.ende(domFehler('AbortError', 'Seite geschlossen'), true));
     function transaktion(d, namen, modus) {
-      namen = Array.isArray(namen) ? namen : [namen];
+      namen = Array.isArray(namen) ? namen.slice() : [namen];
       for (const n of namen) if (!d.stores.has(n)) throw domFehler('NotFoundError', 'Laden ' + n + ' fehlt');
-      const m = new Map(); for (const n of namen) m.set(n, new Map(d.stores.get(n).data));
-      const stage = { d, m }, t = { mode: modus, error: null, oncomplete: null, onerror: null, onabort: null };
-      let offen = 0, fertig = false;
-      const abbruch = e => { if (fertig) return; fertig = true; if (!t.error) t.error = e; spaeter(() => rufe(t.onabort, { type: 'abort', target: t })); };
-      const pruefeEnde = () => spaeter(() => { if (!fertig && offen === 0) { fertig = true; for (const [n, daten] of m) d.stores.get(n).data = daten; rufe(t.oncomplete, { type: 'complete', target: t }); } });
+      const t = { mode: modus, error: null, oncomplete: null, onerror: null, onabort: null };
+      const intern = { d, namen, modus, seite, gestartet: false, fertig: false, schlange: [], rueck: [], laeuft: false };
+      intern.ende = (fehler, still) => {
+        if (intern.fertig) return;
+        intern.fertig = true;
+        if (fehler) { for (let k = intern.rueck.length - 1; k >= 0; k--) intern.rueck[k](); if (!t.error) t.error = fehler; }
+        offen.splice(offen.indexOf(intern), 1);
+        plane();
+        if (!still) spaeter(() => (fehler ? rufe(t.onabort, { type: 'abort', target: t }) : rufe(t.oncomplete, { type: 'complete', target: t })));
+      };
+      intern.weiter = () => spaeter(() => {
+        if (intern.fertig || intern.laeuft) return;
+        const a = intern.schlange.shift();
+        if (!a) { intern.ende(null); return; }
+        intern.laeuft = true;
+        const req = a.req;
+        try { req.result = a.op(); } catch (e) { req.error = e; }
+        intern.laeuft = false;
+        if (req.error) {
+          // Wie IndexedDB: Fehlerereignis an der Anfrage, dann an der Transaktion (t.error ist da noch leer), dann Abbruch.
+          let verhindert = false;
+          const ev = { type: 'error', target: req, preventDefault() { verhindert = true; }, stopPropagation() { } };
+          rufe(req.onerror, ev); rufe(t.onerror, ev);
+          if (!verhindert) { intern.ende(req.error); return; }
+        } else if (!rufe(req.onsuccess, { type: 'success', target: req })) { intern.ende(domFehler('AbortError', 'Ausnahme im Rückruf')); return; }
+        intern.weiter();
+      });
       function anfrage(op) {
-        if (fertig) throw domFehler('TransactionInactiveError');
+        if (intern.fertig) throw domFehler('TransactionInactiveError');
         const req = { result: undefined, error: null, onsuccess: null, onerror: null, transaction: t };
-        offen++;
-        spaeter(() => {
-          if (fertig) return;
-          try { req.result = op(); } catch (e) { req.error = e; }
-          offen--;
-          if (req.error) {
-            // Wie IndexedDB: Fehlerereignis an der Anfrage, dann an der Transaktion (t.error ist da noch leer), dann Abbruch.
-            let verhindert = false;
-            const ev = { type: 'error', target: req, preventDefault() { verhindert = true; }, stopPropagation() { } };
-            rufe(req.onerror, ev); rufe(t.onerror, ev);
-            if (verhindert) pruefeEnde(); else abbruch(req.error);
-            return;
-          }
-          if (!rufe(req.onsuccess, { type: 'success', target: req })) { abbruch(domFehler('AbortError', 'Ausnahme im Rückruf')); return; }
-          pruefeEnde();
-        });
+        intern.schlange.push({ req, op });
         return req;
       }
       const schreibend = () => { if (modus !== 'readwrite') throw domFehler('ReadOnlyError'); };
       t.objectStore = name => {
-        if (!m.has(name)) throw domFehler('NotFoundError', 'Laden ' + name + ' nicht in der Transaktion');
-        const daten = m.get(name), kp = d.stores.get(name).keyPath;
+        if (namen.indexOf(name) < 0) throw domFehler('NotFoundError', 'Laden ' + name + ' nicht in der Transaktion');
+        const daten = () => d.stores.get(name).data, kp = d.stores.get(name).keyPath;
+        const merke = k => { const m = daten(), hatte = m.has(k), alt = m.get(k); intern.rueck.push(() => { if (hatte) m.set(k, alt); else m.delete(k); }); };
         return {
           put(v) {
             schreibend(); const k = v[kp], kopie = klon(v);
             return anfrage(() => {
               const f = ctl.putFehler && ctl.putFehler(name, v); if (f) throw f;
-              const alt = daten.get(k); daten.set(k, kopie);
-              if (nutzung(stage) > ctl.quote) { if (alt === undefined) daten.delete(k); else daten.set(k, alt); throw domFehler('QuotaExceededError', ''); }
+              const m = daten(), hatte = m.has(k), alt = m.get(k);
+              m.set(k, kopie);
+              if (nutzung() > ctl.quote) { if (hatte) m.set(k, alt); else m.delete(k); throw domFehler('QuotaExceededError', ''); }
+              intern.rueck.push(() => { if (hatte) m.set(k, alt); else m.delete(k); });
               return k;
             });
           },
-          get: k => anfrage(() => klon(daten.get(k))),
-          getKey: k => anfrage(() => (daten.has(k) ? k : undefined)),
-          getAll: () => anfrage(() => [...daten.keys()].sort(vergleich).map(k => klon(daten.get(k)))),
-          getAllKeys: () => anfrage(() => [...daten.keys()].sort(vergleich)),
-          delete(k) { schreibend(); return anfrage(() => { daten.delete(k); }); },
-          clear() { schreibend(); return anfrage(() => { daten.clear(); }); },
+          get: k => anfrage(() => klon(daten().get(k))),
+          getKey: k => anfrage(() => (daten().has(k) ? k : undefined)),
+          getAll: () => anfrage(() => [...daten().keys()].sort(vergleich).map(k => klon(daten().get(k)))),
+          getAllKeys: () => anfrage(() => [...daten().keys()].sort(vergleich)),
+          delete(k) { schreibend(); return anfrage(() => { merke(k); daten().delete(k); }); },
+          clear() { schreibend(); return anfrage(() => { const m = daten(), alt = new Map(m); intern.rueck.push(() => { m.clear(); for (const [k, v] of alt) m.set(k, v); }); m.clear(); }); },
           createIndex() { }
         };
       };
-      t.abort = () => abbruch(domFehler('AbortError', 'abgebrochen'));
-      pruefeEnde();
+      t.abort = () => intern.ende(domFehler('AbortError', 'abgebrochen'));
+      offen.push(intern);
+      plane();
       return t;
     }
     return {
@@ -225,7 +246,7 @@ async function seiteNeu(browser, liefern, sr) {
     halt() { seite.halt = true; },
     weiter() { seite.halt = false; seite.gehalten.splice(0).forEach(f => setTimeout(f, 0)); },
     // Neuladen: diese Seite rechnet nicht weiter, ihre Datenbankrückrufe laufen ins Leere.
-    schliessen() { seite.tot = true; intervalle.forEach(h => clearInterval(h)); }
+    schliessen() { seite.tot = true; intervalle.forEach(h => clearInterval(h)); if (seite.idbAbbruch) seite.idbAbbruch(); }
   };
   if (!(await p.warte(() => st().settings && st().takesGeladen, 5000))) throw new Error('Seite nicht geladen');
   // Geprüft wird die Verdrahtung, nicht der Rechenkern: gröberer Rahmenabstand spart Laufzeit.
