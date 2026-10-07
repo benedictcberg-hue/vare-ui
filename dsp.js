@@ -17,9 +17,13 @@
 
   /* Kernversion = Rechenweise. Takes mit anderer Version gelten als anders gerechnet (analysis.js
      unvergleichbar) und speisen keine Referenz. 4.0.0: Sprungzählung (K1), Formantgültigkeit (K2),
-     Grundton-Gegenprobe (K3) und SHR-Raster (K4) rechnen anders als 3.0.0. Jede Änderung, die einen
-     Rahmenwert ändert, erhöht die Version (Prüfung I4a, Kern-Fingerabdruck). */
-  var VERSION = '4.0.0';
+     Grundton-Gegenprobe (K3) und SHR-Raster (K4) rechnen anders als 3.0.0. 4.1.0 (Nachprüfung):
+     Feinspur mit Oktavkontrolle, Mischrahmen, Atempause und digitaler Stille (Sprünge); SHR unsicher an
+     Rändern, Tonwechseln und bei Hauch; Formanten nach dem Teiltonabstand und Vokalwechsel; Grundton-
+     Gegenprobe im Rauschen und bis f0/7, „Oktave offen“ bei teilweise belegter Reihe; SFR und CPP unsicher
+     bei Rauschanteil im Fenster. Jede Änderung, die einen Rahmenwert ändert, erhöht die Version (Prüfung
+     I4a, Kern-Fingerabdruck). */
+  var VERSION = '4.1.0';
   var TARGET_SR = 12000;          // Nyquist 6000 Hz, F5 bleibt im Durchlassband
   var ORDERS = [12, 14, 16];      // Ordnungssweep
   var WINDOWS = [0.06, 0.08, 0.10, 0.14]; // Fensterlängensweep in s
@@ -1962,7 +1966,7 @@
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
-    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, teiltonFraglich: teiltonFraglich, huellAbstand: huellAbstand, HUELL_WECHSEL_DB: HUELL_WECHSEL_DB, TEILTON_DIFF_HZ: TEILTON_DIFF_HZ, TEILTON_SLOT_HZ: TEILTON_SLOT_HZ, TEILTON_PAAR: TEILTON_PAAR, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
+    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, F0_UNTERTON_MAX: F0_UNTERTON_MAX, F0_REIHE_DB: F0_REIHE_DB, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, teiltonFraglich: teiltonFraglich, huellAbstand: huellAbstand, HUELL_WECHSEL_DB: HUELL_WECHSEL_DB, TEILTON_DIFF_HZ: TEILTON_DIFF_HZ, TEILTON_SLOT_HZ: TEILTON_SLOT_HZ, TEILTON_PAAR: TEILTON_PAAR, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
     SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG,
     shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, fensterProbe: fensterProbe, fensterMischwert: fensterMischwert,
     FENSTER_BLOCK_S: FENSTER_BLOCK_S, FENSTER_RAND_DB: FENSTER_RAND_DB, FENSTER_KANTE_S: FENSTER_KANTE_S, FENSTER_TON_HT: FENSTER_TON_HT, FENSTER_F0_HT: FENSTER_F0_HT, FENSTER_RAUSCH_HOCH_DB: FENSTER_RAUSCH_HOCH_DB, hannPegelDb: hannPegelDb, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
