@@ -1130,7 +1130,8 @@
          gemeinsam f0/4 bis f0/7. Bei m = 2 und 3 ist dann nur jede zweite bzw. dritte bekannte Linie ein
          echter Teilton, die übrigen sind Rauschen wie die neuen, und der Abstand bleibt bei −13 bis
          −18 dB; erst beim richtigen m liegen alle bekannten Linien auf Teiltönen (gemessen −25 bis
-         −28 dB). Ohne die Grenze m·f0 ≤ fmax gab es Fehlalarme an sauberen Tönen von 310–427 Hz.
+         −28 dB). Ohne die Grenze m·f0 ≤ fmax galten richtige Grundtöne von 216–427 Hz als Unterton (mit
+         Vibrato, Rauschen oder Jitter; vier K3b-Kriterien rissen).
     (1b) Im Rauschen (starker Hauch, Raumrauschen) erreicht der Abstand die 20 dB nie: Die neuen Linien
          liegen im Rauschen, die bekannten nur so weit darüber, wie die Teiltöne aus ihm ragen (gemessen
          −6 bis −20 dB bei f0/2 und f0/3 statt f0, behaucht HNR 5–12 dB, 98–262 Hz; 5 % der Rahmen ohne
@@ -1853,7 +1854,7 @@
       if (ok) {
         /* Bezug sind die ruhigen Rahmen VOR dem Ereignis. Während eines Laufs wird er eingefroren —
            wandert er mit, endet ein gehaltener Sprung nach rund 80 ms von selbst und wird als Kante
-           gemeldet. Das ist derselbe Fehler, der gehaltene Registerwechsel unsichtbar macht. */
+           gemeldet. Das ist derselbe Fehler, der gehaltene Tonsprünge unsichtbar macht. */
         ref = run ? run.ref : bezug();
         st = (isFinite(ref) && ref > 0) ? 12 * Math.log2(track.f0[i] / ref) : NaN;
         drueber = isFinite(st) && Math.abs(st) >= minSt;
@@ -1868,11 +1869,11 @@
            laufenden Sprung. Erst eine Pause ab pauseMs trennt Phrasen: Der Lauf endet, der Bezug wird
            verworfen — eine neue Phrase auf anderem Ton ist kein Sprung. Gemessen (Feinspur, Rahmen
            als stimmlos gezählt): 20 ms löscht den Bezug schon bei Konsonanten von 30–60 ms, in
-           Staccato-Lücken und bei 30–60 ms Rauschen am Übergang eines Bruchs; dann wird der neue Ton
+           Staccato-Lücken und bei 30–60 ms Rauschen am Übergang eines gehaltenen Sprungs; dann wird der neue Ton
            zum Bezug und die Rückkehr erscheint als gehaltener Sprung in Gegenrichtung. 90–200 ms
            bestehen alle geprüften Fälle; 120 ms hält Abstand zu den längsten Lücken (80 ms) und zur
            kürzesten Atempause (200 ms). Leise Rahmen über der Schwelle führen einen Lauf weiter oder
-           beginnen ihn, zählen aber zur Lücke: Ein leiser Bruch endet erst mit lautem Gesang. */
+           beginnen ihn, zählen aber zur Lücke: Ein leiser gehaltener Sprung endet erst mit lautem Gesang. */
         if (!ok) stumm++;
         else if (unter > pauseTiefDb) tiefe = true;
         if (ok && drueber) { if (run) verlaengere(true); else if (unter <= sperrDb) beginne(true); }
@@ -1887,9 +1888,9 @@
       if (!run) {
         /* seitRuhe zählt nur Rahmen mit sicherer Periode (ap unter der YIN-Schwelle 0,15). Unsichere
            Rahmen in einem rauen Übergang sind kein Beleg für ein Gleiten — gemessen: Bei einem
-           simulierten Bruch mit 60 ms aperiodischem Übergang hoben sie seitRuhe über maxOnset, der
+           simulierten gehaltenen Sprung mit 60 ms aperiodischem Übergang hoben sie seitRuhe über maxOnset, der
            neue Ton wurde Bezug, und die Rückkehr erschien als gehaltener Sprung in Gegenrichtung
-           (−15 statt +15 HT, 575 ms; ohne diese Regel 7 von 1440 simulierten Brüchen, mit ihr 0).
+           (−15 statt +15 HT, 575 ms; ohne diese Regel 7 von 1440 simulierten Sprüngen, mit ihr 0).
            Ein langsames Portamento hat ap ≤ 0,06, auch mit Rauschen bei 5 dB. Preis: Schnelles Gleiten
            macht die Rahmen im 35-ms-Fenster selbst unsicher und zählt dann häufiger als Sprung
            (Oktave in 150 ms: 6 von 12 statt 1 von 12; ab 300 ms keiner). uebergangMs zeigt die Dauer. */
