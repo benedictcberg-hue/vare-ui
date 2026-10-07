@@ -898,7 +898,7 @@ module.exports = async function (H) {
         const r = p.r, e = [];
         if (!r.voiced) { if (!Number.isNaN(r.shrZweitpuls)) e.push('stimmlos mit Zweitpuls'); }
         else if (2 * r.f0 <= 500) {
-          const n = Math.round(D.MAIN_WINDOW * TSR), z = D.zweitpuls(p.x.subarray(p.c - (n >> 1), p.c - (n >> 1) + n), TSR, r.f0);
+          const n = Math.round(D.MAIN_WINDOW * TSR), z = typeof D.zweitpuls === 'function' ? D.zweitpuls(p.x.subarray(p.c - (n >> 1), p.c - (n >> 1) + n), TSR, r.f0) : NaN;
           const kamm = r.shrKamm <= D.SHR_KAMM_ZWEIFEL_DB, zweit = z >= D.SHR_ZWEITPULS_MIN, aufZwei = r.shrGrid === 2 * r.f0;
           if (!(Math.abs(r.shrZweitpuls - z) < 1e-12)) e.push('shrZweitpuls ' + r.shrZweitpuls + ' statt ' + z);
           if ((String(r.shrGrund).indexOf('zweitpuls') >= 0) !== zweit) e.push('Grund ' + r.shrGrund);
