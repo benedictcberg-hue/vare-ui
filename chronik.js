@@ -11,6 +11,9 @@
   var COL = { bg: '#0C1410', panel: '#14201A', line: '#24352C', ink: '#E8EDE7', muted: '#8FA396', gold: '#C9A227', rust: '#A85A3C' };
   var MONO = '12px Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace';
 
+  /* Gemessen heißt: eine endliche Zahl. null ist keine 0 — isFinite(null) ist wahr, und eine ältere
+     Sicherung (Version 1) trägt jeden nicht gemessenen Wert als null (Bericht 4, Befund 5). */
+  function zahl(v) { return typeof v === 'number' && isFinite(v); }
   function fmt(v, dec) { if (v == null || !isFinite(v)) return '–'; var s = v.toFixed(dec == null ? 0 : dec); return /^-0(\.0*)?$/.test(s) ? s.slice(1) : s; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -22,9 +25,9 @@
     ctx.fillStyle = COL.bg; ctx.fillRect(0, 0, w, cssH);
     return { ctx: ctx, w: w, h: cssH };
   }
-  function statRange(s) { return s && isFinite(s.med) ? fmt(s.med) + ' [' + fmt(s.q1) + '–' + fmt(s.q3) + ']' : '–'; }
+  function statRange(s) { return s && zahl(s.med) ? fmt(s.med) + ' [' + fmt(s.q1) + '–' + fmt(s.q3) + ']' : '–'; }
   function statRangeShare(summary, s) {
-    if (!s || !isFinite(s.med)) return '–';
+    if (!s || !zahl(s.med)) return '–';
     var sh = validShareOf(summary, s);
     return statRange(s) + ' · gültig in ' + fmt(sh * 100) + ' %';
   }
@@ -44,7 +47,7 @@
     ctx.fillStyle = 'rgba(201,162,39,0.12)'; ctx.fillRect(x(2400), 0, x(3200) - x(2400), h);
     for (var k = 0; k < 5; k++) {
       var s = summary && summary.F && summary.F[k];
-      if (!s || !isFinite(s.med)) continue;
+      if (!s || !zahl(s.med)) continue;
       var weak = s.n < 10 || validShareOf(summary, s) < 0.5;
       if (weak) { ctx.strokeStyle = COL.rust; ctx.lineWidth = 1; ctx.setLineDash([2, 2]); ctx.strokeRect(x(s.q1), h / 2 - 4, Math.max(2, x(s.q3) - x(s.q1)), 8); ctx.setLineDash([]); }
       else { ctx.fillStyle = COL.line; ctx.fillRect(x(s.q1), h / 2 - 4, Math.max(2, x(s.q3) - x(s.q1)), 8); }
@@ -146,7 +149,7 @@
     for (i = 0; i < n; i++) if (series.cls[i] >= 0) shown[V.CENTROIDS[series.cls[i]].cls] = true;
     ctx.textAlign = 'left'; ctx.font = MONO;
     Object.keys(shown).forEach(function (cls) {
-      var r = refs && refs[cls]; if (!r || !isFinite(r.d34)) return;
+      var r = refs && refs[cls]; if (!r || !zahl(r.d34)) return;
       ctx.strokeStyle = COL.gold; ctx.setLineDash([6, 3]); ctx.beginPath(); ctx.moveTo(L, y2(r.d34)); ctx.lineTo(L + pw, y2(r.d34)); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = COL.gold; ctx.fillText('/' + cls + '/ ' + fmt(r.d34), L + pw + 4, y2(r.d34) + 4);
     });
@@ -197,7 +200,7 @@
       cell('Bestes Segment je Vokal', perTxt) + cell('ΔF4–5', statRange(s.d45)) +
       cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–'), s.shr && s.shr.max > -15) +
       cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben)', s.h1h2 && s.h1h2.unsureShare > 0.5) +
-      cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (isFinite(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
+      cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
       cell('Oktave korrigiert · unsicher', fmt((s.octaveCorrectedShare || 0) * 100) + ' · ' + fmt((s.octaveAmbiguousShare || 0) * 100) + ' %', s.octaveCorrectedShare > 0.05 || s.octaveAmbiguousShare > 0.2) +
       cell('Slot-Zuordnung unsicher', fmt((s.slotUnsureShare || 0) * 100) + ' % der Rahmen', s.slotUnsureShare > 0.2) +
@@ -279,5 +282,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, zahl: zahl, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

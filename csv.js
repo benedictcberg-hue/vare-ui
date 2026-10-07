@@ -164,15 +164,51 @@
 
   var TYPED = { Float32Array: Float32Array, Float64Array: Float64Array, Uint8Array: Uint8Array, Int8Array: Int8Array, Int16Array: Int16Array, Uint16Array: Uint16Array, Int32Array: Int32Array, Uint32Array: Uint32Array };
 
+  /* Nicht endliche Zahlen: JSON kennt weder NaN noch Infinity und schreibt null. Zurückgelesen ist
+     null aber keine Lücke, sondern fast überall 0 — isFinite(null) ist wahr, und die Chronik zeichnete
+     nie gemessene Formanten bei 0 Hz (Bericht 4, Befund 5). Deshalb stehen sie in der Sicherung
+     ausgeschrieben als {"$nf":"NaN"}, {"$nf":"Infinity"} oder {"$nf":"-Infinity"}. Ab Version 2. */
+  var BACKUP_VERSION = 2;
+  function nfSchreiben(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : { $nf: String(v) };
+    if (v === null || typeof v !== 'object' || typeof v.toJSON === 'function') return v;
+    var i, out;
+    if (Array.isArray(v)) { out = new Array(v.length); for (i = 0; i < v.length; i++) out[i] = nfSchreiben(v[i]); return out; }
+    out = {};
+    var ks = Object.keys(v);
+    for (i = 0; i < ks.length; i++) out[ks[i]] = nfSchreiben(v[ks[i]]);
+    return out;
+  }
+  function nfWert(v) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && typeof v.$nf === 'string' && Object.keys(v).length === 1) {
+      if (v.$nf === 'NaN') return NaN;
+      if (v.$nf === 'Infinity') return Infinity;
+      if (v.$nf === '-Infinity') return -Infinity;
+    }
+    return v;
+  }
+  // Liest frisch geparstes JSON an Ort und Stelle zurück.
+  function nfLesen(v) {
+    var w = nfWert(v);
+    if (w !== v || v === null || typeof v !== 'object') return w;
+    var i;
+    if (Array.isArray(v)) { for (i = 0; i < v.length; i++) v[i] = nfLesen(v[i]); return v; }
+    var ks = Object.keys(v);
+    for (i = 0; i < ks.length; i++) v[ks[i]] = nfLesen(v[ks[i]]);
+    return v;
+  }
+
+  /* Serien: NaN bleibt wie bisher null (kompakt, Hunderttausende Werte je Take), ±Infinity wird
+     ausgeschrieben — sonst käme es als NaN zurück. */
   function packSeries(series) {
     var out = {};
     for (var k in series) {
       var v = series[k];
       if (ArrayBuffer.isView(v)) {
         var arr = new Array(v.length), isF = (v instanceof Float32Array || v instanceof Float64Array);
-        for (var i = 0; i < v.length; i++) arr[i] = isF ? (isFinite(v[i]) ? Math.round(v[i] * 1000) / 1000 : null) : v[i];
+        for (var i = 0; i < v.length; i++) arr[i] = isF ? (isFinite(v[i]) ? Math.round(v[i] * 1000) / 1000 : (v[i] !== v[i] ? null : { $nf: String(v[i]) })) : v[i];
         out[k] = { $type: v.constructor.name, data: arr };
-      } else out[k] = v;
+      } else out[k] = nfSchreiben(v);
     }
     return out;
   }
@@ -182,41 +218,45 @@
       var v = p[k];
       if (v && v.$type && TYPED[v.$type]) {
         var T = TYPED[v.$type], arr = new T(v.data.length);
-        for (var i = 0; i < v.data.length; i++) arr[i] = (v.data[i] == null) ? NaN : v.data[i];
+        for (var i = 0; i < v.data.length; i++) arr[i] = (v.data[i] == null) ? NaN : nfWert(v.data[i]);
         out[k] = arr;
-      } else out[k] = v;
+      } else out[k] = nfLesen(v);
     }
     return out;
   }
   /* bundle = { takes: [take], series: { takeId: series }, refs, calibrations, settings, kernelVersion, exportedAt, audio?: {takeId: base64} } */
+  /* Version 2 schreibt nicht endliche Zahlen aus (nfSchreiben). Eine ältere Seite lehnt sie deshalb
+     als unbekannt ab, statt {"$nf":…} als Wert zu übernehmen und in der CSV „[object Object]“ zu
+     schreiben. Version 1 bleibt lesbar; was sie als null trägt, bleibt null und gilt als fehlend. */
   function serializeBackup(bundle) {
     var takes = [];
     for (var i = 0; i < bundle.takes.length; i++) {
       var t = bundle.takes[i], s = bundle.series && bundle.series[t.id];
-      takes.push({ take: t, series: s ? packSeries(s) : null, audio: (bundle.audio && bundle.audio[t.id]) || null });
+      takes.push({ take: nfSchreiben(t), series: s ? packSeries(s) : null, audio: (bundle.audio && bundle.audio[t.id]) || null });
     }
     return JSON.stringify({
-      format: 'vare-backup', version: 1, exportedAt: bundle.exportedAt || null, kernelVersion: bundle.kernelVersion || null,
-      takes: takes, refs: bundle.refs || null, calibrations: bundle.calibrations || [], settings: bundle.settings || null
+      format: 'vare-backup', version: BACKUP_VERSION, exportedAt: bundle.exportedAt || null, kernelVersion: bundle.kernelVersion || null,
+      takes: takes, refs: nfSchreiben(bundle.refs || null), calibrations: nfSchreiben(bundle.calibrations || []), settings: nfSchreiben(bundle.settings || null)
     });
   }
   function parseBackup(text) {
     var o = JSON.parse(text);
     if (!o || o.format !== 'vare-backup') throw new Error('Keine VARE-Sicherung (format fehlt)');
-    if (o.version !== 1) throw new Error('Sicherungsversion ' + o.version + ' unbekannt');
+    if (o.version !== 1 && o.version !== BACKUP_VERSION) throw new Error('Sicherungsversion ' + o.version + ' unbekannt');
     if (!Array.isArray(o.takes)) throw new Error('Sicherung ohne takes');
+    var neu = o.version >= 2, lies = function (v) { return neu ? nfLesen(v) : v; };
     var takes = [], series = {}, audio = {};
     for (var i = 0; i < o.takes.length; i++) {
       var e = o.takes[i];
       if (!e || !e.take || !e.take.id) throw new Error('Take ' + i + ' ohne id');
-      takes.push(e.take);
+      takes.push(lies(e.take));
       if (e.series) series[e.take.id] = unpackSeries(e.series);
       if (e.audio) audio[e.take.id] = e.audio;
     }
-    return { takes: takes, series: series, audio: audio, refs: o.refs || null, calibrations: o.calibrations || [], settings: o.settings || null, exportedAt: o.exportedAt, kernelVersion: o.kernelVersion };
+    return { takes: takes, series: series, audio: audio, refs: lies(o.refs || null), calibrations: lies(o.calibrations || []), settings: lies(o.settings || null), exportedAt: o.exportedAt, kernelVersion: o.kernelVersion };
   }
 
-  var api = { SENTINEL: SENTINEL, DIALECTS: DIALECTS, TAKE_COLUMNS: TAKE_COLUMNS, FRAME_COLUMNS: FRAME_COLUMNS, takesToCsv: takesToCsv, framesToCsv: framesToCsv, fmtCell: fmtCell, serializeBackup: serializeBackup, parseBackup: parseBackup, packSeries: packSeries, unpackSeries: unpackSeries };
+  var api = { SENTINEL: SENTINEL, BACKUP_VERSION: BACKUP_VERSION, DIALECTS: DIALECTS, TAKE_COLUMNS: TAKE_COLUMNS, FRAME_COLUMNS: FRAME_COLUMNS, takesToCsv: takesToCsv, framesToCsv: framesToCsv, fmtCell: fmtCell, serializeBackup: serializeBackup, parseBackup: parseBackup, packSeries: packSeries, unpackSeries: unpackSeries };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VARECSV = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -198,6 +198,49 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
   return p;
 }
 
+/* ---------- Chronik ohne Seite: chronik.js mit Rechenkern in eigener vm-Umgebung ---------- */
+function chronikNeu() {
+  const sb = { console: { log() { }, warn() { }, error: aufFehler }, devicePixelRatio: 1 };
+  sb.self = sb; sb.window = sb;
+  vm.createContext(sb);
+  for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+  return sb;
+}
+// Zeichenfläche, die jeden Aufruf mitschreibt: [Name, Argumente].
+function leinwand() {
+  const ops = [];
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { ops.push([k, a]); }), set: (t, k, v) => { t[k] = v; return true; } });
+  return { cv: { clientWidth: 450, style: {}, getContext: () => ctx }, ops };
+}
+// Kacheln der Detailansicht: [{ klasse, k, v }], v ohne HTML-Marken außer in vHtml.
+function kacheln(html) {
+  const out = [], re = /<div class="stat([^"]*)"><span class="k">([\s\S]*?)<\/span><span class="v">([\s\S]*?)<\/span><\/div>/g;
+  let m;
+  while ((m = re.exec(html))) out.push({ klasse: m[1].trim(), k: m[2].replace(/<[^>]+>/g, ''), v: m[3].replace(/<[^>]+>/g, ''), vHtml: m[3] });
+  return out;
+}
+// Zellen der Take-Liste, erste Datenzeile.
+function listenZellen(html) {
+  const zeile = /<tr data-id="[^"]*">([\s\S]*?)<\/tr>/.exec(html);
+  return zeile ? zeile[1].split(/<\/td>/).map(z => z.replace(/^<td[^>]*>/, '')) : [];
+}
+// Gleich mit NaN = NaN und ±Infinity, rekursiv; liefert die erste Abweichung als Pfad oder ''.
+function abweichung(a, b, pfad) {
+  pfad = pfad || '';
+  if (typeof a === 'number' || typeof b === 'number') return Object.is(a, b) || (a === 0 && b === 0) ? '' : pfad + ': ' + a + ' → ' + b;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a === b ? '' : pfad + ': ' + JSON.stringify(a) + ' → ' + JSON.stringify(b);
+  const ka = Object.keys(a).filter(k => a[k] !== undefined), kb = Object.keys(b).filter(k => b[k] !== undefined);
+  if (ka.length !== kb.length) return pfad + ': Schlüssel ' + ka.join(',') + ' → ' + kb.join(',');
+  for (const k of ka) { const d = abweichung(a[k], b[k], pfad + '.' + k); if (d) return d; }
+  return '';
+}
+function nichtEndlich(o, pfad, out) {
+  out = out || []; pfad = pfad || '';
+  if (typeof o === 'number') { if (!isFinite(o)) out.push(pfad); }
+  else if (o && typeof o === 'object') for (const k of Object.keys(o)) nichtEndlich(o[k], pfad + '.' + k, out);
+  return out;
+}
+
 module.exports = async function (H) {
   const { D, C, SR, concat, noise, BW5 } = H;
   // test_dsp.js füllt die ID auf 5 Zeichen auf; bei „U1.10“ fehlte sonst der Abstand zum Namen.
@@ -546,6 +589,62 @@ module.exports = async function (H) {
       'während des Takes ' + JSON.stringify(waehrend) + ' | danach ' + JSON.stringify(aus) + ' | neu verbunden ' + JSON.stringify(wieder));
     p.schliessen();
   } catch (e) { check('U2.11', 'Ablauf Token läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U3 · Sicherung → Import: „nicht gemessen“ bleibt nicht gemessen ---------- */
+  try {
+    // /o/ bei 310 Hz ohne Stille: F2–F5, ΔF3–4, SNR und weitere Werte sind nie gemessen (NaN).
+    const sig = D.synthVowel(310, [450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200], 1.5, SR);
+    const res = await H.A.analyseTake(sig, SR, { hopS: 0.02 });
+    const summary = res.summary;
+    summary.pruefUnendlich = { plus: Infinity, minus: -Infinity, liste: [NaN, 1.5, -Infinity] };
+    const take = { id: 'u3-nan', code: 'N', label: 'N 310 Hz', createdAt: new Date(T0).toISOString(), durationS: 1.5, sampleRate: SR, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } },
+      summary, history: [{ analysis: { kernelVersion: '2.9.0', analysedAt: new Date(T0 - 864e5).toISOString() }, summary: { snrDb: NaN, F: [{ med: NaN, n: 0 }] } }] };
+    const series = res.series;
+    series.sfr[0] = Infinity; series.sfr[1] = -Infinity;
+    const nanVorher = [];
+    for (let i = 0; i < series.f2.length; i++) if (Number.isNaN(series.f2[i])) nanVorher.push(i);
+    const text = C.serializeBackup({ takes: [take], series: { [take.id]: series }, refs: { o: { d34: NaN, takeId: 'x', pinned: true } }, calibrations: [{ id: 'c', floorDb: -Infinity, F: [NaN, 700] }], settings: { x: NaN }, kernelVersion: D.VERSION });
+    const back = C.parseBackup(text), t2 = back.takes[0], s2 = back.series[take.id];
+    const nf = nichtEndlich(summary);
+    const diff = abweichung(take, t2) || abweichung({ o: { d34: NaN, takeId: 'x', pinned: true } }, back.refs) || abweichung([{ id: 'c', floorDb: -Infinity, F: [NaN, 700] }], back.calibrations) || abweichung({ x: NaN }, back.settings);
+    check('U3.1', 'Sicherung → Import: NaN und ±Infinity kommen in Zusammenfassung, Historie, Referenzen und Kalibrierungen unverändert zurück, nichts als null',
+      nf.length >= 30 && diff === '', nf.length + ' nicht endliche Werte, z. B. ' + nf.slice(0, 3).join(' ') + ' | erste Abweichung: ' + (diff || 'keine'));
+    const nanNachher = [];
+    for (let i = 0; i < s2.f2.length; i++) if (Number.isNaN(s2.f2[i])) nanNachher.push(i);
+    check('U3.2', 'Sicherung → Import: in den Serien bleibt NaN NaN und ±Infinity ±Infinity',
+      s2.sfr instanceof Float32Array && s2.sfr[0] === Infinity && s2.sfr[1] === -Infinity && nanVorher.length > 0 && nanNachher.join(',') === nanVorher.join(','),
+      'sfr[0..1] ' + s2.sfr[0] + ', ' + s2.sfr[1] + ' | NaN in f2: vorher ' + nanVorher.length + ', nachher ' + nanNachher.length);
+    /* Die CSV ist der Austausch nach außen: Sentinel −99 für alles Fehlende, vor und nach dem Rundlauf
+       gleich. Die Take-CSV ist byte-gleich. In der Rahmen-CSV sitzen die −99 an denselben Stellen; ihre
+       Zahlen können in der letzten Stelle abweichen, weil die Sicherung Serien auf 0,001 rundet. */
+    const sentinel = (s, d) => C.framesToCsv(s, d, H.V).split('\r\n').map(z => z.split(d === 'standard' ? ',' : ';').map(c => /^-99([.,]0*)?$/.test(c) ? 'S' : '.').join('')).join('|');
+    const csvGleich = ['standard', 'excelde'].every(d => C.takesToCsv([take], d) === C.takesToCsv([t2], d) && sentinel(series, d) === sentinel(s2, d));
+    const zeile = C.takesToCsv([t2], 'standard').split('\r\n'), kopf = zeile[0].split(','), werte = zeile[1].split(',');
+    check('U3.3', 'CSV nach dem Rundlauf: Take-CSV byte-gleich, Rahmen-CSV mit −99 an denselben Stellen (beide Dialekte); nie gemessen = −99',
+      csvGleich && werte[kopf.indexOf('f2_med')] === '-99.0' && werte[kopf.indexOf('snr_db')] === '-99.00', 'gleich=' + csvGleich + ' | f2_med ' + werte[kopf.indexOf('f2_med')] + ' snr_db ' + werte[kopf.indexOf('snr_db')]);
+    // Eine Sicherung aus der Zeit vor Version 2 trägt nie Gemessenes als null. Lesbar bleiben, und null ist keine 0.
+    const alt = JSON.parse(JSON.stringify({ format: 'vare-backup', version: 1, takes: [{ take: Object.assign({}, take, { history: [] }), series: null, audio: null }], refs: null, calibrations: [], settings: null }));
+    const altBack = C.parseBackup(JSON.stringify(alt)), altS = altBack.takes[0].summary;
+    const sb = chronikNeu(), CHR = sb.VARECHRONIK;
+    const punkte = s => { const l = leinwand(); CHR.drawFormantBars(l.cv, s, 28); return l.ops.filter(o => o[0] === 'arc').map(o => o[1][0].toFixed(1)); };
+    const div = new El(); CHR.renderDetail(div, altBack.takes[0], null, {}, false, {});
+    const snrKachel = kacheln(div.innerHTML).find(k => /SNR/.test(k.k)) || {};
+    const pAlt = punkte(altS), pNeu = punkte(t2.summary), pVorher = punkte(summary);
+    check('U3.4', 'Ältere Sicherung (Version 1, null statt NaN): lesbar; die Chronik zeichnet keinen nie gemessenen Formanten bei 0 Hz und nennt SNR „nicht messbar“',
+      altS.F[1].med === null && pAlt.length === 1 && /nicht messbar/.test(snrKachel.v || ''), 'Punkte (x px) ' + pAlt.join(' ') + ' | SNR-Kachel „' + snrKachel.v + '“');
+    check('U3.5', 'Nach Sicherung → Import zeichnet die Chronik dieselben Formantpunkte wie vorher', pNeu.join(' ') === pVorher.join(' ') && pVorher.length === 1, 'vorher ' + pVorher.join(' ') + ' | nachher ' + pNeu.join(' '));
+    // Über die Oberfläche: Import landet mit NaN in der Ablage, nicht mit null.
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 10 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    if (p.st().statusEl) p.st().statusEl.textContent = '';
+    p.el('file-import').files = [{ text: () => Promise.resolve(text) }];
+    p.el('file-import').feuern('change');
+    await p.warte(() => /Import/.test(p.st().statusEl ? p.st().statusEl.textContent : ''), 10000);
+    const gesp = sp.d.takes.get(take.id), gs = gesp && gesp.summary;
+    check('U3.6', 'Import über die Seite: nie gemessene Werte liegen als NaN in der Ablage, nicht als null',
+      !!gs && Number.isNaN(gs.F[1].med) && Number.isNaN(gs.snrDb) && gs.pruefUnendlich.minus === -Infinity, gs ? 'F2 ' + gs.F[1].med + ' | SNR ' + gs.snrDb + ' | −Infinity ' + gs.pruefUnendlich.minus : 'nicht gespeichert');
+    p.schliessen();
+  } catch (e) { check('U3.1', 'Ablauf Sicherung → Import läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
