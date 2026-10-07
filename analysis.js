@@ -581,14 +581,28 @@
     for (var i = 0; i < c.length; i++) { var d = c.charCodeAt(i) - 64; if (d < 1 || d > 26) return -1; n = n * 26 + d; }
     return n - 1;
   }
+  /* Codes, die verbreitete CSV-Leser nicht als denselben Text zurückgeben, werden nicht vergeben (Befund N18). Der Code
+     ist die Verbindung zwischen Take-CSV, Rahmen-CSV (Dateiname) und Notizen; geht er still verloren, fällt der Take
+     aus jeder Gruppierung nach Code. Geprüft mit pandas 3.0.6 und seinen Vorgaben, Standard und Excel DE:
+     - NA, NULL: gelesen als fehlend (NaN), auch zwischen anderen Codes. R (read.csv) liest NA ebenso.
+     - INF, INFINITY: gelesen als Zahl ∞, wenn die Spalte nur diesen Code enthält (CSV-Zeile eines Takes).
+     - TRUE, FALSE: gelesen als Wahrheitswert, wenn die Spalte nur diesen Code enthält; Excel liest TRUE/FALSE
+       (englisch) und WAHR/FALSCH (deutsch) als Wahrheitswert (bekanntes Verhalten, hier nicht nachgeprüft).
+     - NAN, NONE: Großschreibung der pandas-Marken NaN und None. pandas 3.0.6 lässt sie als Text; ein Leser, der
+       ohne Groß- und Kleinschreibung vergleicht, nicht.
+     Erreichbar ist davon praktisch NA (365. Take), INF (6454.) und NAN (9504.). Ein Take, der einen solchen Code
+     schon trägt (ältere Fassung, Import), behält ihn: umbenannt wird nie. */
+  var CODES_GESPERRT = ['NA', 'NULL', 'INF', 'INFINITY', 'TRUE', 'FALSE', 'WAHR', 'FALSCH', 'NAN', 'NONE'];
+  var GESPERRT_INDEX = CODES_GESPERRT.map(indexFromCode);
   function nextCodeIndex(takes, stored) {
     var m = stored || 0;
     for (var i = 0; i < (takes || []).length; i++) { var k = indexFromCode(takes[i].code); if (k >= 0 && k + 1 > m) m = k + 1; }
+    while (GESPERRT_INDEX.indexOf(m) >= 0) m++;
     return m;
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

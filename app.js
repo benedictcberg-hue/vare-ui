@@ -23,7 +23,7 @@
     { key: 'hopS', label: 'Rahmenabstand Offline-Analyse (s) — Vorgabe 0,010', min: 0.005, max: 0.05, step: 0.005, dec: 3 },
     { key: 'storeAudio', type: 'check', label: 'Audio (WAV) mit speichern — nötig für Neu-Analyse nach Kernänderungen' },
     { key: 'audioFormat', type: 'select', options: [['i16', '16 Bit (5,8 MB/min bei 48 kHz)'], ['f32', 'Float32 (11,5 MB/min)']], label: 'WAV-Format' },
-    { key: 'csvDialect', type: 'select', options: [['standard', 'Standard: Komma, Punkt (pandas)'], ['excelde', 'Excel DE: Semikolon, Dezimalkomma, Text gegen Formeln geschützt (Apostroph)']], label: 'CSV-Dialekt' },
+    { key: 'csvDialect', type: 'select', options: [['standard', 'Standard: Komma, Punkt (pandas: read_csv(…, keep_default_na=False, na_values=[-99]))'], ['excelde', 'Excel DE: Semikolon, Dezimalkomma, Text gegen Formeln geschützt (Apostroph)']], label: 'CSV-Dialekt' },
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
   ];
 

@@ -686,7 +686,8 @@ module.exports = async function (H) {
 
 /* Kriterien B2 — Anzeige, CSV und Doku sagen dasselbe wie die Messung.
    B2a: Das Take-Ergebnis zeigt schwach belegte Formanten und ein zweideutiges Bestsegment wie das Detail (N8).
-   B2b: Die Neu-Analyse nennt jede geänderte Rechenweise und sperrt währenddessen den Take-Knopf (N20). */
+   B2b: Die Neu-Analyse nennt jede geänderte Rechenweise und sperrt währenddessen den Take-Knopf (N20).
+   B2c: Kein Take-Code, den pandas oder Excel als fehlend, Zahl oder Wahrheitswert lesen (N18). */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -793,6 +794,42 @@ async function kriterienB2(H) {
       'gerechnet mit Fenster ' + (vorher && vorher.windowS) + ' | verstellt: ' + z(r1) + ' | unverändert: ' + z(r2) + ' | ohne Kalibrierung: ' + z(r3));
     p.schliessen();
   } catch (e) { check('B2b', 'Ablauf Neu-Analyse läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2c · Keine Take-Codes, die CSV-Leser als fehlend, Zahl oder Wahrheitswert lesen ---------- */
+  try {
+    const A = H.A;
+    // Soll unabhängig von analysis.js: Codes A, B, … Z, AA, …; gesperrt sind die Texte, die pandas (Vorgaben) als
+    // fehlend (NA, NULL), allein in der Spalte als Zahl (INF, INFINITY) oder Wahrheitswert (TRUE, FALSE) liest, die
+    // Excel-Wahrheitswerte (WAHR, FALSCH) und die Großschreibungen der pandas-Marken NaN und None.
+    const SOLL = ['NA', 'NULL', 'INF', 'INFINITY', 'TRUE', 'FALSE', 'WAHR', 'FALSCH', 'NAN', 'NONE'];
+    const code = n => { let c = ''; n = n + 1; while (n > 0) { const r = (n - 1) % 26; c = String.fromCharCode(65 + r) + c; n = Math.floor((n - 1) / 26); } return c; };
+    const index = c => { let n = 0; for (const ch of c) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+    const bad = [];
+    // Fortlaufend vergeben wie finishTake: Zähler → nächster freier Index → Code, Zähler + 1.
+    let n = 0, vergeben = 0;
+    for (let i = 0; i < 12000; i++) { n = A.nextCodeIndex([], n); if (SOLL.indexOf(code(n)) >= 0) bad.push('Take ' + (i + 1) + ' bekäme ' + code(n)); vergeben++; n++; }
+    // Die fernen Codes direkt: weder aus dem Zähler noch als Nachfolger eines vorhandenen Codes.
+    for (const c of SOLL) {
+      const k = index(c), a = A.nextCodeIndex([], k), b = A.nextCodeIndex([{ code: code(k - 1) }], 0);
+      if (a === k || b === k) bad.push(c + ': Zähler → ' + code(a) + ', nach ' + code(k - 1) + ' → ' + code(b));
+    }
+    // Ein vorhandener gesperrter Code (ältere Fassung, Import) bleibt und zählt: danach kommt der nächste.
+    if (code(A.nextCodeIndex([{ code: 'NA' }], 0)) !== 'NB') bad.push('nach vorhandenem NA: ' + code(A.nextCodeIndex([{ code: 'NA' }], 0)));
+    // Über die Seite: Zähler steht vor NA.
+    const SIGc = H.concat([noise(Math.round(0.1 * SR), 2e-4, 71), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], H.BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 72)]);
+    const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(SIGc), sampleRate: SR, durationS: SIGc.length / SR }), SR);
+    p.kalibriert('cal-c'); await p.mikrofon();
+    await p.S.setMeta('nextCode', index('MZ'));
+    const t1 = await p.take(), t2 = await p.take();
+    const zaehler = await p.S.getMeta('nextCode', null);
+    p.schliessen();
+    if (!t1 || t1.code !== 'MZ' || !t2 || t2.code !== 'NB' || zaehler !== index('NB') + 1) bad.push('Seite: ' + (t1 && t1.code) + ', ' + (t2 && t2.code) + ', Zähler danach ' + code(zaehler));
+    // Lesebeispiel im README: wie pandas die CSV liest, ohne dass ein Code oder ein leerer Text als fehlend gilt.
+    const readme = quelle('README.md');
+    if (!/keep_default_na=False/.test(readme) || !/na_values=\[-99\]/.test(readme)) bad.push('README ohne Lesebeispiel keep_default_na=False, na_values=[-99]');
+    check('B2c', 'Take-Codes: nie NA, NULL, INF, INFINITY, TRUE, FALSE, WAHR, FALSCH, NAN, NONE (pandas liest sie als fehlend, Zahl oder Wahrheitswert), auch nicht über die Seite; README nennt das Lesebeispiel (N18)',
+      !bad.length && vergeben === 12000, bad.length ? bad.slice(0, 5).join(' | ') : vergeben + ' Codes fortlaufend vergeben bis ' + code(n - 1) + ', Seite: ' + t1.code + ' → ' + t2.code);
+  } catch (e) { check('B2c', 'Ablauf Take-Codes läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

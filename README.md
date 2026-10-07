@@ -296,6 +296,18 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
 In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
 
+Einlesen mit pandas, ohne dass ein Text still als fehlend gilt:
+
+```python
+df = pd.read_csv(datei, keep_default_na=False, na_values=[-99])                        # Standard
+df = pd.read_csv(datei, sep=';', decimal=',', keep_default_na=False, na_values=[-99])  # Excel DE
+```
+
+`na_values=[-99]` macht jede Sentinel-Zahl zu NaN (in jeder Schreibweise, `-99.00` wie `-99,00`);
+`keep_default_na=False` verhindert, dass pandas Texte wie `NA` oder `NULL` als fehlend liest. Take-Codes,
+die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`, `INFINITY`, `TRUE`, `FALSE`,
+`WAHR`, `FALSCH`, `NAN`, `NONE`), vergibt die Seite nicht; nach `MZ` folgt `NB`.
+
 `signal_gap_s` (Take): Sekunden, die in der Aufnahme fehlen (siehe „Signallücken“); 0 = geprüft, keine
 Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
 (nicht gemessen, als Pause geführt).
