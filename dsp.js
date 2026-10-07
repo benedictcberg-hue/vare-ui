@@ -1074,6 +1074,19 @@
      (1) Teiltonreihe des gemeldeten Werts selbst: Liegen die Linien bei k·f0, k kein Vielfaches von
          m (m = 2, 3), im Mittel 20 dB oder mehr unter den Vielfachen von m, ist f0 ein Unterton —
          dieselbe Grenze, die die Teilerkontrolle für eine neue Reihe verlangt (OCTAVE_ODD_EVEN_DB).
+    (1b) Im Rauschen (starker Hauch, Raumrauschen) erreicht der Abstand die 20 dB nie: Die neuen Linien
+         liegen im Rauschen, die bekannten nur so weit darüber, wie die Teiltöne aus ihm ragen (gemessen
+         −6 bis −20 dB bei f0/2 und f0/3 statt f0, behaucht HNR 5–12 dB, 98–262 Hz; 5 % der Rahmen ohne
+         Marke, dazu falsche Korrekturen). Dann zählt, ob die neue Reihe nach der Spezifikation überhaupt
+         da ist: im Mittel und in mindestens 60 % der Linien F0_REIHE_DB über dem Zwischenrauschen — gegen
+         das Rauschen des ganzen Rasters (noiseRefDb, wie die Teilerkontrolle) und gegen das Rauschen
+         neben jeder Linie (lokaleReihe). Rosa Raumrauschen und durch F1 gefärbter Hauch heben tiefe
+         Rauschstellen über den Median des ganzen Rasters; mit dem ganzen Raster allein blieben in hoher
+         Lage (/u/ 449–466 Hz) Korrekturen auf f0/2. Fehlt die Reihe und liegt sie im Mittel mindestens
+         F0_REIHE_DB unter den bekannten Linien, ist f0 ein Unterton. Richtige Grundtöne lagen in allen
+         Messungen (behaucht HNR 5–20 dB, sauber, Raumrauschen 30–40 dB) höchstens 7,4 dB darunter.
+         Erst wird die scharfe Grenze für beide m geprüft, damit aufM das m trägt, das den Unterton
+         erklärt (die Korrektur rechnet mit aufM·f0).
      (2) Cepstrum (unabhängige Periodenschätzung auf dem 0,14-s-Fenster): Es muss auf dieselbe Periode
          zeigen (±0,5 HT) oder auf ein Vielfaches q·T (q bis 5, Rahmonik). Bei einem Vielfachen
          entscheidet die Teiltonreihe bei f0Cep: steht dort eine echte Reihe (nicht mehr als 20 dB unter
@@ -1082,7 +1095,30 @@
          0,46 HT Abstand gemessen) zählt, ob das Cepstrum auf denselben YIN-Dip zeigt.
      Was davon reißt, steht in grund: 'teiltonreihe', 'cepstrum' oder 'kein cepstrum' (kein Gipfel
      im Suchbereich, also keine Gegenprobe möglich). */
-  var F0_CEP_TOL_HT = 0.5, F0_CEP_GRAU_HT = 1.0, F0_RAHMONIK_MAX = 5;
+  var F0_CEP_TOL_HT = 0.5, F0_CEP_GRAU_HT = 1.0, F0_RAHMONIK_MAX = 5, F0_REIHE_DB = 8;
+
+  /* Neue Linien k·g (k kein Vielfaches von m, k bis 4m) gegen das Rauschen neben jeder Linie: Median der
+     Bins in (k ± 0,2…0,45)·g. So weit von der Linie, dass ihre Hauptkeule (0,14-s-Hann: ±14 Hz) ab
+     g ≈ 70 Hz draußen bleibt, und mehr als 0,5·g von den bekannten Linien (k ± 1)·g. Liefert die mittlere
+     Höhe über diesem Rauschen und wie viele Linien mehr als marginDb darüber liegen. */
+  function lokaleReihe(spec, g, m, marginDb) {
+    var out = { mittel: NaN, above: 0, nNew: 0 }, sum = 0, k, b;
+    for (k = 1; k <= 4 * m; k++) {
+      if (k % m === 0) continue;
+      var L = lineLevelDb(spec, k * g), v = [];
+      if (!isFinite(L)) continue;
+      for (b = Math.round((k - 0.45) * g / spec.df); b <= Math.round((k - 0.2) * g / spec.df); b++) if (b > 0) v.push(spec.db[b]);
+      for (b = Math.round((k + 0.2) * g / spec.df); b <= Math.round((k + 0.45) * g / spec.df); b++) if (b < spec.db.length) v.push(spec.db[b]);
+      if (!v.length) continue;
+      var ref = median(v);
+      sum += L - ref; out.nNew++;
+      if (L > ref + marginDb) out.above++;
+    }
+    if (out.nNew) out.mittel = sum / out.nNew;
+    return out;
+  }
+  // Steht die neue Reihe nach der Spezifikation da (im Mittel und in mindestens 60 % der Linien marginDb über dem Rauschen)?
+  function reiheBelegt(mittel, above, nNew, marginDb) { return mittel > marginDb && above >= Math.max(3, Math.ceil(0.6 * nNew)); }
 
   function naechsterDip(dips, tau) {
     var bi = -1, bd = Infinity;
@@ -1093,10 +1129,18 @@
   // tauY: Periode des gemeldeten Werts in Abtastwerten (subFactor · YIN-Verzögerung), dips: YIN-Dips
   function f0Gegenprobe(spec, f0, fCep, tauY, dips, sr) {
     var out = { unsure: false, grund: '', aufM: 0 };
-    for (var m = 2; m <= 3 && !out.aufM; m++) {
-      var t = teiltonreihe(spec, f0, m, 8);
-      if (isFinite(t.newMinusOld) && t.newMinusOld <= OCTAVE_ODD_EVEN_DB) { out.unsure = true; out.grund = 'teiltonreihe'; out.aufM = m; }
+    var reihen = [], m, t, lk;
+    for (m = 2; m <= 3; m++) {
+      reihen.push(t = teiltonreihe(spec, f0, m, F0_REIHE_DB)); t.m = m;
+      if (!out.aufM && t.newMinusOld <= OCTAVE_ODD_EVEN_DB) out.aufM = m;
     }
+    for (m = 0; m < reihen.length && !out.aufM; m++) {
+      t = reihen[m];
+      if (!(t.newMinusOld <= -F0_REIHE_DB)) continue;
+      lk = lokaleReihe(spec, f0, t.m, F0_REIHE_DB);
+      if (!(reiheBelegt(t.newMinusNoise, t.above, t.nNew, F0_REIHE_DB) && reiheBelegt(lk.mittel, lk.above, lk.nNew, F0_REIHE_DB))) out.aufM = t.m;
+    }
+    if (out.aufM) { out.unsure = true; out.grund = 'teiltonreihe'; }
     if (!isFinite(fCep)) { out.unsure = true; if (!out.grund) out.grund = 'kein cepstrum'; return out; }
     var q, bq = 1, bd = Infinity;
     for (q = 1; q <= F0_RAHMONIK_MAX; q++) { var d = Math.abs(12 * Math.log2(q * fCep / f0)); if (d < bd) { bd = d; bq = q; } }

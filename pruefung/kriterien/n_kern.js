@@ -9,6 +9,8 @@
      A3a ΔF3–4/ΔF4–5 über 250 Hz, A3b Slots über 375 Hz und Nummernrutsch, A3c Gipfelpaare, A3d unsicherer
      Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag, A3g tiefes enges
      Cluster, das nur eine LPC-Ordnung trennt, A3h Vokalwechsel im Fenster.
+   A4: Grundton bei starkem Hauch (analyseAt: Gegenprobe und Teilerkontrolle im Rauschen) —
+     A4b Unterton in behauchter Stimme.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -84,6 +86,7 @@ module.exports = async function (H) {
   }
   const keins = e => e.length === 0;
   let saat = 100;
+  const hilfen = {};   // Signalhilfen eines Abschnitts, die ein späterer mitbenutzt (A2 → A4)
 
   /* ---------- A1a: Oktavkontrolle der Feinspur ----------
      Liegt F1 nahe 2·F0, ist der zweite Teilton der stärkste, und YIN nimmt die halbe Periode: Die
@@ -382,6 +385,7 @@ module.exports = async function (H) {
       return out;
     }
     const zeiten = (a, b) => { const t = []; for (let x = a; x <= b + 1e-9; x += 0.01) t.push(+x.toFixed(3)); return t; };
+    hilfen.a2 = { quelle, rampen, raum, pause, rahmenBei };
     const hat = (r, g) => String(r.shrGrund).split('+').indexOf(g) >= 0;
     const unmarkiert25 = r => r.voiced && !r.shrUnsure && r.shr > -25;
     const zeig = r => 't ' + r.t.toFixed(2) + ' SHR ' + r1_(r.shr) + (r.shrUnsure ? ' [' + r.shrGrund + ']' : '') + ' F0 ' + r1_(r.f0) + (r.f0Unsure ? ' [' + r.f0Grund + ']' : '');
@@ -916,5 +920,33 @@ module.exports = async function (H) {
     }
     check('A3h', 'Gegenprobe: stehende Vokale (a/e/i/o/u 98–247 Hz, Impuls/Rosenberg, Jitter 1 %, Shimmer 2 %, Vibrato ±50 Cent, Rauschen 30/40 dB) nie \'wechsel\'',
       m >= 300 && fehl === 0, m + ' Rahmen, größter Hüllkurvenabstand ' + r1(mx) + ' dB, mit wechsel ' + fehl + (bspG.length ? ' — ' + bspG.join(' | ') : ''));
+  }
+
+  /* ---------- A4: Grundton bei starkem Hauch ----------
+     Behauchte Stimme (Rauschen in der Anregung, exakter HNR) mit rosa Raumrauschen: YIN und Cepstrum nehmen
+     gemeinsam einen Unterton, und die Gegenprobe bestand, weil die Teiltonreihe den Abstand von 20 dB im
+     Rauschen nie erreicht (Befund N17 und dieselbe Klasse in der Mittellage). Wahrheit ist der Grundton der
+     Synthese; „daneben“ heißt mehr als 3 % (eine Marke ist f0Unsure oder octaveAmbiguous). */
+  const { quelle: q4, rampen: rampen4, raum: raum4, pause: pause4, rahmenBei: rahmen4 } = hilfen.a2;
+  const zeiten4 = (a, b, d) => { const t = []; for (let x = a; x <= b + 1e-9; x += d) t.push(+x.toFixed(3)); return t; };
+  const name4 = (r, v, rest) => NAME[v] + ' ' + rest + ' t ' + r.t.toFixed(2) + ': f0 ' + r1(r.f0) + ' (YIN ' + r1(r.f0Yin) + ', Cepstrum ' + r1(r.f0Cep) + ')' + (r.f0Korrektur ? ' korrigiert' : '');
+  const markiert4 = r => r.f0Unsure || r.octaveAmbiguous;
+
+  /* A4b Unterton in behauchter Stimme: /a e i o u/ 98–247 Hz, HNR 5/8/12 dB. Vorher standen 28 % der Rahmen auf
+     f0/2 … f0/7 ohne Marke, dazu Korrekturen auf einen Unterton. Rest an der Nachweisgrenze (Rauschspitzen täuschen
+     die Reihe vor, oder die bekannten Linien ragen kaum 8 dB heraus) steht im Bericht. */
+  {
+    let s4 = 41000; const R = [];
+    for (const hnr of [5, 8, 12]) for (const v of ['a', 'e', 'i', 'o', 'u']) for (const f0 of [98, 110, 123, 139, 156, 175, 196, 220, 247]) {
+      const x = raum4(rampen4(q4({ f0, dur: 0.9, jit: 0.008, shim: 0.02, hnr, seed: s4++ }, v), 0.03, 0.03), 40, s4++);
+      for (const r of rahmen4(x, zeiten4(0.2, 0.7, 0.02))) if (r.voiced) { r.soll = f0; r.nm = name4(r, v, f0 + ' HNR ' + hnr); R.push(r); }
+    }
+    const unterton = r => { for (let k = 2; k <= 7; k++) if (Math.abs(k * r.f0 / r.soll - 1) <= 0.03) return true; return false; };
+    const richtig = R.filter(r => Math.abs(r.f0 / r.soll - 1) <= 0.03), unter = R.filter(unterton);
+    const ohne = unter.filter(r => !markiert4(r)), korr = unter.filter(r => r.f0Korrektur), fehl = richtig.filter(r => r.f0Grund === 'teiltonreihe');
+    check('A4b', 'behauchte Stimme (Rosenberg, HNR 5/8/12 dB, /a e i o u/ 98–247 Hz, Raumrauschen 40 dB), Grundton auf einem Unterton (f0/2 … f0/7): höchstens 1 % ohne f0Unsure oder octaveAmbiguous (vorher 28 %), keiner durch die Korrektur dorthin gesetzt; richtige Grundtöne höchstens zu 0,5 % mit Grund \'teiltonreihe\'',
+      R.length >= 3000 && unter.length >= 300 && ohne.length <= 0.01 * unter.length && korr.length === 0 && fehl.length <= 0.005 * richtig.length,
+      R.length + ' Rahmen, richtig ' + richtig.length + ' (davon \'teiltonreihe\' ' + fehl.length + '), Unterton ' + unter.length + ', ohne Marke ' + ohne.length + ', dorthin korrigiert ' + korr.length +
+      (ohne.length ? ' — offen (Nachweisgrenze): ' + ohne.slice(0, 4).map(r => r.nm).join(' | ') : '') + (korr.length ? ' — ' + korr.slice(0, 3).map(r => r.nm).join(' | ') : ''));
   }
 };
