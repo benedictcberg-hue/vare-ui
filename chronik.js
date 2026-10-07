@@ -56,6 +56,20 @@
     }
   }
 
+  /* Drei Zustände wie live (app.js, setStat): Rost heißt „Messwert trägt nicht“ oder „fehlt“. Ein
+     sicher gemessener Befund — F3 unter dem Mindestwert, SHR über der Warnschwelle, gehaltene
+     Tonsprünge — steht in Gold ohne Strich (Klasse befund). Sonst hieße dieselbe Farbe zweierlei
+     (Bericht 3, Befund 7). */
+  var SHR_WARN_DB = -15;   // Warnschwelle aus der Spezifikation
+  // Der F3-Mindestwert, mit dem DIESER Take gerechnet wurde, nicht der heutige Regler; null, wenn nicht gespeichert.
+  function f3Schwelle(take) { var g = take && take.analysis && take.analysis.gate; return (g && zahl(g.f3MinHz)) ? g.f3MinHz : null; }
+  // F3 der stabilen Rahmen liegt sicher gemessen unter dem Mindestwert des Takes: { f3, schwelle } oder null.
+  function f3Unter(take) {
+    var f = take && take.summary && take.summary.f3stable, thr = f3Schwelle(take);
+    return (f && f.n > 0 && zahl(f.med) && thr != null && f.med < thr) ? { f3: f.med, schwelle: thr } : null;
+  }
+  function shrBefund(s) { return !!(s && s.shr && zahl(s.shr.max) && s.shr.max > SHR_WARN_DB); }
+
   function renderRefs(el, refs, handlers) {
     var keys = Object.keys(refs || {}).sort();
     if (!keys.length) { el.innerHTML = '<p class="muted small">Noch keine Referenz — die erste stabile Aufnahme mit gültigem ΔF3–4 (F3 ≥ Mindestwert) setzt sie je Vokal.</p>'; return; }
@@ -73,16 +87,16 @@
     if (!takes.length) { el.innerHTML = '<p class="muted">Noch keine Takes. Aufnahme → Mikrofon starten → Kalibrieren → Take starten.</p>'; return; }
     var h = '<table><thead><tr><th>Take</th><th>Vokal<br><span class="small">Absicht / gemessen</span></th><th class="num">F0</th><th class="spalte-breit">F1–F5 Median, Quartile</th><th class="num">ΔF3–4 stabil</th><th class="num">F3 stabil</th><th class="num">SFR</th><th class="num">SHR max</th><th class="num">gültig</th><th>Kern</th><th></th></tr></thead><tbody>';
     takes.forEach(function (t) {
-      var s = t.summary || {}, old = t.analysis && t.analysis.kernelVersion !== D.VERSION;
+      var s = t.summary || {}, old = t.analysis && t.analysis.kernelVersion !== D.VERSION, thr = f3Schwelle(t), f3u = f3Unter(t);
       h += '<tr data-id="' + esc(t.id) + '">' +
         '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span></td>' +
         '<td class="mono">' + esc(t.vowelIntent || '–') + ' / ' + esc(s.vowel && s.vowel.dominant || '–') + '</td>' +
         '<td class="num">' + (s.f0 ? fmt(s.f0.med) + ' ' + esc(s.f0.note) : '–') + '</td>' +
         '<td><canvas class="bars" height="28"></canvas></td>' +
-        '<td class="num">' + (s.d34stable && s.d34stable.n ? statRange(s.d34stable) : '<span class="rust">–</span>') + '</td>' +
-        '<td class="num">' + (s.f3stable && s.f3stable.n ? '<span class="' + (s.f3stable.med < 2500 ? 'rust' : '') + '">' + fmt(s.f3stable.med) + '</span>' : '–') + '</td>' +
+        '<td class="num">' + (s.d34stable && s.d34stable.n ? statRange(s.d34stable) : (f3u ? '<span class="muted" title="nicht gewertet: F3 stabil unter dem Mindestwert dieses Takes">–</span>' : '<span class="rust">–</span>')) + '</td>' +
+        '<td class="num">' + (s.f3stable && s.f3stable.n ? (f3u ? '<span class="befund" title="unter dem F3-Mindestwert ' + fmt(thr) + ' Hz dieses Takes, ΔF3–4 dort nicht gewertet">' : (thr == null ? '<span title="F3-Mindestwert dieses Takes nicht gespeichert">' : '<span>')) + fmt(s.f3stable.med) + '</span>' : '–') + '</td>' +
         '<td class="num">' + (s.sfr ? fmt(s.sfr.med, 1) : '–') + '</td>' +
-        '<td class="num">' + (s.shr ? '<span class="' + (s.shr.max > -15 ? 'rust' : '') + '">' + fmt(s.shr.max, 1) + '</span>' : '–') + '</td>' +
+        '<td class="num">' + (s.shr ? (shrBefund(s) ? '<span class="befund" title="über der Warnschwelle ' + String(SHR_WARN_DB).replace('-', '−') + ' dB">' : '<span>') + fmt(s.shr.max, 1) + '</span>' : '–') + '</td>' +
         '<td class="num">' + fmt((s.validShare || 0) * 100) + ' %</td>' +
         '<td class="small">' + esc(t.analysis && t.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">alt</span>' : '') + '</td>' +
         '<td class="actions"><button data-act="csv">CSV</button>' + (audioIds[t.id] ? '<button data-act="wav">WAV</button><button data-act="re">Neu analysieren</button>' : '') + '<button data-act="del" class="danger">Löschen</button></td></tr>';
@@ -187,7 +201,8 @@
   }
 
   function summaryGrid(s, take) {
-    function cell(k, v, unsure) { return '<div class="stat' + (unsure ? ' unsure' : '') + '"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
+    function cell(k, v, unsure, befund) { return '<div class="stat' + (unsure ? ' unsure' : (befund ? ' befund' : '')) + '"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
+    var thr = f3Schwelle(take), f3u = f3Unter(take);
     // Schlüssel und Zahlen aus einer importierten Sicherung sind Fremddaten: maskieren bzw. durch
     // fmt() schicken, sonst landet beliebiges HTML in der Detailansicht.
     var per = s.perVowel || {}, perTxt = Object.keys(per).map(function (k) { return '/' + esc(k) + '/ ' + (per[k].bestSegment ? fmt(per[k].bestSegment.d34Med) : '–'); }).join(' · ') || '–';
@@ -196,15 +211,19 @@
       cell('stimmhaft · gültig · stabil', fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' %') +
       cell('F0 Median [q1–q3]', statRange(s.f0) + ' ' + esc(s.f0 && s.f0.note || '')) +
       cell('F1', statRangeShare(s, s.F && s.F[0]), s.F && s.F[0] && validShareOf(s, s.F[0]) < 0.5) + cell('F2', statRangeShare(s, s.F && s.F[1]), s.F && s.F[1] && validShareOf(s, s.F[1]) < 0.5) + cell('F3', statRangeShare(s, s.F && s.F[2]), s.F && s.F[2] && validShareOf(s, s.F[2]) < 0.5) + cell('F4', statRangeShare(s, s.F && s.F[3]), s.F && s.F[3] && validShareOf(s, s.F[3]) < 0.5) + cell('F5', statRangeShare(s, s.F && s.F[4]), s.F && s.F[4] && validShareOf(s, s.F[4]) < 0.5) +
-      cell('ΔF3–4 alle gültigen', statRange(s.d34)) + cell('ΔF3–4 stabil, F3 ≥ Minimum', (s.d34stable && s.d34stable.n) ? statRange(s.d34stable) + ' n=' + fmt(s.d34stable.n) : '<span class="rust">keine gewerteten Rahmen</span>') +
+      cell('ΔF3–4 alle gültigen', statRange(s.d34)) +
+      // Keine Wertung, weil F3 sicher unter dem Mindestwert liegt, ist ein Befund, kein unsicherer Wert.
+      ((s.d34stable && s.d34stable.n) ? cell('ΔF3–4 stabil, F3 ≥ ' + (thr != null ? fmt(thr) + ' Hz' : 'Minimum'), statRange(s.d34stable) + ' n=' + fmt(s.d34stable.n))
+        : f3u ? cell('ΔF3–4 stabil, F3 ≥ ' + fmt(thr) + ' Hz', 'nicht gewertet: F3 stabil im Median ' + fmt(f3u.f3) + ' Hz, unter dem Mindestwert ' + fmt(f3u.schwelle) + ' Hz dieses Takes', false, true)
+        : cell('ΔF3–4 stabil, F3 ≥ ' + (thr != null ? fmt(thr) + ' Hz' : 'Minimum'), '<span class="rust">keine gewerteten Rahmen</span>')) +
       cell('Bestes Segment je Vokal', perTxt) + cell('ΔF4–5', statRange(s.d45)) +
-      cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–'), s.shr && s.shr.max > -15) +
+      cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–'), false, shrBefund(s)) +
       cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben)', s.h1h2 && s.h1h2.unsureShare > 0.5) +
       cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
       cell('Oktave korrigiert · unsicher', fmt((s.octaveCorrectedShare || 0) * 100) + ' · ' + fmt((s.octaveAmbiguousShare || 0) * 100) + ' %', s.octaveCorrectedShare > 0.05 || s.octaveAmbiguousShare > 0.2) +
       cell('Slot-Zuordnung unsicher', fmt((s.slotUnsureShare || 0) * 100) + ' % der Rahmen', s.slotUnsureShare > 0.2) +
-      cell('Registerwechsel gehalten · Kanten', s.spruenge ? (fmt(s.spruenge.gehalten) + ' · ' + fmt(s.spruenge.kante) + '  (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' · ' + fmt(s.spruenge.lambdaKante, 3) + ' /s)') : '– (ältere Auswertung)', s.spruenge && s.spruenge.gehalten > 0) +
+      cell('Registerwechsel gehalten · Kanten', s.spruenge ? (fmt(s.spruenge.gehalten) + ' · ' + fmt(s.spruenge.kante) + '  (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' · ' + fmt(s.spruenge.lambdaKante, 3) + ' /s)') : '– (ältere Auswertung)', false, !!(s.spruenge && s.spruenge.gehalten > 0)) +
       '</div>';
   }
 
@@ -282,5 +301,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, zahl: zahl, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

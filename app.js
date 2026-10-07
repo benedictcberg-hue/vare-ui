@@ -217,7 +217,7 @@
      sicher gemessen ist und trotzdem Aufmerksamkeit braucht — F3 unter dem Zielwert, SHR über der
      Warnschwelle —, bekommt Gold ohne Strich. Sonst heißt dieselbe Markierung zweierlei. */
   function setStat(id, text, unsure, frozen, note) {
-    var el = $('st-' + id); el.className = 'stat' + (unsure ? ' unsure' : (note ? ' note' : '')) + (frozen ? ' frozen' : '');
+    var el = $('st-' + id); el.className = 'stat' + (unsure ? ' unsure' : (note ? ' befund' : '')) + (frozen ? ' frozen' : '');
     $('v-' + id).textContent = text;
   }
   function renderLive(fr, gs, fl) {
@@ -643,13 +643,14 @@
     return { kernelVersion: D.VERSION, hopS: meta.hopS, windowsS: meta.windowsS, orders: meta.orders, yinThresh: meta.yinThresh, spreadMaxHz: meta.spreadMaxHz, gate: meta.gate, floorSource: meta.floorSource, analysedAt: now.toISOString() };
   }
   function renderTakeResult(take) {
-    var s = take.summary, per = s.perVowel || {};
+    var s = take.summary, per = s.perVowel || {}, f3u = CH.f3Unter(take);
     $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
       '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
       '<div class="stat"><span class="k">F0</span><span class="v">' + fmt(s.f0.med) + ' Hz ' + CH.esc(s.f0.note) + '</span></div>' +
       '<div class="stat"><span class="k">F1–F5 Median</span><span class="v">' + s.F.map(function (f) { return fmt(f.med); }).join(' · ') + '</span></div>' +
-      '<div class="stat' + (s.d34stable.n ? '' : ' unsure') + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ')' : 'keine gewerteten Rahmen') + '</span></div>' +
+      // Ohne Wertung, weil F3 sicher unter dem Mindestwert liegt: Befund, nicht Rost (wie in der Chronik).
+      '<div class="stat' + (s.d34stable.n ? '' : (f3u ? ' befund' : ' unsure')) + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ')' : (f3u ? 'nicht gewertet: F3 ' + fmt(f3u.f3) + ' Hz unter ' + fmt(f3u.schwelle) + ' Hz' : 'keine gewerteten Rahmen')) + '</span></div>' +
       '<div class="stat"><span class="k">Bestes Segment je Vokal</span><span class="v">' + (Object.keys(per).map(function (k) { return '/' + k + '/ ' + (per[k].bestSegment ? fmt(per[k].bestSegment.d34Med) : '–'); }).join(' · ') || '–') + '</span></div>' +
       '<div class="stat"><span class="k">SFR · SHR max · CPP</span><span class="v">' + fmt(s.sfr.med, 1) + ' · ' + fmt(s.shr.max, 1) + ' · ' + fmt(s.cpp.med, 1) + '</span></div>' +
       '<div class="stat' + (s.floorSource === 'calibration' ? '' : ' unsure') + '"><span class="k">stimmhaft · gültig · stabil · SNR</span><span class="v">' + fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' % · ' + fmt(s.snrDb, 1) + ' dB</span></div>' +

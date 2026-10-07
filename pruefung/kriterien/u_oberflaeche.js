@@ -646,6 +646,66 @@ module.exports = async function (H) {
     p.schliessen();
   } catch (e) { check('U3.1', 'Ablauf Sicherung → Import läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
+  /* ---------- U3 · Rost nur für unsichere Messwerte, Befunde in eigener Kennzeichnung ---------- */
+  // Ein Take mit sicher gemessenen Befunden: F3 stabil 2400 Hz (gültig in 95 %), SHR max −12 dB,
+  // ein gehaltener Tonsprung. Nichts davon ist unsicher.
+  function befundTake(f3MinHz, aenderung) {
+    const stat = (med, extra) => Object.assign({ med, q1: med - 10, q3: med + 10, n: 400, share: 0.95 }, extra);
+    const s = { nFrames: 500, voicedShare: 0.9, validShare: 0.95, stableShare: 0.8, f0: stat(110, { note: 'A2' }),
+      F: [600, 1100, 2400, 3200, 4000].map(f => stat(f)), d34: stat(800), d34stable: { med: NaN, q1: NaN, q3: NaN, n: 0 }, d45: stat(800),
+      f3stable: stat(2400, { n: 380 }), sfr: stat(-20), shr: stat(-30, { max: -12 }), cpp: stat(30), h1h2: stat(1, { unsureShare: 0 }), h1h2c: stat(1),
+      rms: stat(-20, { max: -10 }), floorDb: -80, floorSource: 'calibration', snrDb: 60, tube: stat(17.5, { n: 100 }), tubeCm: 17.5, perVowel: {},
+      octaveCorrectedShare: 0, octaveAmbiguousShare: 0, slotUnsureShare: 0,
+      spruenge: { gehalten: 1, kante: 2, lambdaGehalten: 0.02, lambdaKante: 0.04, liste: [] } };
+    const t = { id: 'b-' + f3MinHz, code: 'B', label: 'Befund', createdAt: new Date(T0).toISOString(), durationS: 5, summary: s,
+      analysis: f3MinHz == null ? { kernelVersion: D.VERSION } : { kernelVersion: D.VERSION, gate: { f3MinHz } } };
+    if (aenderung) aenderung(t);
+    return t;
+  }
+  try {
+    const sb = chronikNeu(), CHR = sb.VARECHRONIK;
+    const liste = t => { const div = new El(); CHR.renderList(div, [t], {}, {}); const z = listenZellen(div.innerHTML); return { d34: z[4], f3: z[5], shr: z[7] }; };
+    const detail = t => { const div = new El(); CHR.renderDetail(div, t, null, {}, false, {}); return kacheln(div.innerHTML); };
+    const z = liste(befundTake(2500));
+    check('U3.7', 'Chronik-Liste: F3 unter dem Mindestwert und SHR über −15 dB als Befund (Gold), nicht in Rost; ΔF3–4 „–“ ohne Rost, wenn F3 der Grund ist',
+      /class="befund"/.test(z.f3) && !/rust/.test(z.f3) && /class="befund"/.test(z.shr) && !/rust/.test(z.shr) && !/rust/.test(z.d34), 'F3 ' + z.f3 + ' | SHR ' + z.shr + ' | ΔF3–4 ' + z.d34);
+    const z2200 = liste(befundTake(2200)), zOhne = liste(befundTake(null));
+    check('U3.8', 'F3-Schwelle aus dem Take: mit 2200 Hz gerechnet ist F3 2400 kein Befund; ohne gespeicherte Schwelle keine Markierung, aber benannt',
+      /class="befund"/.test(z.f3) && !/befund|rust/.test(z2200.f3) && !/befund|rust/.test(zOhne.f3) && /nicht gespeichert/.test(zOhne.f3), '2500: ' + z.f3 + ' | 2200: ' + z2200.f3 + ' | ohne: ' + zOhne.f3);
+    const k = detail(befundTake(2500)), kz = n => k.find(x => n.test(x.k)) || { klasse: '?', v: '?', vHtml: '' };
+    const shr = kz(/^SHR/), spr = kz(/gehalten/), d34 = kz(/ΔF3–4 stabil/);
+    check('U3.9', 'Detail: SHR, gehaltene Sprünge und „nicht gewertet, weil F3 unter dem Mindestwert“ als Befund, nicht unsicher; die Zahlen stehen da',
+      shr.klasse === 'befund' && spr.klasse === 'befund' && d34.klasse === 'befund' && !/rust/.test(d34.vHtml) && /2400/.test(d34.v) && /2500/.test(d34.v),
+      [shr, spr, d34].map(x => x.k + ' → class „stat ' + x.klasse + '“ „' + x.v + '“').join(' | '));
+    // Gegenprobe: was unsicher ist oder fehlt, bleibt Rost; was unauffällig ist, bleibt ohne Markierung.
+    const unsicher = detail(befundTake(2500, t => {
+      const s = t.summary; s.F[1].share = 0.3; s.floorSource = 'estimated'; s.f3stable.med = 2600; s.shr.max = -30; s.spruenge.gehalten = 0;
+    }));
+    const ku = n => unsicher.find(x => n.test(x.k)) || { klasse: '?', vHtml: '' };
+    check('U3.10', 'Gegenprobe: F2 nur in 30 % gültig, Boden geschätzt, keine Wertung ohne F3-Grund bleiben Rost; SHR −30 dB und 0 Sprünge unmarkiert',
+      ku(/^F2/).klasse === 'unsure' && ku(/Rauschboden/).klasse === 'unsure' && /rust/.test(ku(/ΔF3–4 stabil/).vHtml) && ku(/^SHR/).klasse === '' && ku(/gehalten/).klasse === '',
+      ['F2', 'Rauschboden', 'ΔF3–4 stabil', 'SHR', 'gehalten'].map(n => n + ': „' + ku(new RegExp(n)).klasse + '“').join(' | '));
+    // Die Kennzeichnung steht in style.css: Gold ohne Strich; Rost mit Strich nur für unsicher. Live verwendet dieselbe Klasse.
+    const css = quelle('style.css'), regel = sel => { const m = new RegExp('(^|[},\\s])' + sel.replace(/\./g, '\\.') + '\\s*[,{][^}]*}', 'm').exec(css); return m ? m[0] : ''; };
+    const rBef = regel('.befund'), rStat = regel('.stat.befund .v'), rUns = regel('.stat.unsure .v');
+    check('U3.11', 'style.css: eigene Klasse befund in Gold ohne Rost und ohne Strich; unsicher bleibt Rost gestrichelt; Live-Anzeige nutzt dieselbe Klasse',
+      /var\(--gold\)/.test(rBef) && !/rust|dashed/.test(rBef) && /var\(--gold\)/.test(rStat) && /var\(--rust\)/.test(rUns) && /dashed/.test(rUns) && /' befund'/.test(quelle('app.js')),
+      '„' + rBef.replace(/\s+/g, ' ') + '“ | „' + rUns.replace(/\s+/g, ' ') + '“');
+  } catch (e) { check('U3.7', 'Ablauf Befund-Kennzeichnung läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+  try {
+    // Gleich nach dem Take: F3-Mindestwert 2700, das Prüfsignal hat F3 2500 — keine Wertung, Befund statt Rost.
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 11 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.st().settings.f3MinHz = 2700;
+    p.kalibriert('cal-F3'); await p.mikrofon();
+    const T = await p.take();
+    const k = kacheln(p.el('take-result').innerHTML).find(x => /ΔF3–4 stabil/.test(x.k)) || { klasse: '?', v: '?' };
+    check('U3.12', 'Take-Ergebnis: keine Wertung, weil F3 unter dem Mindestwert 2700 Hz liegt, steht als Befund mit beiden Zahlen, nicht in Rost',
+      T.summary.d34stable.n === 0 && T.summary.f3stable.n > 0 && k.klasse === 'befund' && /2700/.test(k.v),
+      'f3stable ' + Math.round(T.summary.f3stable.med) + ' (n=' + T.summary.f3stable.n + ') | Kachel „stat ' + k.klasse + '“ „' + k.v + '“');
+    p.schliessen();
+  } catch (e) { check('U3.12', 'Ablauf Take-Ergebnis mit F3 unter dem Mindestwert läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
 };
