@@ -5,6 +5,9 @@
    A2: SHR und Grundton an Rändern, Tonwechseln und bei Hauch (analyseAt: Fensterprobe, Zwischenpegel) —
      A2a Ränder, A2b Tonwechsel, A2c Take mit Melodie, A2d Hauch, A2e Verdopplung bleibt sichtbar,
      A2f stehende Töne ohne Fehlmarke, A2g Vertrag der Felder.
+   A3: Formanten nach dem Teiltonabstand (analyseAt: teiltonPruefen) —
+     A3a ΔF3–4/ΔF4–5 über 250 Hz, A3b Slots über 375 Hz und Nummernrutsch, A3c Gipfelpaare, A3d unsicherer
+     Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -26,7 +29,8 @@ module.exports = async function (H) {
   function zufall(seed) { let s = seed >>> 0 || 1; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
   /* Stimmquelle mit F0-Verlauf fz(t), stetiger Phase und durchlaufenden Resonatoren (legato).
      art 'impuls': Impulse auf Bruchteile von Abtastwerten gesetzt; 'rosenberg': Rosenberg-Puls (Öffnung
-     40 %, Schluss 16 %), abgeleitet (Lippenabstrahlung). jit/shim: relative Streuung je Periode. */
+     40 %, Schluss 16 %), abgeleitet (Lippenabstrahlung). jit/shim: relative Streuung je Periode;
+     FB: Formanten und Bandbreiten [F, B] statt der Werte von v. */
   function stimme(fz, dur, v, o) {
     o = o || {};
     const n = Math.round(dur * SR), src = new Float64Array(n), rnd = zufall(o.seed || 7), jit = o.jit || 0, shim = o.shim || 0;
@@ -47,7 +51,7 @@ module.exports = async function (H) {
         t0 += (1 / fz(t0)) * (1 + jit * (2 * rnd() - 1));
       }
     }
-    let y = src; const [F, B] = VOK[v];
+    let y = src; const [F, B] = o.FB || VOK[v];   // o.FB: eigene Formanten [F, B] statt des Vokals
     for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
     let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
     for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
@@ -630,6 +634,194 @@ module.exports = async function (H) {
         check('A2g', 'Vertrag Fensterprobe: fensterPegelDb/fensterF0Lo/fensterF0Hi aus dem längsten Fenster; \'rand\' ⇔ Pegelspanne ab 12 dB; \'wechsel\' ⇔ Teilfenster (Hälften oder äußere 45 ms) unverträglich; f0Grund \'wechsel\' genau beim Mischwert, nie zusammen mit einer Korrektur; stimmlos leer',
           !fehler.length && z.rand > 0 && z.wechsel > 0 && z.mischwert > 0 && z.stimmlos > 0, R.length + ' Rahmen, ' + JSON.stringify(z) + (fehler.length ? ' — ' + fehler.length + ' Fehler: ' + fehler.slice(0, 4).join(' | ') : ''));
       }
+    }
+  }
+
+  /* ---------- A3: Formanten nach dem Teiltonabstand (analyseAt) ----------
+     Über 250 Hz Grundton sieht die LPC-Hüllkurve die Resonanzen nur an wenigen Teiltönen. Ein Gipfel rastet
+     auf einem Teilton ein oder entsteht zwischen ihnen, die Nummerierung rutscht, und alle Fenster und
+     Ordnungen sehen dieselben Teiltöne: Die Sweeps streuen nicht (Befunde N3, N6, N14). Wahrheit sind die
+     Formanten der Synthese. */
+  {
+    // Vokale nach dem Vokalmodell (wie Prüfsatz K2) und eine zweite Wahl (wie die Abnahmetabelle)
+    const VH = {
+      a: [[680, 1250, 2450, 3400, 4200], [80, 90, 120, 150, 200]], e: [[350, 2000, 2550, 3450, 4250], [60, 100, 130, 160, 200]],
+      i: [[270, 2150, 2750, 3500, 4300], [60, 100, 130, 160, 200]], o: [[380, 750, 2400, 3350, 4150], [70, 90, 120, 150, 200]],
+      u: [[300, 700, 2300, 3300, 4100], [60, 90, 120, 150, 200]]
+    };
+    const VB = {
+      a: [[700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200]], e: [[400, 1900, 2600, 3400, 4300], [60, 100, 130, 160, 200]],
+      i: [[300, 2200, 2900, 3500, 4300], [60, 100, 130, 160, 200]], o: [[450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200]],
+      u: [[320, 800, 2400, 3300, 4200], [60, 90, 120, 150, 200]]
+    };
+    const ds = x => D.resample(x, SR, TSR);
+    const fehler = (r, T, k) => Math.abs(r.F[k] - T[k]);
+    const bits = a => a.map(b => b ? 1 : 0).join('');
+
+    // Messsatz hohe Lage: 250–470 Hz, a/e/i/o/u, Impuls und Rosenberg, mit und ohne Vibrato, rauschfrei und 40 dB
+    const S = [];
+    {
+      let sd = 3000;
+      for (let f0 = 250; f0 <= 470; f0 += 20) for (const v of Object.keys(VH)) for (const art of ['impuls', 'rosenberg']) for (const vib of [false, true]) for (const snr of [null, 40]) {
+        const fz = vib ? vibrato(() => f0, 6, 50, f0) : () => f0;
+        let x = stimme(fz, 0.3, v, { art, FB: VH[v], seed: sd++ });
+        if (snr != null) x = mitRauschen(x, snr, sd + 7000);
+        const y = ds(x);
+        for (const t of [0.12, 0.2]) { const r = D.analyseAt(y, TSR, Math.round(t * TSR), {}); if (r.voiced) S.push({ r, T: VH[v][0], name: art + (vib ? '+Vibrato' : '') + (snr != null ? '+40 dB' : '') + ' /' + v + '/ ' + f0 + ' Hz' }); }
+      }
+    }
+
+    // A3a: ΔF3–4 und ΔF4–5 sind Differenzen zweier gezogener Lagen; über 250 Hz Teiltonabstand nicht gültig
+    {
+      let d34f = 0, d45f = 0, entsch = 0, entschFalsch = 0, ohneGrund = 0, unten34 = 0; const bsp = [], bspU = [];
+      for (const { r, T, name } of S) {
+        const e34 = Math.abs(r.d34 - (T[3] - T[2])), e45 = Math.abs(r.d45 - (T[4] - T[3])), hoch = r.teiltonHz > 250;
+        if (hoch && r.d34valid && e34 > 120) { d34f++; if (bsp.length < 3) bsp.push(name + ' ΔF3–4 ' + Math.round(r.d34) + ' statt ' + (T[3] - T[2])); }
+        if (hoch && r.d45valid && e45 > 120) { d45f++; if (bsp.length < 3) bsp.push(name + ' ΔF4–5 ' + Math.round(r.d45) + ' statt ' + (T[4] - T[3])); }
+        if (hoch && isFinite(r.d34) && !(r.d34Grund === 'teilton' && !r.d34valid)) ohneGrund++;
+        if (hoch && isFinite(r.d45) && !(r.d45Grund === 'teilton' && !r.d45valid)) ohneGrund++;
+        if (hoch && r.valid[2] && r.valid[3]) { entsch++; if (e34 > 120) entschFalsch++; }
+        // Vibrato-Täler des 250-Hz-Tons liegen unter der Grenze: dort gilt die Prüfung unter 250 Hz (offen)
+        if (!hoch && r.d34valid && e34 > 120) { unten34++; if (bspU.length < 2) bspU.push(name + ' (F0 ' + Math.round(r.f0) + ') ΔF3–4 ' + Math.round(r.d34) + ' statt ' + (T[3] - T[2])); }
+      }
+      check('A3a', 'Messsatz hohe Lage 250–470 Hz (a/e/i/o/u, Impuls/Rosenberg, mit/ohne Vibrato, rauschfrei/40 dB): über 250 Hz Teiltonabstand kein gültiges ΔF3–4 oder ΔF4–5 über 120 Hz falsch, Grund \'teilton\' (mind. 20 Rahmen mit gültigem F3 und F4, in denen das entscheidet)',
+        d34f === 0 && d45f === 0 && ohneGrund === 0 && entsch >= 20,
+        S.length + ' Rahmen; falsch-gültig ΔF3–4 ' + d34f + ', ΔF4–5 ' + d45f + '; ohne Grund ' + ohneGrund + '; entscheidend ' + entsch + ' (davon ' + entschFalsch + ' über 120 Hz daneben)' +
+        '; offen unter 250 Hz (Vibrato-Tal): ' + unten34 + (bspU.length ? ' ' + bspU.join(' | ') : '') + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
+    }
+
+    // A3b: über 375 Hz (weniger Teiltöne im Analyseband als die höchste LPC-Ordnung Koeffizienten hat) kein
+    // gültiger Slot; im ganzen Satz kein gültiger Slot über 300 Hz falsch (Nummernrutsch)
+    {
+      let obenGueltig = 0, obenGrund = 0, grob = 0, ueber130 = 0, halb = 0, gueltig = 0; const bsp = [], bspR = [];
+      for (const { r, T, name } of S) for (let k = 0; k < 5; k++) {
+        if (r.teiltonHz > 375 && isFinite(r.F[k])) { if (r.valid[k]) { obenGueltig++; if (bsp.length < 3) bsp.push(name + ' F' + (k + 1) + ' ' + Math.round(r.F[k]) + ' gültig'); } if (r.slotGrund[k] === 'teilton') obenGrund++; }
+        if (!r.valid[k]) continue;
+        gueltig++;
+        const e = fehler(r, T, k);
+        if (e > 300) { grob++; if (bsp.length < 3) bsp.push(name + ' F' + (k + 1) + ' ' + Math.round(r.F[k]) + ' statt ' + T[k]); }
+        if (e > 130) { ueber130++; if (bspR.length < 2) bspR.push(name + ' F' + (k + 1) + ' ' + Math.round(r.F[k]) + ' statt ' + T[k]); }
+        if (e > r.f0 / 2 + 30) halb++;
+      }
+      check('A3b', 'Messsatz hohe Lage: über 375 Hz Teiltonabstand kein gültiger Slot (Grund \'teilton\', mind. 500 Slots); kein gültiger Slot über 300 Hz falsch (Nummernrutsch)',
+        obenGueltig === 0 && obenGrund >= 500 && grob === 0,
+        'über 375 Hz gültig ' + obenGueltig + ', mit Grund teilton ' + obenGrund + '; gültige Slots ' + gueltig + ', über 300 Hz falsch ' + grob +
+        '; offen bis 375 Hz (Teilton bis F0/2 daneben, Abnahmetabelle f4 modal): über 130 Hz falsch ' + ueber130 + ', über F0/2+30 Hz ' + halb + (bspR.length ? ' z. B. ' + bspR.join(' | ') : '') + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
+    }
+
+    // A3c: Gipfelpaare näher als 1,5·F0. (1) Vertrag je Fenster nachgerechnet: Jeder Slot, dessen Nummer davon
+    // abhängt, dass beide Gipfel Resonanzen sind, ist nicht gültig. (2) Formanten gemeinsam um ±4/8 % verschoben
+    // (zweite Vokaltabelle, 320–370 Hz), damit sie verschieden zwischen den Teiltönen liegen: kein Nummernrutsch.
+    {
+      const V = [];
+      for (const v of Object.keys(VB)) for (const art of ['impuls', 'rosenberg']) for (let f0 = 320; f0 <= 370; f0 += 10) for (const s of [0.92, 0.96, 1, 1.04, 1.08]) {
+        const T = VB[v][0].map(x => x * s), y = ds(stimme(() => f0, 0.3, v, { art, FB: [T, VB[v][1]], seed: 9 }));
+        const c = Math.round(0.15 * TSR), r = D.analyseAt(y, TSR, c, {});
+        if (r.voiced) V.push({ r, T, y, c, name: art + ' /' + v + '/ ' + f0 + ' Hz ×' + s });
+      }
+      let entsch = 0, verletzt = 0, grob = 0, gueltig = 0; const bsp = [];
+      for (const { r, T, y, c, name } of V) {
+        for (let k = 0; k < 5; k++) if (r.valid[k]) { gueltig++; if (fehler(r, T, k) > 300) { grob++; if (bsp.length < 3) bsp.push(name + ' F' + (k + 1) + ' ' + Math.round(r.F[k]) + ' statt ' + Math.round(T[k])); } }
+        if (!(r.teiltonHz > 250)) continue;
+        const gesperrt = [false, false, false, false, false];
+        for (const L of D.WINDOWS) {
+          const n = Math.round(L * TSR), st = c - (n >> 1);
+          if (st < 0 || st + n > y.length) continue;
+          const w = D.analyseWindow(y.subarray(st, st + n), TSR, {}), fr = typeof D.teiltonFraglich === 'function' ? D.teiltonFraglich(w.peaks, r.teiltonHz) : null;
+          if (!fr) continue;
+          const mit = D.slotNumberUnsure(w.peaks, w.nOrders, fr), ohne = D.slotNumberUnsure(w.peaks, w.nOrders);
+          for (let k = 0; k < 5; k++) if (mit[k] && !ohne[k]) gesperrt[k] = true;
+        }
+        for (let k = 0; k < 5; k++) if (gesperrt[k] && isFinite(r.F[k])) { entsch++; if (r.valid[k]) { verletzt++; if (bsp.length < 3) bsp.push(name + ' F' + (k + 1) + ' gültig trotz Gipfelpaar'); } }
+      }
+      check('A3c', 'Gipfelpaare näher als 1,5·F0 (320–370 Hz, Formanten um ±4/8 % verschoben, a/e/i/o/u, Impuls/Rosenberg): jeder Slot, dessen Nummer an dem Paar hängt, ist ungültig (mind. 50 entscheidende Slots); kein gültiger Slot über 300 Hz falsch',
+        verletzt === 0 && entsch >= 50 && grob === 0,
+        V.length + ' Rahmen, entscheidend ' + entsch + ', trotzdem gültig ' + verletzt + ', gültige Slots ' + gueltig + ', über 300 Hz falsch ' + grob + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
+    }
+
+    // A3d: Ist der Grundton unsicher, gilt 2·F0 als Teiltonabstand. /i/ um 455–470 Hz mit Rauschen: YIN nimmt
+    // die Unteroktave, die Gegenprobe reißt; ohne diese Regel galt F1 um 510 statt 270–300 Hz als gültig.
+    {
+      let treffer = 0, gueltig = 0, vertrag = 0, sd = 600; const bsp = [];
+      for (const tab of [VH, VB]) for (const f0 of [455, 470]) for (const snr of [30, 40]) {
+        const y = ds(mitRauschen(stimme(() => f0, 0.4, 'i', { art: 'impuls', FB: tab.i, jit: 0.01, shim: 0.02, seed: sd++ }), snr, sd + 1000));
+        for (let t = 0.1; t <= 0.301; t += 0.05) {
+          const r = D.analyseAt(y, TSR, Math.round(t * TSR), {});
+          if (!r.voiced) continue;
+          if (!(r.teiltonHz === (r.f0Unsure ? 2 * r.f0 : r.f0))) vertrag++;
+          if (r.f0Unsure && Math.abs(r.f0 / (f0 / 2) - 1) < 0.06) {
+            treffer++;
+            const g = r.valid.filter(Boolean).length; gueltig += g;
+            if (g && bsp.length < 3) bsp.push('/i/ ' + f0 + ' Hz, F0 ' + r1(r.f0) + ' unsicher: F ' + r.F.map(Math.round).join('/') + ' gültig ' + bits(r.valid));
+          }
+        }
+      }
+      check('A3d', 'unsicherer Grundton auf der Unteroktave (/i/ 455–470 Hz, Rauschen 30/40 dB): Teiltonabstand 2·F0, kein Slot gültig (mind. 3 solche Rahmen); teiltonHz = F0 bzw. 2·F0 bei unsicherem Grundton',
+        treffer >= 3 && gueltig === 0 && vertrag === 0, treffer + ' Rahmen auf der Unteroktave, gültige Slots darin ' + gueltig + ', Vertrag verletzt ' + vertrag + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
+    }
+
+    // A3e: Takes durch analyseTake. Gehaltene hohe Töne (Zielton eines aufsteigenden Bruchs, 410–470 Hz):
+    // Zusammenfassung ohne falsche Formanten; Bruch 196 → 440 Hz: kein Rahmen am Zielton mit gültigem F1/F2.
+    {
+      const take = async (x) => (await H.A.analyseTake(x, SR, {}));
+      // Rosenberg-Puls mit Öffnungsquotient oq (Anstieg 2/3, Abfall 1/3), abgeleitet
+      function rosen(f0, F, B, oq, dur) {
+        const n = Math.round(dur * SR), T = SR / f0, Tp = oq * T * 2 / 3, Tn = oq * T / 3, u = new Float64Array(n);
+        for (let i = 0; i < n; i++) { const t = i % T; u[i] = t < Tp ? 0.5 * (1 - Math.cos(Math.PI * t / Tp)) : (t < Tp + Tn ? Math.cos(Math.PI * (t - Tp) / (2 * Tn)) : 0); }
+        let y = new Float64Array(n); for (let i = 1; i < n; i++) y[i] = u[i] - u[i - 1];
+        for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
+        let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+        for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+        return y;
+      }
+      const still = s => new Float64Array(Math.round(s * SR));
+      const fehl = [];
+      // /i/ 443 Hz, Rosenberg (Öffnung 0,7), 40 dB, mit Rauschen davor und danach (Befund N3)
+      const si = (await take(mitRauschen(H.concat([still(0.3), rosen(443, [280, 2150, 2750, 3500, 4300], [60, 100, 130, 160, 200], 0.7, 1.2), still(0.3)]), 40, 32))).summary;
+      if (!(si.F[1].n === 0 || Math.abs(si.F[1].med - 2150) <= 222)) fehl.push('/i/ 443: F2 ' + Math.round(si.F[1].med) + ' aus ' + si.F[1].n);
+      if (!(si.d34.n === 0 || Math.abs(si.d34.med - 750) <= 150)) fehl.push('/i/ 443: ΔF3–4 ' + Math.round(si.d34.med) + ' aus ' + si.d34.n);
+      // /u/ 440 Hz und /a/ 466 Hz, Impuls, 40 dB (Befund N14)
+      for (const [f0, v, T] of [[440, 'u', [300, 700, 2400, 3300, 4200]], [466, 'a', [680, 1250, 2500, 3300, 4200]]]) {
+        const s = (await take(mitRauschen(stimme(() => f0, 1.2, v, { art: 'impuls', FB: [T, VH[v][1]], seed: 40 + f0 }), 40, 41 + f0))).summary;
+        for (let k = 0; k < 5; k++) if (s.F[k].n > 0 && Math.abs(s.F[k].med - T[k]) > 130) fehl.push('/' + v + '/ ' + f0 + ': F' + (k + 1) + ' ' + Math.round(s.F[k].med) + ' aus ' + s.F[k].n + ' statt ' + T[k]);
+      }
+      // Aufsteigender Bruch /a/ 196 → 440 Hz (gehalten 0,45 s), 40 dB
+      const FA = [700, 1200, 2500, 3300, 4200], BA = [80, 90, 120, 150, 200];
+      const ser = (await take(mitRauschen(H.concat([still(0.3), D.synthVowel(196, FA, BA, 1.0, SR), D.synthVowel(440, FA, BA, 0.45, SR), still(0.3)]), 40, 51))).series;
+      let ziel = 0, zielGueltig = 0, tiefGueltig = 0;
+      for (let i = 0; i < ser.t.length; i++) {
+        if (ser.f0[i] > 420 && ser.f0[i] < 460) { ziel++; if (ser.valid[i] & 3) zielGueltig++; }
+        if (ser.f0[i] > 185 && ser.f0[i] < 207 && (ser.valid[i] & 3) === 3) tiefGueltig++;
+      }
+      if (zielGueltig) fehl.push('Bruch 196 → 440 Hz: ' + zielGueltig + ' Rahmen am Zielton mit gültigem F1/F2');
+      check('A3e', 'Takes: /i/ 443 Hz (Rosenberg, 40 dB) F2 und ΔF3–4 nicht gemessen oder richtig; /u/ 440 und /a/ 466 Hz kein falscher Formant in der Zusammenfassung; Bruch /a/ 196 → 440 Hz: am Zielton kein gültiges F1/F2, auf 196 Hz gültig',
+        !fehl.length && ziel >= 30 && tiefGueltig >= 50, 'Zielton ' + ziel + ' Rahmen, davon F1/F2 gültig ' + zielGueltig + ', 196 Hz F1/F2 gültig ' + tiefGueltig + '; /i/ 443: F2 n ' + si.F[1].n + ', ΔF3–4 n ' + si.d34.n + (fehl.length ? ' — ' + fehl.join(' | ') : ''));
+    }
+
+    // A3f: Gegenprobe und Vertrag. Unter 250 Hz Teiltonabstand ändert die Regel nichts: kein Grund 'teilton',
+    // ΔF3–4 gültig genau mit F3 und F4. teiltonFraglich direkt. Stimmlose Rahmen leer.
+    {
+      let n = 0, falsch = 0; const bsp = [];
+      for (const v of Object.keys(VH)) for (const art of ['impuls', 'rosenberg']) for (const f0 of [98, 147, 196, 247]) for (const vib of [false, true]) {
+        const y = ds(stimme(vib ? vibrato(() => f0, 6, 50, f0) : () => f0, 0.3, v, { art, FB: VH[v], seed: 70 + f0 }));
+        for (const t of [0.12, 0.2]) {
+          const r = D.analyseAt(y, TSR, Math.round(t * TSR), {});
+          if (!r.voiced || r.teiltonHz > 250) continue;
+          n++;
+          const e = [];
+          if (r.slotGrund.indexOf('teilton') >= 0) e.push('Grund teilton');
+          if (r.d34Grund || r.d45Grund) e.push('d34Grund/d45Grund');
+          if (r.d34valid !== (r.valid[2] && r.valid[3]) || r.d45valid !== (r.valid[3] && r.valid[4])) e.push('ΔF ungleich Slots');
+          if (e.length) { falsch++; if (bsp.length < 3) bsp.push('/' + v + '/ ' + f0 + ' ' + art + ': ' + e.join(', ')); }
+        }
+      }
+      const fr = (P, g) => { if (typeof D.teiltonFraglich !== 'function') return 'fehlt'; const x = D.teiltonFraglich(P, g); return x ? bits(x) : '-'; };
+      const u1 = fr([300, 700, 2400, 3300], 300), u2 = fr([701, 1355, 2437, 3131, 4185], 349), u3 = fr([669, 2280, 2705, 3382, 4327], 340);
+      const leer = D.analyseAt(ds(new Float64Array(Math.round(0.3 * SR))), TSR, Math.round(0.15 * TSR), {});
+      const leerOk = Number.isNaN(leer.teiltonHz) && leer.d34Grund === '' && leer.d45Grund === '';
+      check('A3f', 'Gegenprobe unter 250 Hz Teiltonabstand (a/e/i/o/u 98–247 Hz, Impuls/Rosenberg, Vibrato): kein Grund \'teilton\', ΔF3–4/ΔF4–5 gültig genau mit ihren Slots; teiltonFraglich: Paar unter 1,5·F0 fraglich, f4 modal nicht; Pause ohne Werte',
+        n >= 70 && falsch === 0 && u1 === '1100' && u2 === '-' && u3 === '01100' && leerOk,
+        n + ' Rahmen, abweichend ' + falsch + '; teiltonFraglich ' + [u1, u2, u3].join(' ') + '; Pause ' + (leerOk ? 'leer' : 'nicht leer') + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
     }
   }
 };

@@ -64,6 +64,17 @@ module.exports = async function (H) {
     for (const v of ['a', 'i', 'u', 'o', 'e', 'weit']) for (let f0 = 330; f0 <= 470; f0 += 10) {
       const f = frame(D.resample(synth(f0, v, 0.3), SR, TSR), Math.round(0.15 * TSR)); if (f) O.push(f);
     }
+    // Korpus B: stationäre Vokale mit einem breiten Formanten (F2 oder F3 mit 600 Hz Bandbreite, etwa bei
+    // Nasalierung), 98–247 Hz. Die Ordnungen legen den breiten Gipfel verschieden (Streuung 130–195 Hz),
+    // die Fenster sind sich einig. Seit der Rechenkern über 375 Hz Grundton keinen Slot mehr gelten lässt
+    // und darunter Gipfelpaare enger als 1,5·F0 sperrt (Teiltonabstand), entscheidet die Ordnungsstreuung
+    // in Korpus O kaum noch (1 Slot statt mindestens 3); Korpus B trägt die Prüfung. Eigenschaft und
+    // Mindestzahl sind unverändert.
+    const B = [];
+    for (const v of ['a', 'u', 'weit']) for (const kw of [1, 2]) for (const f0 of [98, 123, 147, 175, 196, 220, 247]) {
+      const bw = VOW[v][1].slice(); bw[kw] = 600;
+      const f = frame(D.resample(D.synthVowel(f0, VOW[v][0], bw, 0.3, SR), SR, TSR), Math.round(0.15 * TSR)); if (f) B.push(f);
+    }
     // „Rest gültig“: alle übrigen Bedingungen der Gültigkeit erfüllt — dann entscheidet die geprüfte Regel.
     const rest = (r, k) => isFinite(r.F[k]) && r.nWin[k] >= 3 && r.nOrders[k] >= 2 && !r.slotUnsure[k];
     function tally(frames, decisive, wrong) {
@@ -80,8 +91,8 @@ module.exports = async function (H) {
     check('P1a', 'Vokalwechsel: kein Slot mit Fenstersweep-Streuung >= 130 Hz gilt als gueltig (mind. 10 entscheidende Slots)',
       w.dec >= 10 && w.bad === 0, 'entscheidend ' + w.dec + ', trotzdem gueltig ' + w.bad + (w.ex.length ? ': ' + w.ex.join('; ') : ''));
 
-    const o = tally(O.concat(W), (r, k) => rest(r, k) && r.sdWin[k] < SPREAD_MAX && r.sdOrder[k] >= SPREAD_MAX, (r, k) => !(r.sdOrder[k] < SPREAD_MAX));
-    check('P1b', 'hohe Lage 330-470 Hz und Vokalwechsel: kein Slot mit Ordnungsstreuung >= 130 Hz gilt als gueltig (mind. 3 entscheidende Slots)',
+    const o = tally(O.concat(W, B), (r, k) => rest(r, k) && r.sdWin[k] < SPREAD_MAX && r.sdOrder[k] >= SPREAD_MAX, (r, k) => !(r.sdOrder[k] < SPREAD_MAX));
+    check('P1b', 'hohe Lage 330-470 Hz, Vokalwechsel und breite Formanten (98-247 Hz): kein Slot mit Ordnungsstreuung >= 130 Hz gilt als gueltig (mind. 3 entscheidende Slots)',
       o.dec >= 3 && o.bad === 0, 'entscheidend ' + o.dec + ', trotzdem gueltig ' + o.bad + (o.ex.length ? ': ' + o.ex.join('; ') : ''));
 
     // Die Grenze selbst: eine Streuung knapp über 130 Hz ist ebenso ungültig wie eine grobe.

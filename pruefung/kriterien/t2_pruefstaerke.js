@@ -366,7 +366,12 @@ module.exports = async function (H) {
   {
     // Sollpfade gegen eine echte Auswertung: ein Pfad, den analyseTake nicht liefert, ergäbe in
     // der CSV still dauerhaft −99 für einen gemessenen Wert.
-    const sum = takeZwei.summary, ser = takeZwei.series, n = ser.t.length, fehlt = [];
+    // Eigener Take mit einem Ton (G3): Der Take mit G3 und D4 hat kein Bestsegment mehr, seit ΔF3–4 über
+    // 250 Hz Grundton nicht gültig ist (Teiltonabstand, dsp.js) — der stabile /a/-Lauf über beide Töne ist
+    // nur zur Hälfte gewertet. Geprüft wird dasselbe: alle Sollpfade und ein Bestsegment.
+    const sil = noise(Math.round(0.4 * SR), 1e-3, 11);
+    const takeEins = await A.analyseTake(concat([sil, D.synthVowel(196, CASES[0].F, BW5, 1.5, SR), sil]), SR, {});
+    const sum = takeEins.summary, ser = takeEins.series, n = ser.t.length, fehlt = [];
     for (const [key, path] of TAKE_SOLL) if (path.indexOf('summary.') === 0 && !resolvePath({ summary: sum }, path).found) fehlt.push(key + '←' + path);
     for (const [name, kind, src] of FRAME_SOLL) {
       const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : kind === 'slotgrund' ? 'slotVerschmolzen' : 'cls';

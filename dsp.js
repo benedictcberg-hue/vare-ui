@@ -396,7 +396,7 @@
     }
     if (refIdx >= 0) for (var r = 0; r < per[refIdx].length; r++) refF.push(per[refIdx][r].f);
     return { F: F, sdOrder: sdOrder, nOrders: nOrders, BW: bwSlot, bwArtifact: bwArt, merged: merged,
-      nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN,
+      nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN, peaks: refF,
       slotUnsure: slotNumberUnsure(refF, nOrders), slotMerged: slotMergeUnsure(refF, nOrders, bwMax, fremd), drops: drops };
   }
 
@@ -439,10 +439,11 @@
      P: Gipfelfrequenzen der Referenzordnung (aufsteigend), nOrd: Zahl der Ordnungen je Slot.
      Jede Lesart: slot[k] = Index des Gipfels, der als F(k+1) gelesen wird (−1: keiner); use = die
      Gipfel, die als Resonanz zählen; fehlt = Stelle in use, vor der eine Resonanz fehlt (use.length:
-     über dem obersten; −1: keine fehlt). */
-  function deutungen(P, nOrd) {
+     über dem obersten; −1: keine fehlt). fraglich (optional): Gipfel, die aus einem anderen Grund
+     Scheingipfel sein können (teiltonFraglich); sie dürfen wie Ein-Ordnungs-Gipfel entfallen. */
+  function deutungen(P, nOrd, fraglich) {
     var n = Math.min(5, P.length), frei = [], deut = [], i;
-    for (i = 0; i < n; i++) if (!(nOrd[i] >= 2)) frei.push(i);
+    for (i = 0; i < n; i++) if (!(nOrd[i] >= 2) || (fraglich && fraglich[i])) frei.push(i);
     for (var mask = 0; mask < (1 << frei.length); mask++) {
       var use = [];
       for (i = 0; i < n; i++) { var u = frei.indexOf(i); if (u < 0 || !(mask & (1 << u))) use.push(i); }
@@ -513,12 +514,71 @@
   // falsch), F1–F4 unverändert; Prüfsatz K2 (sauber, F6, Rauschen, Rosenberg): unverändert. Erwogen:
   // nur sperren, wenn ein Fenster den Wert ± 130 Hz unter anderer Nummer führt — 15 F5 weniger (13
   // falsch), lässt aber F5 3454 statt 4200 Hz durch (dort liegt der Gipfel 154 Hz daneben).
-  function slotNumberUnsure(P, nOrd) {
-    var n = Math.min(5, P.length), uns = [false, false, false, false, false], deut = deutungen(P, nOrd), i, k;
+  function slotNumberUnsure(P, nOrd, fraglich) {
+    var n = Math.min(5, P.length), uns = [false, false, false, false, false], deut = deutungen(P, nOrd, fraglich), i, k;
     if (!deut.length) return [true, true, true, true, true];
     for (k = 0; k < n; k++) for (i = 0; i < deut.length; i++) if (deut[i].slot[k] !== k) uns[k] = true;
     for (k = n; k < 5; k++) for (i = 0; i < deut.length; i++) if (deut[i].slot[k] >= 0) uns[k] = true;
     return uns;
+  }
+
+  /* ---------- Teiltonabstand: wo die Hüllkurve nicht abgetastet ist ---------- */
+
+  /* Die LPC-Hüllkurve sieht die Resonanzen nur an den Teiltönen k·g (g = Teiltonabstand = F0). Ist eine
+     Resonanz schmaler als g (gesungen F1 40–80, F2 60–120, F3 100–200 Hz, physik.md 2.4), sitzt ihr Gipfel
+     auf dem nächsten Teilton, bis g/2 neben dem Formanten, mit dem Gefälle der Quelle auch weiter. Alle
+     Fenster und Ordnungen sehen dieselben Teiltöne, die Sweeps streuen also nicht. Gemessen auf Vokalen,
+     deren Formanten gemeinsam um bis ±8 % verschoben sind (Impuls- und Rosenberg-Quelle, rauschfrei,
+     zwei Vokaltabellen, je Teiltonabstand 450 Slots), gültige Slots über 130 Hz falsch: 220 Hz 0,
+     247 Hz 5, 262 Hz 14, 300 Hz 22, 349 Hz 29, 400 Hz 86, 470 Hz 281; ab 320 Hz rutscht die Nummer
+     (Fehler bis 1700 Hz). Daraus drei Grenzen:
+     - TEILTON_DIFF_HZ: ΔF3–4 und ΔF4–5 sind Differenzen zweier gezogener Lagen und können um bis zu g
+       falsch sein. Ab 250 Hz liegt schon g/2 an der Gültigkeitsgrenze von 130 Hz. Gemessen gültige
+       ΔF3–4 über 120 Hz falsch: 262 Hz 8 von 154, 300 Hz 11 von 138, 349 Hz 30 von 100. Darüber ist
+       ΔF3–4 nicht gültig (d34Grund 'teilton').
+     - TEILTON_SLOT_HZ = 6000 Hz / 16: Darüber liegen im Analyseband weniger Teiltöne, als die höchste
+       Ordnung des Sweeps Koeffizienten hat. Das Modell ist unterbestimmt und legt Gipfel zwischen die
+       Teiltöne (Befund N3: Nummer rutscht, F2 931 statt 1900 Hz gültig). Zugleich liegt F1 der
+       geschlossenen Vokale (270–320 Hz) unter dem ersten Teilton, und kein Teilton begrenzt ihn nach
+       unten (gemessen /u/ 440 Hz: F1 442 statt 300 Hz gültig). Darüber ist kein Slot gültig (slotGrund
+       'teilton').
+     - TEILTON_PAAR: Zwei Gipfel näher als 1,5·g liegen auf benachbarten Teiltönen. Kein Teilton
+       dazwischen belegt ein Tal zwischen zwei Resonanzen, einer von beiden kann vom Modell stammen. Die
+       Lesarten dürfen ihn auslassen wie einen Gipfel, den nur eine Ordnung sieht (gemessen /o/ 340 Hz:
+       F1/F2 zu einem Gipfel verschmolzen, F3 in zwei Gipfel geteilt, F2 2363 statt 816 Hz gültig).
+     Ist der Grundton unsicher, gilt 2·F0 als Teiltonabstand: Der häufigste Fehler ist die Unteroktave
+     (/i/ 470 Hz mit Rauschen: F0 235 Hz unsicher, F1 511 statt 300 Hz gültig).
+     Wirkung auf den Messsatz 250–470 Hz (a/e/i/o/u, Impuls/Rosenberg, mit/ohne Vibrato, rauschfrei/40 dB,
+     3680 Rahmen): gültige ΔF3–4 über 120 Hz falsch 271 → 0, gültige Slots über 130 Hz falsch 1442 → 52,
+     gültige Slots 9663 → 3422. Bewusst offen: Zwischen 250 und 375 Hz bleibt ein Slot gültig, dessen Gipfel
+     bis etwa g/2 neben dem Formanten auf einem Teilton sitzt (52 der 3422, bis 272 Hz daneben). Die
+     Abnahmetabelle (f4 modal, 349 Hz) verlangt dort alle fünf Formanten gültig, F4 liegt dabei 169 Hz
+     daneben. Geprüft und verworfen: Gipfel nur auf einem dominierenden Teilton (auch mit 6 dB Reserve noch
+     falsch-gültige Slots, 90 % der richtigen verloren); Gipfel breiter als 2–2,5·g als fraglich (fängt
+     ein Plateau zwischen F1 und F2 bei /e/ 370 Hz, kostet aber ein Zehntel der richtigen Slots und bei
+     2·g ein richtiges F3 bei 252 Hz). Den Rahmen kennzeichnen sparseHarmonics und harmonicPullHz. */
+  var TEILTON_DIFF_HZ = 250, TEILTON_SLOT_HZ = 375, TEILTON_PAAR = 1.5;
+  // Gipfel P (aufsteigend), die mit einem Nachbarn näher als TEILTON_PAAR·g liegen; null, wenn keiner.
+  function teiltonFraglich(P, g) {
+    var n = Math.min(5, P.length), fr = [], q, any = false;
+    for (q = 0; q < n; q++) fr.push(false);
+    for (q = 0; q + 1 < n; q++) if (P[q + 1] - P[q] < TEILTON_PAAR * g) { fr[q] = true; fr[q + 1] = true; any = true; }
+    return any ? fr : null;
+  }
+  // Gültigkeit nach dem Teiltonabstand g; perWin: Ergebnisse von analyseWindow je Fenster.
+  function teiltonPruefen(out, perWin, g) {
+    var i, k;
+    if (g > TEILTON_DIFF_HZ) for (i = 0; i < perWin.length; i++) {
+      var fr = teiltonFraglich(perWin[i].peaks, g);
+      if (!fr) continue;
+      var un = slotNumberUnsure(perWin[i].peaks, perWin[i].nOrders, fr);
+      for (k = 0; k < 5; k++) if (un[k] && !out.slotUnsure[k]) { out.slotUnsure[k] = true; out.slotGrund[k] = 'teilton'; }
+    }
+    if (g > TEILTON_SLOT_HZ) for (k = 0; k < 5; k++) if (isFinite(out.F[k]) && !out.slotUnsure[k]) { out.slotUnsure[k] = true; out.slotGrund[k] = 'teilton'; }
+    for (k = 0; k < 5; k++) if (out.slotUnsure[k]) out.valid[k] = false;
+    var diff = g > TEILTON_DIFF_HZ;
+    out.d34valid = out.valid[2] && out.valid[3] && !diff; out.d45valid = out.valid[3] && out.valid[4] && !diff;
+    out.d34Grund = diff && isFinite(out.d34) ? 'teilton' : ''; out.d45Grund = diff && isFinite(out.d45) ? 'teilton' : '';
   }
 
   /* ---------- F0: YIN mit kumulativer mittlerer Normierung ---------- */
@@ -1126,7 +1186,7 @@
       nOrders: [0, 0, 0, 0, 0], nWin: [0, 0, 0, 0, 0], valid: [false, false, false, false, false], merged: [false, false, false, false, false],
       slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
-      d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
+      d34: NaN, d45: NaN, d34valid: false, d45valid: false, d34Grund: '', d45Grund: '', teiltonHz: NaN, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, shrBoden: NaN,
       fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
@@ -1245,6 +1305,9 @@
     // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
     out.harmonicPullHz = f0 / 2;
     out.sparseHarmonics = f0 > 250;
+    // Erst jetzt ist der Grundton endgültig: Gültigkeit nach dem Teiltonabstand (teiltonPruefen)
+    out.teiltonHz = out.f0Unsure ? 2 * f0 : f0;
+    teiltonPruefen(out, perWin, out.teiltonHz);
     // SHR-Raster F0 oder 2·F0 aus eigenen Belegen (shr); ein unsicherer Grundton macht auch SHR unsicher
     var sh = shr(spec, f0, main.seg, sr, opts.fmax || 500);
     out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm; out.shrZweitpuls = sh.zweitpuls; out.shrBoden = sh.boden;
@@ -1731,7 +1794,7 @@
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
-    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
+    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, teiltonFraglich: teiltonFraglich, TEILTON_DIFF_HZ: TEILTON_DIFF_HZ, TEILTON_SLOT_HZ: TEILTON_SLOT_HZ, TEILTON_PAAR: TEILTON_PAAR, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
     SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG,
     shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, fensterProbe: fensterProbe, fensterMischwert: fensterMischwert,
     FENSTER_BLOCK_S: FENSTER_BLOCK_S, FENSTER_RAND_DB: FENSTER_RAND_DB, FENSTER_KANTE_S: FENSTER_KANTE_S, FENSTER_TON_HT: FENSTER_TON_HT, FENSTER_F0_HT: FENSTER_F0_HT, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
