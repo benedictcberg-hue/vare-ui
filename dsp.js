@@ -25,10 +25,11 @@
      formt der Filter die Hüllkurve, nicht das Ansatzrohr: die Preemphase hebt Rauschen an, der Filter
      senkt es wieder, dazwischen entsteht bei 4,9–5,2 kHz ein Scheingipfel. F5 liegt beim Bariton bei
      3,9–4,3 kHz (spec_v16). Gemessen auf dem Prüfsatz K2 (Vokale a/e/i/o/u, 98–247 Hz, mit F6, mit
-     Rauschen, mit Rosenberg-Quelle), falsch-gültige Slots:
-     - nur diese Grenze, Rauschteil: ohne Grenze 1349, mit 5000 Hz 703, mit 4800 Hz 692;
-     - mit allen Regeln dieses Kerns, ganzer Satz: ohne Grenze 63, mit 5000 Hz 0, mit 4800 Hz 0.
-     4600 Hz bringt nichts mehr und kostet gültige F5. */
+     Rauschen, mit Rosenberg-Quelle), falsch-gültige Slots im Rauschteil (Rahmen alle 20 ms):
+     - nur diese Grenze, sonst alter Kern: ohne Grenze 1206, mit 5000 Hz 764, mit 4800 Hz 780;
+     - mit allen Regeln dieses Kerns: ohne Grenze 19 (dazu tiefe enge Cluster mit Rauschen 115),
+       mit 5000 Hz 0, mit 4800 Hz 0. 4800 und 5000 Hz sind gleichwertig; 4800 Hz hält Abstand zur
+       Filterflanke. 4600 Hz kostet gültige F5, wenn F6 im Band liegt (710 statt 728 von 780). */
   var F_PEAK_MAX_HZ = 4800;
   /* Grenzen je Slot F1…F6 für die Nummerierungsprüfung (deutungen). Bewusst weit: sie schließen nur
      Lesarten aus, die es bei einer Männerstimme nicht gibt, sie unterscheiden keine Vokale.
@@ -38,11 +39,19 @@
        Gipfel kann nicht F1 sein“: unter 550 Hz ist er F1. Darüber ist er nur dann sicher F1, wenn die
        Gipfel darüber nicht als F3, F4 … gelesen werden können (bei /a/ steht F2 um 1250 Hz, und das
        kann kein F3 sein).
-     - F3 1700–3500 Hz, F4 2600–4500 Hz, F5 ab 3000 Hz: der engste Fall der Abnahmetabelle (Cluster eng,
-       F4 2800, F5 3150 Hz) muss zulässig bleiben.
+     - F3 1600–3500 Hz, F4 1900–4500 Hz: enge Cluster unterhalb des Sängerformantbands kommen beim
+       Bariton vor (physik.md §4, „Falle“: F3 bis hinab um 1700 Hz, ΔF3–4 um 500 Hz; Abnahmetabelle:
+       enger Fall 350 Hz). Die Grenzen liegen um die Messunsicherheit (~100 Hz) darunter. Mit F3 ab
+       1700 und F4 ab 2600 Hz galt ein solches Cluster als unmöglich: ohne zulässige Lesart waren alle
+       fünf Slots ungültig, auch F1 und F2 (sauber, F3 1700–2200, ΔF3–4 300–450 Hz: 663 von 1404
+       Rahmen mit gültigem ΔF3–4, jetzt 1235). Mit Rauschen war die richtige Lesart „F1 fehlt“
+       ausgeschlossen, F3 stand gültig im F2-Slot. Preis: Ist F5 nicht zu sehen, kann der dritte
+       Gipfel auch F4 sein; F3 gilt dann als unsicher, bei /e/ (F2 2000, F3 2550 Hz) auch F2
+       (Rauschteil des Prüfsatzes, Impulsquelle: gültige F3 1036 → 72, F2 1114 → 820).
+     - F5 ab 3000 Hz: der engste Fall der Abnahmetabelle (Cluster eng, F5 3150 Hz) bleibt zulässig.
      - F6 ab 4450 Hz: 11·c/(4·L) für ein Rohr bis 21,6 cm. F5 bei 4300 Hz (Abnahmetabelle /i/ und
        Cluster weit) darf nicht als F6 gelesen werden. */
-  var SLOT_LO = [0, 550, 1700, 2600, 3000, 4450];
+  var SLOT_LO = [0, 550, 1600, 1900, 3000, 4450];
   var SLOT_HI = [1100, 2800, 3500, 4500, F_PEAK_MAX_HZ, Infinity];
   /* Ein Formant ist nur gemessen, wenn die Hüllkurve oberhalb seines Gipfels bis zur Obergrenze um
      mindestens DROP_MIN_DB unter seinen Pegel fällt. Ohne Rauschen fällt sie hinter dem obersten
@@ -447,12 +456,17 @@
      einem sein. Gemessen bei /u/ 196 Hz mit Rauschen: F1 300 und F2 700 Hz verschmelzen zu einem Gipfel
      bei 440–460 Hz, F1 gilt als gültig und liegt 150 Hz daneben. Bei F5 4100 / F6 4400 Hz (Rosenberg-
      Quelle, 247 Hz) steht der gemeinsame Gipfel 140 Hz über F5. Drei Anzeichen, je Fenster:
-     - Eine zulässige Lesart lässt neben dem Gipfel eine Resonanz fehlen (auch über dem obersten), und
+     - Eine zulässige Lesart lässt neben dem Gipfel eine Resonanz fehlen (auch über dem obersten), die
+       fehlende Resonanz kann nach den Slotgrenzen höchstens SLOT_TOL_HZ von ihm entfernt liegen, und
        der Gipfel ist in irgendeiner Ordnung breiter als MERGED_BW_HZ. Gesungene Bandbreiten liegen bei
-       F1 40–80, F2 60–120, F3 100–200 Hz (physik.md 2.4).
+       F1 40–80, F2 60–120, F3 100–200 Hz (physik.md 2.4). Ohne die Entfernungsbedingung galt F2 eines
+       /o/ (770 Hz) als verschmolzen, sobald die Lesart „F3 fehlt“ zulässig war, obwohl F3 nicht unter
+       SLOT_LO[2] liegen kann; die Breite kam von Ordnung 12 (Live-Pfad, /o/ 110 Hz, Rauschen 60 dB).
      - Eine andere Ordnung findet einen zusätzlichen Gipfel innerhalb SLOT_TOL_HZ: sie trennt, was die
-       Referenz zusammenfasst. Liegt er weiter weg, fehlt der Referenz eine Resonanz: alles darüber ist
-       unsicher.
+       Referenz zusammenfasst. Dann stehen auch alle Gipfel darüber eine Stufe zu tief, sie sind
+       ebenso unsicher (gemessen: /o/-artiges F1 380 / F2 750 mit tiefem engem Cluster und Rauschen
+       40 dB, F1 fehlt der Referenz, eine andere Ordnung sieht ihn bei 450 Hz; F3 stand gültig im
+       F2-Slot). Liegt er weiter weg, fehlt der Referenz eine Resonanz: alles darüber ist unsicher.
      - Ein Nachbargipfel innerhalb SLOT_TOL_HZ wird nur von einer Ordnung gesehen: die anderen Ordnungen
        haben ihn in diesen Gipfel gezogen.
      bwMax: größte Bandbreite je Slot über alle Ordnungen; fremd: Frequenzen der Gipfel anderer
@@ -464,12 +478,15 @@
       if (d.fehlt < 0) continue;
       if (d.fehlt > 0) nb.push(d.use[d.fehlt - 1]);
       if (d.fehlt < d.use.length) nb.push(d.use[d.fehlt]);
-      for (k = 0; k < nb.length; k++) if (bwMax[nb[k]] > MERGED_BW_HZ) uns[nb[k]] = true;
+      for (k = 0; k < nb.length; k++) {
+        var X = P[nb[k]], nah2 = X + SLOT_TOL_HZ >= SLOT_LO[d.fehlt] && X - SLOT_TOL_HZ <= SLOT_HI[d.fehlt];
+        if (nah2 && bwMax[nb[k]] > MERGED_BW_HZ) uns[nb[k]] = true;
+      }
     }
     for (i = 0; i < (fremd || []).length; i++) {
       var g = fremd[i], nah = -1, dmin = Infinity;
       for (k = 0; k < n; k++) if (Math.abs(P[k] - g) < dmin) { dmin = Math.abs(P[k] - g); nah = k; }
-      if (nah >= 0 && dmin <= SLOT_TOL_HZ) uns[nah] = true;
+      if (nah >= 0 && dmin <= SLOT_TOL_HZ) { for (k = nah; k < n; k++) uns[k] = true; }
       else for (k = 0; k < n; k++) if (P[k] > g) uns[k] = true;
     }
     for (i = 0; i < n; i++) if (!(nOrd[i] >= 2)) {

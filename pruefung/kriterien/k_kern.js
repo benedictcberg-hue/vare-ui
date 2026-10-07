@@ -313,9 +313,10 @@ module.exports = async function (H) {
       return y;
     }
     const eff = x => { let p = 0; for (let i = 0; i < x.length; i++) p += x[i] * x[i]; return Math.sqrt(p / x.length); };
-    // c: { v, f0, f6?, ros?, art?: 'weiss'|'rosa', snr?, seed? }. SNR im Analyseband (nach der Wandlung) gemessen.
+    // c: { v, f0, f6?, ros?, art?: 'weiss'|'rosa', snr?, seed?, F?, B? }. SNR im Analyseband (nach der Wandlung)
+    // gemessen. F/B ersetzen den Vokal (Cluster-Fälle in K2d).
     function signal(c) {
-      const [F, B] = V2[c.v], FF = c.f6 ? F.concat([c.f6]) : F, BB = c.f6 ? B.concat([250]) : B;
+      const [F, B] = c.F ? [c.F, c.B] : V2[c.v], FF = c.f6 ? F.concat([c.f6]) : F, BB = c.f6 ? B.concat([250]) : B;
       const x48 = c.ros ? rosenberg(c.f0, FF, BB, 0.4) : D.synthVowel(c.f0, FF, BB, 0.4, SR, { gain: 0.3 });
       const x = D.resample(x48, SR, TSR);
       if (c.snr == null) return x;
@@ -324,16 +325,17 @@ module.exports = async function (H) {
       for (let i = 0; i < x.length; i++) y[i] = x[i] + g * nz[i];
       return y;
     }
-    const name = c => '/' + c.v + '/ ' + c.f0 + (c.f6 ? ' F6 ' + c.f6 : '') + (c.ros ? ' Rosenberg' : '') + (c.snr != null ? ' ' + c.art + ' ' + c.snr + ' dB' : '');
+    const name = c => (c.F ? c.F.join('/') : '/' + c.v + '/') + ' ' + c.f0 + (c.f6 ? ' F6 ' + c.f6 : '') + (c.ros ? ' Rosenberg' : '') + (c.snr != null ? ' ' + c.art + ' ' + c.snr + ' dB' : '');
     // Auswertung je Teilsatz: falsch-gültige Slots (> 130 Hz), davon Nummernvertauschungen (Wert liegt bei
     // einem Nachbarformanten oder F6), F1-Slot mit F2, falsch-gültige ΔF3–4 (> 120 Hz)
     function auswerten(faelle) {
-      const z = { n: 0, gueltig: [0, 0, 0, 0, 0], falsch: 0, falsch345: 0, nummer: 0, f1f2: 0, d34: 0, d34falsch: 0, alle: 0, bsp: [] };
+      const z = { n: 0, gueltig: [0, 0, 0, 0, 0], falsch: 0, falsch345: 0, nummer: 0, f1f2: 0, d34: 0, d34falsch: 0, alle: 0, bsp: [], nV: {}, f2V: {} };
       for (const c of faelle) {
-        const x = signal(c), T = V2[c.v][0];
+        const x = signal(c), T = c.F || V2[c.v][0];
         for (let i = 900; i + 900 <= x.length; i += 240) {
           const r = D.analyseAt(x, TSR, i, {}); if (!r.voiced) continue;
           z.n++; if (r.valid.every(Boolean)) z.alle++;
+          z.nV[c.v] = (z.nV[c.v] || 0) + 1; if (r.valid[1]) z.f2V[c.v] = (z.f2V[c.v] || 0) + 1;
           for (let k = 0; k < 5; k++) {
             if (!r.valid[k]) continue;
             z.gueltig[k]++;
@@ -377,8 +379,10 @@ module.exports = async function (H) {
     // Lesarten direkt: der unterste Gipfel kann F2 sein, wenn alle Gipfel darüber auch eine Stufe höher passen
     const lu = (P, n) => typeof D.slotNumberUnsure === 'function' ? D.slotNumberUnsure(P, n || P.map(() => 3)).map(v => v ? 1 : 0).join('') : 'fehlt';
     const l1 = lu([794, 2522, 3299, 4432]), l2 = lu([380, 750, 2400, 3350, 4150]), l3 = lu([680, 1250, 2450, 3400]), l4 = lu([738, 1174, 2553, 3933, 4432], [3, 3, 3, 3, 1]);
-    check('K2a', 'Lesarten: unterster Gipfel 794 Hz über F3-tauglichen Gipfeln → alles unsicher; /o/ vollständig → sicher; /a/ ohne F5 → nur F4 unsicher; F6 nur in einer Ordnung → F4/F5 unsicher',
-      l1 === '11110' && l2 === '00000' && l3 === '00010' && l4 === '00011', [l1, l2, l3, l4].join(' '));
+    // l3/l4: Seit F4 ab 1900 Hz zulässig ist (tiefe enge Cluster, K2d), kann der dritte Gipfel ohne sichtbares
+    // F5 auch F4 sein; F3 ist dann ebenfalls unsicher.
+    check('K2a', 'Lesarten: unterster Gipfel 794 Hz über F3-tauglichen Gipfeln → alles unsicher; /o/ vollständig → sicher; /a/ ohne F5 → F3/F4 unsicher; F6 nur in einer Ordnung → F3–F5 unsicher',
+      l1 === '11110' && l2 === '00000' && l3 === '00110' && l4 === '00111', [l1, l2, l3, l4].join(' '));
     // Gegenproben: saubere Vokale verlieren nichts
     check('K2a', 'Gegenprobe: saubere Vokale a/e/i/o/u, 98–247 Hz: alle fünf Formanten in jedem Rahmen gültig', E.sauber.alle === E.sauber.n && E.sauber.n > 0, E.sauber.alle + '/' + E.sauber.n);
     check('K2a', 'Gegenprobe: mit F6 4400–4800 Hz bleibt ΔF3–4 in mindestens 90 % der Rahmen gültig', E.f6.d34 >= 0.9 * E.f6.n, E.f6.d34 + '/' + E.f6.n);
@@ -414,5 +418,32 @@ module.exports = async function (H) {
     const teile = ['sauber', 'f6', 'f6ros', 'rauschen', 'rauschenRos'], fs = teile.reduce((a, k) => a + E[k].falsch, 0), fd = teile.reduce((a, k) => a + E[k].d34falsch, 0);
     check('K2c', 'Prüfsatz K2 ganz (rauschfrei mit F6 4400–4800 Hz; weißes/rosa Rauschen 30/40/50 dB; Rosenberg-Quelle): kein gültiger Slot über 130 Hz, kein gültiges ΔF3–4 über 120 Hz falsch',
       fs === 0 && fd === 0, 'Slots ' + fs + ', ΔF3–4 ' + fd + ' falsch in ' + teile.reduce((a, k) => a + E[k].n, 0) + ' Rahmen; gültige ΔF3–4 ' + teile.map(k => k + ' ' + E[k].d34 + '/' + E[k].n).join(', '));
+
+    // K2d: tiefe enge Cluster unterhalb des Sängerformantbands (physik.md §4): F3 1700–2400 Hz, ΔF3–4 300–600 Hz.
+    // Mit F4 erst ab 2600 Hz galten sie als unmöglich (alle Slots ungültig), und mit Rauschen war die Lesart
+    // „F1 fehlt“ ausgeschlossen: F3 stand gültig im F2-Slot.
+    const cl = (F1, F2, F3, d) => [F1, F2, F3, F3 + d, Math.max(3050, F3 + d + 800)], BCL = [70, 90, 100, 110, 160];
+    const satzD = { sauber: [], rausch: [] }; let jd = 0;
+    for (const [F1, F2] of [[680, 1250], [480, 1400], [380, 750]]) for (const F3 of [1700, 2000, 2200, 2400]) for (const d of [300, 450, 600]) {
+      satzD.sauber.push({ F: cl(F1, F2, F3, d), B: BCL, f0: [110, 147, 196][jd++ % 3] });
+      // F1/F2 eng beieinander (/o/): hier geht F1 im Rauschen verloren
+      if (F1 === 380) for (const f0 of [110, 147, 196]) satzD.rausch.push({ F: cl(F1, F2, F3, d), B: BCL, f0, art: 'weiss', snr: 40, seed: 99 });
+    }
+    const ED = { sauber: auswerten(satzD.sauber), rausch: auswerten(satzD.rausch) };
+    check('K2d', 'tiefe enge Cluster sauber (F3 1700–2400, ΔF3–4 300–600 Hz): kein gültiger Wert falsch, F1/F2 in mindestens 90 %, ΔF3–4 in mindestens 80 % der Rahmen gültig',
+      ED.sauber.falsch === 0 && ED.sauber.d34falsch === 0 && Math.min(ED.sauber.gueltig[0], ED.sauber.gueltig[1]) >= 0.9 * ED.sauber.n && ED.sauber.d34 >= 0.8 * ED.sauber.n,
+      'gültig F1–F5 ' + ED.sauber.gueltig.join('/') + ', ΔF3–4 ' + ED.sauber.d34 + ' von ' + ED.sauber.n + ' Rahmen; falsch ' + ED.sauber.falsch + '/' + ED.sauber.d34falsch + (ED.sauber.bsp.length ? ' — ' + ED.sauber.bsp.join(' | ') : ''));
+    check('K2d', 'tiefe enge Cluster mit /o/-F1/F2, weißes Rauschen 40 dB: kein gültiger Slot über 130 Hz falsch, kein gültiges ΔF3–4 über 120 Hz falsch',
+      ED.rausch.falsch === 0 && ED.rausch.d34falsch === 0, 'Slots ' + ED.rausch.falsch + ', ΔF3–4 ' + ED.rausch.d34falsch + ' falsch; ' + det(ED.rausch));
+    // direkt: tiefes enges Cluster ist eine zulässige Lesart; ein fremder Gipfel unter dem untersten verschiebt alles darüber
+    const n1 = lu([725, 1240, 2050, 2498, 3248]), n2 = lm([774, 1989, 2283, 3619, 4505], [3, 3, 3, 3, 3], [130, 110, 120, 150, 200], [448]);
+    check('K2d', 'Lesarten: Cluster F3 2050 / F4 2498 / F5 3248 → sicher; andere Ordnung sieht 448 Hz unter dem untersten Gipfel 774 Hz → alle Slots unsicher',
+      n1 === '00000' && n2 === '11111', n1 + ' ' + n2);
+    // Verschmelzungsverdacht nur, wenn die fehlende Resonanz nach den Slotgrenzen im Gipfel stecken kann: /o/ mit
+    // F2 770 Hz (in Ordnung 12 breit), Lesart „F3 fehlt“ → F3 liegt nicht unter 1600 Hz, F2 bleibt sicher
+    const n3 = lm([433, 772, 2594, 2923], [3, 3, 3, 1], [461, 449, 162, 123], []);
+    const fOU = (E.rauschen.f2V.o || 0) + (E.rauschen.f2V.u || 0), nOU = (E.rauschen.nV.o || 0) + (E.rauschen.nV.u || 0);
+    check('K2d', 'Verschmelzungsverdacht nur in Reichweite der fehlenden Resonanz: /o/ 433/772/2594/2923 → F2 sicher; Rauschteil /o/ /u/ (Impulsquelle): F2 in mindestens 70 % der Rahmen gültig',
+      n3 === '00100' && fOU >= 0.7 * nOU, n3 + ', F2 gültig ' + fOU + '/' + nOU);
   }
 };
