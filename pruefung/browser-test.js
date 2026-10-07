@@ -5,11 +5,16 @@
    löschen“ mit Code-Zähler, Gerätewechsel nach der Kalibrierung und „merken“/„Token entfernen“.
 
      npm install -g playwright && npx playwright install chromium
-     node pruefung/browser-test.js            (Windows: node pruefung\browser-test.js)
+     Linux:   NODE_PATH="$(npm root -g)" node pruefung/browser-test.js
+     Windows: $env:NODE_PATH = (npm root -g); node pruefung\browser-test.js     (PowerShell)
+   Chromium kommt aus VARE_CHROMIUM, sonst aus /opt/pw-browsers/chromium (Linux-Prüfumgebung), falls
+   vorhanden, sonst aus der Playwright-Installation.
 
    Als Mikrofon dient eine erzeugte WAV-Datei mit bekannten Formanten; was die Seite misst,
    wird gegen diese bekannten Werte geprueft. */
-const { chromium } = require('playwright-core');
+// playwright-core reicht. Bei einer globalen Installation liegt es unter playwright und ist über
+// NODE_PATH = npm root -g nur über dieses Paket erreichbar.
+const { chromium } = (() => { try { return require('playwright-core'); } catch (e) { return require('playwright'); } })();
 const http = require('http'), fs = require('fs'), path = require('path'), os = require('os');
 const ROOT = path.resolve(__dirname, '..'), SP = fs.mkdtempSync(path.join(os.tmpdir(), 'vare-pruefung-'));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.md': 'text/markdown' };
@@ -37,7 +42,14 @@ const WAV = path.join(SP, 'fake.wav');
   // der zweite sonst mit EADDRINUSE aus.
   await new Promise(r => server.listen(0, r));
   const BASE = 'http://localhost:' + server.address().port;
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', headless: true, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + WAV, '--autoplay-policy=no-user-gesture-required', '--no-sandbox'] });
+  // Ein fest eingetragener Linux-Pfad lief unter Windows nicht. Ein gesetztes VARE_CHROMIUM ohne Datei
+  // bricht ab, statt still einen anderen Browser zu nehmen.
+  if (process.env.VARE_CHROMIUM && !fs.existsSync(process.env.VARE_CHROMIUM)) throw new Error('VARE_CHROMIUM: keine Datei unter ' + process.env.VARE_CHROMIUM);
+  const CHROMIUM = [process.env.VARE_CHROMIUM, path.join(path.sep, 'opt', 'pw-browsers', 'chromium')].find(p => p && fs.existsSync(p));
+  const startOpt = { headless: true, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + WAV, '--autoplay-policy=no-user-gesture-required', '--no-sandbox'] };
+  if (CHROMIUM) startOpt.executablePath = CHROMIUM;
+  console.log('Chromium: ' + (CHROMIUM || 'aus der Playwright-Installation'));
+  const browser = await chromium.launch(startOpt);
   const ctx = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
   const page = await ctx.newPage();
   const errors = [], logs = [];

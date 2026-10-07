@@ -3,7 +3,8 @@
         ES5-Modus steht in CI nicht zur Verfügung (keine Abhängigkeiten), darum ein eigener Abtaster: Er
         überspringt Kommentare, Zeichenketten und reguläre Ausdrücke und meldet Schlüsselwörter und
         Zeichen, die es erst ab ES2015 gibt. Er ist ein Stolperdraht, kein vollständiger Parser.
-   I5b: Der Hilfetext zu Schritt 0 (index.html) nennt die Platzhalter, die die CSV wirklich schreibt. */
+   I5b: Der Hilfetext zu Schritt 0 (index.html) nennt die Platzhalter, die die CSV wirklich schreibt.
+   I5c: Der Browser-Test läuft auch unter Windows: kein fest eingetragener Linux-Pfad. */
 'use strict';
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
@@ -88,6 +89,19 @@ module.exports = async function (H) {
     if (!/leere Zelle/.test(text)) bad.push('Hilfetext sagt nicht, dass fehlender Text als leere Zelle steht');
     check('I5b', 'Hilfetext Schritt 0 nennt die Platzhalter, die die CSV schreibt: Zahl −99 mit den Stellen der Spalte, Text leer',
       a >= 0 && b > a && !bad.length, bad.length ? bad.join(' | ') : (text.match(/[^.]*CSV[^.]*\./) || [''])[0].trim());
+  }
+  {
+    /* Der Browser-Test muss unter Windows laufen (Regel: keine Shell-Annahmen, Pfade über path.join).
+       Früher startete er Chromium fest aus /opt/pw-browsers/chromium und lud nur playwright-core. */
+    const bt = fs.readFileSync(path.join(ROOT, 'pruefung', 'browser-test.js'), 'utf8');
+    const bad = [];
+    if (/executablePath\s*:\s*['"`]/.test(bt)) bad.push('executablePath als fester Text');
+    const pfad = /['"`]\/(?:opt|usr|home|tmp|root)\/[^'"`]*['"`]/.exec(bt);
+    if (pfad) bad.push('absoluter Linux-Pfad ' + pfad[0]);
+    if (!/require\(\s*['"]playwright['"]\s*\)/.test(bt)) bad.push('kein Rückfall auf das Paket playwright (globale Installation)');
+    if (!/VARE_CHROMIUM/.test(bt)) bad.push('Chromium-Pfad nicht über VARE_CHROMIUM wählbar');
+    check('I5c', 'Browser-Test ohne festen Linux-Pfad: Chromium aus VARE_CHROMIUM, einem vorhandenen Prüfpfad oder der Playwright-Installation; playwright-core oder playwright',
+      !bad.length, bad.join(' | ') || 'ok');
   }
 };
 module.exports.es5Funde = es5Funde;
