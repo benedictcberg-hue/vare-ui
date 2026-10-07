@@ -1163,8 +1163,18 @@
      Randprüfung: Liegt ein Tonanfang oder -ende im Fenster (Energie einer Fensterhälfte unter
      FINE_EDGE_RATIO der anderen), misst YIN die Kante statt der Periode — gemessen am Phrasenende
      650 Hz statt 98 Hz, im Staccato Läufe, die vor dem Ton beginnen. Solche Rahmen sind in rand
-     markiert und gelten in detectJumps als stimmlos; f0 und ap bleiben unverändert stehen. */
-  var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1;
+     markiert und gelten in detectJumps als stimmlos; f0 und ap bleiben unverändert stehen.
+     Oktavkontrolle: Liegt F1 nahe 2·F0 (oder 3·F0), trägt der zweite (dritte) Teilton fast die ganze
+     Energie, und YIN nimmt die halbe (drittel) Periode — mit kleinem ap, also als sicher. Gemessen:
+     /e/ /o/ /ø/ um 210–270 Hz und /a/ um 340–360 Hz standen in jedem Rahmen eine Oktave zu hoch, ein
+     legato Ganzton wurde zum gehaltenen Sprung von +14 HT, und ein Kiekser in die Oktave blieb
+     unsichtbar. Der Tiefpass ist nicht die Ursache: Mit Rosenberg-Quelle bleibt der Fehler auch ohne
+     ihn und mit 2500 Hz. Deshalb dieselbe Teilerkontrolle wie in der Hauptspur (subMultipleTest,
+     Teiler 3, dann 2), auf dem Spektrum des ungefilterten Fensters. Teiler 3: /ø/ mit F1 nahe 3·F0
+     (um 165 Hz) gab mit Impulsquelle Rahmen auf 3·F0. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
+     Hann-Fenster Linien erst ab etwa 60 Hz Abstand, mehr Stützstellen ändern daran nichts; mit 2048
+     rechnete die Feinspur rund 1,5-mal so lange wie mit 1024. */
+  var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1, FINE_FFT_N = 1024;
 
   // Nullphasige FIR-Filterung mit symmetrischem Kern: verschiebt keine Zeitmarken der Spur.
   function firSymmetric(x, h) {
@@ -1183,6 +1193,7 @@
     var fmin = opts.fmin || FINE_FMIN, fmax = opts.fmax || 900;
     var lpHz = (opts.lowpassHz == null) ? FINE_LOWPASS_HZ : opts.lowpassHz;
     var randR = (opts.edgeRatio == null) ? FINE_EDGE_RATIO : opts.edgeRatio;
+    var okt = opts.octaveCheck !== false;
     var x = (lpHz > 0) ? firSymmetric(ds, makeLowpass(lpHz / sr, 2 * Math.round(16 * sr / 12000) + 1)) : ds;
     var n = Math.round(winS * sr), hop = Math.max(1, Math.round(hopS * sr)), h2 = n >> 1;
     var cs = new Float64Array(x.length + 1), k;
@@ -1193,7 +1204,13 @@
     for (c = n >> 1; c + (n >> 1) <= ds.length && i < m; c += hop, i++) {
       var s0 = c - (n >> 1), p = detectF0(x.subarray(s0, s0 + n), sr, fmin, fmax, opts.yinThresh);
       var e1 = cs[s0 + h2] - cs[s0], e2 = cs[s0 + n] - cs[s0 + h2];
-      t[i] = c / sr; f0[i] = p.f0; ap[i] = p.ap;
+      var fx = p.f0;
+      if (okt && isFinite(fx) && fx / 2 >= fmin) {
+        var spk = spectrum(ds.subarray(s0, s0 + n), sr, FINE_FFT_N);
+        if (fx / 3 >= fmin && subMultipleTest(spk, fx, 3, 8, OCTAVE_ODD_EVEN_DB).pass) fx /= 3;
+        else if (subMultipleTest(spk, fx, 2, 8, OCTAVE_ODD_EVEN_DB).pass) fx /= 2;
+      }
+      t[i] = c / sr; f0[i] = fx; ap[i] = p.ap;
       rand[i] = (randR > 0 && Math.min(e1, e2) < randR * Math.max(e1, e2)) ? 1 : 0;
     }
     return { t: t, f0: f0, ap: ap, rand: rand, hopS: hopS, windowS: winS, fmin: fmin, lowpassHz: lpHz };
