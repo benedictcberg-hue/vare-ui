@@ -103,7 +103,8 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForTimeout(3000);
     const live = await page.evaluate(() => ({ state: document.getElementById('gate-state').textContent, f0: document.getElementById('v-f0').textContent, f1: document.getElementById('v-f1').textContent, f3: document.getElementById('v-f3').textContent, d34: document.getElementById('v-d34').textContent, ref: document.getElementById('live-ref').textContent, sfr: document.getElementById('v-sfr').textContent, shr: document.getElementById('v-shr').textContent, floor: document.getElementById('v-floor').textContent }));
     check('Live während /a/: stimmhaft, F0 ≈ 196', /19[4-8]/.test(live.f0), JSON.stringify(live));
-    check('Live: Gatter stabil /a/ und ΔF3–4 gewertet', /stabil \/a\//.test(live.state) && /gewertet/.test(live.d34), live.state + ' | ' + live.d34);
+    // Nur „<Zahl> Hz gewertet“ zählt; /gewertet/ allein traf auch „— nicht gewertet: …“ und prüfte nichts.
+    check('Live: Gatter stabil /a/ und ΔF3–4 gewertet', /stabil \/a\//.test(live.state) && /^\s*-?\d[\d.,]* Hz gewertet\s*$/.test(live.d34), live.state + ' | ' + live.d34);
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
     await page.click('#btn-take');
