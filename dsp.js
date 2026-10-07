@@ -557,7 +557,7 @@
      (Hauch 0,5–0,8, Jitter, Shimmer 3 %, rosa Rauschen 30 dB) bis 4,0 dB; Rahmen am Vokalwechsel mit falsch
      nummerierten gültigen Slots ab 6,5 dB. Darüber ist kein Slot gültig (slotGrund 'wechsel'). Wechsel ohne
      Pause (neun Vokalpaare, 98–247 Hz, Rahmen alle 5 ms um die Grenze, 1845 Rahmen): gültige Slots, die zu
-     keinem der beiden Vokale passen, 159 → 0; gültige Slots 5682 → 5184. Stehende Sätze unverändert. */
+     keinem der beiden Vokale passen, 159 → 0; gültige Slots 498 weniger (−9 %). Stehende Sätze unverändert. */
   var HUELL_WECHSEL_DB = 5;
   function huellAbstand(seg, sr) {
     var h = seg.length >> 1, nB = 513, df = (sr / 2) / (nB - 1), i0 = Math.round(300 / df), i1 = Math.round(4000 / df), i;
