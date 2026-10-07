@@ -504,12 +504,12 @@ module.exports = async function (H) {
       }
       const ok = posted.every(m => m && m.s instanceof Float32Array && typeof m.f === 'number' && typeof m.t === 'number')
         && posted.every(m => m.s.every((v, i) => v === m.f + i));   // jeder Wert sitzt auf seinem Rahmen
-      const fr = posted.map(m => m.f + '+' + m.s.length);
+      const fr = posted.map(m => m.f + '+' + (m.s ? m.s.length : '?'));
       if (!ok || posted.length !== 2 || posted[0].f !== 0 || posted[0].s.length !== 2048 || posted[1].f !== 2048 || posted[1].s.length !== 512) bad.push('Worklet: ' + (posted.length ? fr.join(' ') : 'nichts gesendet') + (posted[0] && !(posted[0].s) ? ' (alte Form ohne Rahmen und Uhrzeit)' : ''));
       // Nach der Lücke beginnt das nächste Stück am neuen Rahmen.
       for (let k = 40; k < 56; k++) { sbw.currentFrame = k * 128; proc.process([[quant(k)]]); }
       const letzt = posted[posted.length - 1];
-      if (!letzt || letzt.f !== 25 * 128 || letzt.s.length !== 2048 || !letzt.s.every((v, i) => v === letzt.f + i)) bad.push('Worklet nach der Lücke: ' + (letzt ? letzt.f + '+' + (letzt.s ? letzt.s.length : '?') : 'nichts'));
+      if (!letzt || !letzt.s || letzt.f !== 25 * 128 || letzt.s.length !== 2048 || !letzt.s.every((v, i) => v === letzt.f + i)) bad.push('Worklet nach der Lücke: ' + (letzt ? letzt.f + '+' + (letzt.s ? letzt.s.length : '?') : 'nichts'));
       belege.push('Worklet ' + posted.map(m => m.f + '+' + (m.s ? m.s.length : '?')).join(' '));
     }
     // Recorder: nachgebildete Audiokette; die Stücke kommen mit Rahmen und Uhrzeit, wie das Worklet sie schickt.
