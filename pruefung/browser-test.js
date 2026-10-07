@@ -291,7 +291,13 @@ const WAV = path.join(SP, 'fake.wav');
     await page.evaluate(() => { location.hash = '#/aufnahme'; });
     await page.waitForTimeout(300);
     check('Nach „Alles löschen“: Take-Knopf gesperrt, bis neu kalibriert ist', await page.isDisabled('#btn-take'), await page.textContent('#take-hint'));
-    check('Nach „Alles löschen“ neu kalibriert', await kalibrieren(), (await page.textContent('#cal-status')).slice(0, 80));
+    /* Die Prüfdatei läuft in Schleife; mit weiterlaufendem Mikrofon begann die Kalibrierung an einer zufälligen Stelle
+       darin, und alle vier Versuche konnten das /a/ verfehlen (I3: 4 von 11 Läufen; hier 2 von 3). Neu gestartet
+       beginnt die Datei vorn wie bei jeder anderen Kalibrierung dieses Durchgangs. Geprüft bleibt, dass nach dem
+       Löschen neu kalibriert werden muss (Prüfung davor) und kann. */
+    await page.click('#btn-mic');
+    await page.waitForFunction(() => document.getElementById('btn-mic').textContent === 'Mikrofon starten', null, { timeout: 10000 });
+    check('Nach „Alles löschen“ neu kalibriert', await mikrofonUndKalibrieren(), (await page.textContent('#cal-status')).slice(0, 80));
     const tD = await takeAufnehmen(2500);
     // backup.json stammt vom Anfang und enthält Take A.
     await page.evaluate(() => { location.hash = '#/chronik'; });
