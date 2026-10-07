@@ -69,6 +69,11 @@
   function tokenLesen() {
     try { return root.localStorage.getItem(SPEICHER) || root.sessionStorage.getItem(SPEICHER) || ''; } catch (e) { return ''; }
   }
+  /* „Gemerkt“ heißt: dauerhaft im localStorage. Ein Token nur in sessionStorage gilt bis zum Schließen
+     des Tabs und ist nicht gemerkt — der Haken darf es dann nicht behaupten. */
+  function tokenGemerkt() {
+    try { return !!root.localStorage.getItem(SPEICHER); } catch (e) { return false; }
+  }
   function tokenSchreiben(token, dauerhaft) {
     try {
       root.localStorage.removeItem(SPEICHER); root.sessionStorage.removeItem(SPEICHER);
@@ -80,5 +85,5 @@
   }
 
   root.VAREKORPUS = { REPO: REPO, DATEI: DATEI, laden: laden, pruefeKorpus: pruefeKorpus, erklaereFehler: erklaereFehler,
-    tokenLesen: tokenLesen, tokenSchreiben: tokenSchreiben, tokenLoeschen: tokenLoeschen };
+    tokenLesen: tokenLesen, tokenGemerkt: tokenGemerkt, tokenSchreiben: tokenSchreiben, tokenLoeschen: tokenLoeschen };
 })(typeof self !== 'undefined' ? self : this);

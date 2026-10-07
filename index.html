@@ -149,16 +149,20 @@
           <input type="number" id="ctx-warmup-min" min="0" max="600" step="1" size="4">
         </label>
       </div>
+      <div id="ctx-hinweis" class="notice warn" role="status" hidden></div>
       <div class="row">
-        <span class="small">Sitzung <strong id="ctx-session-nr" class="mono">1</strong> ·
-          nächster Take ist Nummer <strong id="ctx-position" class="mono">1</strong> ·
+        <span class="small">Sitzung <strong id="ctx-session-nr" class="mono">–</strong> ·
+          nächster Take ist Nummer <strong id="ctx-position" class="mono">–</strong> ·
           Pause seit dem letzten Take <strong id="ctx-pause" class="mono">–</strong></span>
         <button id="btn-neue-sitzung">Neue Sitzung beginnen</button>
       </div>
       <div class="small muted">Die Pause wird aus der Uhrzeit des letzten Takes gerechnet und läuft
         mit — sie wird im Moment des Take-Starts festgehalten. Die Take-Position zählt innerhalb
-        dieser Sitzung; „Neue Sitzung beginnen" setzt sie auf 1 zurück und verlangt eine neue
-        Kalibrierung.</div>
+        dieser Sitzung fortlaufend; die Nummer eines gelöschten Takes wird nicht neu vergeben.
+        „Neue Sitzung beginnen" setzt sie auf 1 zurück und verlangt eine neue Kalibrierung.
+        Die Minuten seit Einsingbeginn laufen mit: eingetragen wird der Stand im Moment der Eingabe,
+        jeder Take rechnet die Minute seines Starts. Liegen letzte Eingabe und letzter Take über drei
+        Stunden zurück, werden die Einsing-Angaben geleert — das ist dann eine andere Übungseinheit.</div>
     </div>
 
     <div class="panel">
@@ -200,6 +204,8 @@
     </div>
     <div class="panel">
       <h3>Takes</h3>
+      <p class="small muted">Rost = Messwert unsicher oder fehlt. Gold ohne Strich = sicher gemessen, aber Befund:
+        F3 unter dem Mindestwert, mit dem der Take gerechnet wurde, SHR über −15 dB, gehaltene Tonsprünge.</p>
       <div id="takes-list" class="table-wrap"></div>
     </div>
   </section>

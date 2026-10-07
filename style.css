@@ -29,7 +29,9 @@ main { max-width: 980px; margin: 0 auto; padding: 1rem; display: flex; flex-dire
 .stat .k { display: block; color: var(--muted); font-size: .8rem; }
 .stat .v { display: block; font-family: var(--mono); font-size: 1.1rem; }
 .stat.unsure .v { color: var(--rust); border-bottom: 1px dashed var(--rust); }
-.stat.note .v { color: var(--gold); }
+/* Befund: sicher gemessen, aber auffällig (F3 unter dem Mindestwert, SHR über −15 dB, gehaltene
+   Tonsprünge). Gold ohne Strich — Rost und Strich bleiben unsicheren Messwerten vorbehalten. */
+.stat.befund .v, .befund { color: var(--gold); }
 .stat.frozen .v { color: var(--muted); }
 button, select, input[type="text"], input[type="file"], textarea { min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
 button { cursor: pointer; }
