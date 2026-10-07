@@ -733,13 +733,18 @@
   }
   function importJson(file) {
     file.text().then(function (text) {
-      var b = C.parseBackup(text), added = 0, skipped = 0;
+      var b = C.parseBackup(text), added = 0, skipped = 0, doppelt = [];
       return S.allTakes().then(function (existing) {
-        var have = {}; existing.forEach(function (t) { have[t.id] = true; });
+        var have = {}, codeDa = {}; existing.forEach(function (t) { have[t.id] = true; codeDa['c:' + t.code] = true; });
         var chain = Promise.resolve();
         b.takes.forEach(function (t) {
           if (have[t.id]) { skipped++; return; }
           added++;
+          /* Eine Sicherung aus einem anderen Browser oder von einer anderen Adresse kann Codes tragen,
+             die es hier schon gibt. Umbenannt wird nicht — der Code steht in CSV-Exporten und Notizen —,
+             aber die Doppelung wird gesagt statt still hingenommen. */
+          if (codeDa['c:' + t.code]) doppelt.push(t.code);
+          codeDa['c:' + t.code] = true;
           chain = chain.then(function () { return S.putTake(t); }).then(function () { return b.series[t.id] ? S.putSeries(t.id, b.series[t.id]) : null; }).then(function () { return b.audio[t.id] ? S.putAudio(t.id, t.sampleRate, 'wav', blobFromB64(b.audio[t.id])) : null; });
         });
         (b.calibrations || []).forEach(function (c) { chain = chain.then(function () { return S.putCalibration(c); }); });
@@ -759,7 +764,9 @@
           return S.setMeta('refs', local).then(function () { return pin; });
         });
       }).then(function (pin) {
-        status('Import: ' + added + ' Takes übernommen, ' + skipped + ' schon vorhanden (übersprungen)' + (pin ? ', ' + pin + ' angepinnte Referenz(en) übernommen' : '') + '.');
+        status('Import: ' + added + ' Takes übernommen, ' + skipped + ' schon vorhanden (übersprungen)' + (pin ? ', ' + pin + ' angepinnte Referenz(en) übernommen' : '') + '.'
+          + (doppelt.length ? ' Achtung: ' + (doppelt.length === 1 ? '1 übernommener Take trägt' : doppelt.length + ' übernommene Takes tragen') + ' einen Code, den es hier schon gibt (' + doppelt.join(', ') + ') — die Sicherung stammt wohl aus einem anderen Browser oder von einer anderen Adresse. Die Codes bleiben, wie sie sind; diese Takes über Datum und Bezeichnung unterscheiden.' : ''),
+          doppelt.length > 0);
         refreshChronik();
       });
     }).catch(function (e) { status('Import fehlgeschlagen: ' + (e && e.message || e), true); });

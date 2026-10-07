@@ -394,9 +394,16 @@ module.exports = async function (H) {
     p.kalibriert('cal-K2'); await p.mikrofon();
     const N = await p.take();
     await importieren(p, json);
-    const cs = codes(sp);
+    const cs = codes(sp), meldungEigene = statusText(p);
     check('U2.3', '„Alles löschen“, neuer Take, Sicherung eingespielt: Codes laufen weiter, keiner doppelt',
       N.code === 'C' && cs.join(',') === 'A,B,C', 'neuer Take ' + N.code + ' | Codes nach dem Import ' + cs.join(','));
+    // Sicherung aus einem anderen Browser: andere IDs, ein Code überschneidet sich. Nicht umbenennen, aber sagen.
+    const fremd = sicherung([Object.assign({}, A, { id: 'fremd-1', code: 'B' }), Object.assign({}, A, { id: 'fremd-2', code: 'Q' }), Object.assign({}, A, { id: 'fremd-3', code: 'constructor' })]);
+    await importieren(p, fremd);
+    const meldungFremd = statusText(p), warn = /warn/.test(p.st().statusEl.className), cs2 = codes(sp);
+    check('U2.6', 'Import mit Codes, die es schon gibt: Codes bleiben, die Doppelung steht als Warnung da; eigene Sicherung ohne Warnung',
+      !/Achtung/.test(meldungEigene) && /Achtung: 1 übernommener Take trägt einen Code/.test(meldungFremd) && /\(B\)/.test(meldungFremd) && warn && cs2.filter(c => c === 'B').length === 2,
+      'eigene Sicherung „' + meldungEigene + '“ | fremde „' + meldungFremd + '“ warn=' + warn + ' | Codes ' + cs2.join(','));
     p.schliessen();
     // Nur importierte Takes im Browser: der behaltene Zähler muss auch ihre Codes kennen.
     const sp2 = speicherNeu(), uhr2 = uhrNeu(T0 + 7 * 86400e3);
