@@ -162,6 +162,16 @@ dann die ehrliche Anzeige, kein Defekt. Eine weitere Beweisquelle für F5 gibt e
 offene Entwurfsfrage. Echte Aufnahmen sind nicht geprüft — die Zahlen gelten für synthetische
 Signale.
 
+## Bekannter Fehler: SHR an Ein- und Aussätzen
+
+An einem harten Ein- oder Aussatz steigt SHR in den Rahmen, deren Analysefenster die Kante
+überdeckt, ohne dass Kammkontrast oder zweite Anregung anschlagen. Der Rahmen gilt dann als sicher.
+Gemessen (Kern 4.0.0) an einem sauberen synthetischen /a/ bei 196 Hz mit Stille davor und danach:
+10 Rahmen über −25 dB, Höchstwert −11,7 dB; die Zusammenfassung meldet „SHR max“ dann als sichere
+Warnung in Gold. Bis der Kern das behebt, ist ein SHR-Höchstwert über −15 dB an Silbenkanten, im
+Staccato oder an Phrasengrenzen kein Beleg. Ob die Spitze an einer Kante liegt, zeigt die Rahmen-CSV
+(`t_s`, `shr_db`, `rms_dbfs`).
+
 ## Tonsprünge: zwei Spuren
 
 Die Hauptspur misst F0 mit YIN (60–500 Hz) auf Fenstern von mindestens 60 ms. Ereignisse unter
@@ -309,7 +319,8 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   womöglich der falsche Formant gemeint.
 - Rost heißt „Messwert trägt nicht“. Ein sicher gemessener Befund (F3 unter dem Mindestwert, SHR über
   der Warnschwelle, gehaltene Tonsprünge) steht in Gold ohne Strich, ebenso ein geprüft korrigierter
-  Grundton in der F0-Spur.
+  Grundton in der F0-Spur. Ausnahme bisher: SHR an harten Ein- und Aussätzen (siehe „Bekannter
+  Fehler“).
 - In Pausen frieren alle Werte sichtbar ein; im Export steht −99. Ein lauter Ton ohne fassbare Periode
   heißt nicht „Pause“, sondern „kein Periodenbezug“.
 - Ohne Kalibrierung und ohne Stille ist der Rauschboden unbekannt. Dann steht „unbekannt ·
