@@ -129,8 +129,13 @@ module.exports = async function (H) {
     for (const F of [NaN, 500]) for (const grund of [undefined, '', 'nummer', 'verschmolzen', '?']) for (const rauschBoden of [undefined, false, true])
       for (const sdWin of [undefined, 0, 200]) for (const sdOrder of [undefined, 0, 200]) for (const nWin of [undefined, 1, 2, 4]) for (const nOrders of [undefined, 1, 3]) for (const smax of [undefined, 130])
         for (const g of CH.formantGruende({ F, grund, rauschBoden, sdWin, sdOrder, nWin, nOrders, smax })) gruende.add(g.replace(/ [\d.,−-]+ Hz$/, ''));
-    gruende.add(CH.BANDBREITE_TEXT);
-    for (const g of gruende) if (md.indexOf(g) < 0) bad.push('Grund „' + g + '“ fehlt');
+    // In der Tabelle „Grund | heißt“ gesucht, nicht irgendwo im Text: Wörter wie „nur eine Ordnung“ stehen
+    // auch in anderen Sätzen und täuschten sonst eine Erklärung vor.
+    const tab = /\| Grund \| heißt \|\r?\n\|---\|---\|\r?\n((?:\|.*\r?\n)+)/.exec(md);
+    const zellen = tab ? tab[1].split(/\r?\n/).filter(Boolean).map(z => z.split('|')[1]) : [];
+    if (!zellen.length) bad.push('Tabelle „Grund | heißt“ fehlt');
+    for (const g of gruende) if (!zellen.some(z => z.indexOf(g) >= 0)) bad.push('Grund „' + g + '“ fehlt in der Tabelle');
+    if (md.indexOf(CH.BANDBREITE_TEXT) < 0) bad.push('„' + CH.BANDBREITE_TEXT + '“ fehlt');
     const module = fs.readdirSync(__dirname).filter(f => /\.js$/.test(f)).sort();
     for (const f of module) if (md.indexOf('`' + f + '`') < 0) bad.push('Modul ' + f + ' fehlt');
     const register = (md.match(/.?Registerwechsel/g) || []).filter(s => s[0] !== '„');
