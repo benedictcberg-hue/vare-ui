@@ -286,7 +286,9 @@ module.exports = async function (H) {
     if (iK >= 0) pruef('korrigiert', iK, [['text', 'F0 ' + fmt(R[iK].f0, 1) + ' (korrigiert aus ' + fmt(R[iK].f0Yin, 1) + ' Hz, ' + (R[iK].f0Korrektur === 'cepstrum' ? 'Cepstrum' : 'Teiltonreihe') + ')']], ['F0', 'korrigiert']);
     if (iS >= 0) {
       const r = R[iS], anders = r.shrGrid > 1.5 * r.f0 ? r.f0 : 2 * r.f0;
-      pruef('SHR-Zweifel', iS, [['rost', 'SHR ' + fmt(r.shr, 1) + ' (Raster ' + fmt(r.shrGrid) + ' Hz) / ' + fmt(r.shrOther, 1) + ' (Raster ' + fmt(anders) + ' Hz), unsicher: ' + CHR.shrGrundText(r.shrGrund, r.shrKamm, r.shrZweitpuls)]], ['F0']);
+      // Grund in Worten, hier unabhängig von chronik.js gebildet (Vertrag K4: Teile in fester Reihenfolge)
+      const grundWorte = r.shrGrund.split('+').map(t => t === 'kamm' ? 'Kamm ' + fmt(r.shrKamm, 1) + ' dB' : t === 'zweitpuls' ? 'zweite Anregung ' + fmt(r.shrZweitpuls, 2) : t === 'grundton' ? 'Grundton unsicher' : '?').join(', ');
+      pruef('SHR-Zweifel', iS, [['rost', 'SHR ' + fmt(r.shr, 1) + ' (Raster ' + fmt(r.shrGrid) + ' Hz) / ' + fmt(r.shrOther, 1) + ' (Raster ' + fmt(anders) + ' Hz), unsicher: ' + grundWorte]], ['F0']);
     }
     if (iO >= 0) pruef('unter 60 Hz', iO, [['rost', 'Reihe unter 60 Hz, nicht geteilt']]);
     if (iN >= 0 && rostTeile(hov(iN)).length) bad.push('sicherer Rahmen mit Rost: ' + hov(iN).slice(0, 120));
@@ -317,29 +319,33 @@ module.exports = async function (H) {
     const detail = su => { const d = new El(); CHR.renderDetail(d, { id: 'i2', code: 'I', label: 'Prüftake', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }, null, {}, false, {}); return kacheln(d.innerHTML); };
     const k = (ks, re) => ks.find(x => re.test(x.k)) || { klasse: '?', v: '', vHtml: '' };
     const bad = [], su = res.summary, mit = o => Object.assign(JSON.parse(JSON.stringify(su)), o);
-    let ks = [];
-    try { ks = detail(su); } catch (e) { bad.push('Ausnahme ' + e.message); }
-    const f0 = k(ks, /^F0 Median/), shr = k(ks, /^SHR/), okt = k(ks, /korrigiert/), h12 = k(ks, /^H1−H2/);
-    const pz = x => CHR.prozent ? CHR.prozent(x) : String(Math.round(x * 100));
-    if (!new RegExp('<span class="rust">· Grundton unsicher in ' + pz(su.f0UnsureShare) + ' % der Rahmen, nicht im Median</span>').test(f0.vHtml) || f0.klasse !== '') bad.push('F0 „' + f0.v + '“ (' + f0.klasse + ')');
-    if (!f0.v.startsWith(fmt(su.f0.med) + ' [')) bad.push('F0-Median fehlt: ' + f0.v);
-    if (!/<span class="rust">· unsicher in [^<]* %: bis -?[\d.]+ dB, anderes Raster bis -?[\d.]+ dB<\/span>/.test(shr.vHtml) || !shr.v.includes(fmt(su.shrUnsureMax, 1)) || !shr.v.includes(fmt(su.shrOtherMax, 1))) bad.push('SHR „' + shr.v + '“');
-    if (!/ohne [^)]* % mit unsicherem Grundton/.test(h12.v)) bad.push('H1−H2 „' + h12.v + '“');
-    if (!/^Grundton korrigiert · Oktave unsicher$/.test(okt.k) || !okt.v.startsWith(pz(su.octaveCorrectedShare) + ' (Gegenprobe ' + pz(su.f0KorrekturShare) + ')')) bad.push('Korrektur-Kachel „' + okt.k + '“ „' + okt.v + '“');
-    // Abwandlungen: viele Korrekturen ohne offene Oktave → kein Rost; überwiegend unsicher → Rost; SHR-Warnung nur aus sicheren Rahmen.
-    const kor = k(detail(mit({ octaveCorrectedShare: 0.6, f0KorrekturShare: 0.4, octaveAmbiguousShare: 0 })), /korrigiert/);
-    if (kor.klasse !== '') bad.push('60 % korrigiert, Oktave nie offen: Kachel „' + kor.klasse + '“ statt ohne Rost');
-    const viel = detail(mit({ f0UnsureShare: 0.7, shrUnsureShare: 0.7 }));
-    if (k(viel, /^F0 Median/).klasse !== 'unsure' || k(viel, /^SHR/).klasse !== 'unsure') bad.push('70 % unsicher: F0 „' + k(viel, /^F0 Median/).klasse + '“, SHR „' + k(viel, /^SHR/).klasse + '“ statt unsure');
-    const keineWarnung = k(detail(mit({ shr: Object.assign({}, su.shr, { max: -30 }), shrUnsureMax: -8, shrOtherMax: -12 })), /^SHR/);
-    if (keineWarnung.klasse === 'befund') bad.push('Warnung aus unsicheren Rahmen (sicher max −30, unsicher bis −8)');
-    const alt = mit({}); for (const f of ['f0UnsureShare', 'f0KorrekturShare', 'shrUnsureShare', 'shrUnsureMax', 'shrOtherMax']) delete alt[f];
-    const ka = detail(alt);
-    if (!/ältere Auswertung/.test(k(ka, /^F0 Median/).v) || /rust/.test(k(ka, /^F0 Median/).vHtml)) bad.push('ältere Auswertung: „' + k(ka, /^F0 Median/).v + '“');
-    // Liste: Anteil unsicher in Rost neben F0 und SHR max.
-    const div = new El(); let zellen = [];
-    try { CHR.renderList(div, [{ id: 'i2', code: 'I', label: 'Prüftake', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }], {}, {}); zellen = ((/<tr data-id="[^"]*">([\s\S]*?)<\/tr>/.exec(div.innerHTML) || [])[1] || '').split(/<\/td>/); } catch (e) { bad.push('Liste: ' + e.message); }
-    if (!/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[2] || '') || !/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[7] || '')) bad.push('Liste F0 „' + (zellen[2] || '').replace(/<[^>]+>/g, '') + '“ SHR „' + (zellen[7] || '').replace(/<[^>]+>/g, '') + '“');
+    let ks = [], f0 = k([], /x/), shr = f0, okt = f0;
+    // Eine fehlende Funktion oder Ausnahme reißt dieses Kriterium, nicht das ganze Modul.
+    try {
+      ks = detail(su);
+      f0 = k(ks, /^F0 Median/); shr = k(ks, /^SHR/); okt = k(ks, /korrigiert/);
+      const h12 = k(ks, /^H1−H2/);
+      const pz = x => CHR.prozent ? CHR.prozent(x) : String(Math.round(x * 100));
+      if (!new RegExp('<span class="rust">· Grundton unsicher in ' + pz(su.f0UnsureShare) + ' % der Rahmen, nicht im Median</span>').test(f0.vHtml) || f0.klasse !== '') bad.push('F0 „' + f0.v + '“ (' + f0.klasse + ')');
+      if (!f0.v.startsWith(fmt(su.f0.med) + ' [')) bad.push('F0-Median fehlt: ' + f0.v);
+      if (!/<span class="rust">· unsicher in [^<]* %: bis -?[\d.]+ dB, anderes Raster bis -?[\d.]+ dB<\/span>/.test(shr.vHtml) || !shr.v.includes(fmt(su.shrUnsureMax, 1)) || !shr.v.includes(fmt(su.shrOtherMax, 1))) bad.push('SHR „' + shr.v + '“');
+      if (!/ohne [^)]* % mit unsicherem Grundton/.test(h12.v)) bad.push('H1−H2 „' + h12.v + '“');
+      if (!/^Grundton korrigiert · Oktave unsicher$/.test(okt.k) || !okt.v.startsWith(pz(su.octaveCorrectedShare) + ' (Gegenprobe ' + pz(su.f0KorrekturShare) + ')')) bad.push('Korrektur-Kachel „' + okt.k + '“ „' + okt.v + '“');
+      // Abwandlungen: viele Korrekturen ohne offene Oktave → kein Rost; überwiegend unsicher → Rost; SHR-Warnung nur aus sicheren Rahmen.
+      const kor = k(detail(mit({ octaveCorrectedShare: 0.6, f0KorrekturShare: 0.4, octaveAmbiguousShare: 0 })), /korrigiert/);
+      if (kor.klasse !== '') bad.push('60 % korrigiert, Oktave nie offen: Kachel „' + kor.klasse + '“ statt ohne Rost');
+      const viel = detail(mit({ f0UnsureShare: 0.7, shrUnsureShare: 0.7 }));
+      if (k(viel, /^F0 Median/).klasse !== 'unsure' || k(viel, /^SHR/).klasse !== 'unsure') bad.push('70 % unsicher: F0 „' + k(viel, /^F0 Median/).klasse + '“, SHR „' + k(viel, /^SHR/).klasse + '“ statt unsure');
+      const keineWarnung = k(detail(mit({ shr: Object.assign({}, su.shr, { max: -30 }), shrUnsureMax: -8, shrOtherMax: -12 })), /^SHR/);
+      if (keineWarnung.klasse === 'befund') bad.push('Warnung aus unsicheren Rahmen (sicher max −30, unsicher bis −8)');
+      const alt = mit({}); for (const f of ['f0UnsureShare', 'f0KorrekturShare', 'shrUnsureShare', 'shrUnsureMax', 'shrOtherMax']) delete alt[f];
+      const ka = detail(alt);
+      if (!/ältere Auswertung/.test(k(ka, /^F0 Median/).v) || /rust/.test(k(ka, /^F0 Median/).vHtml)) bad.push('ältere Auswertung: „' + k(ka, /^F0 Median/).v + '“');
+      // Liste: Anteil unsicher in Rost neben F0 und SHR max.
+      const div = new El(); let zellen = [];
+      try { CHR.renderList(div, [{ id: 'i2', code: 'I', label: 'Prüftake', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }], {}, {}); zellen = ((/<tr data-id="[^"]*">([\s\S]*?)<\/tr>/.exec(div.innerHTML) || [])[1] || '').split(/<\/td>/); } catch (e) { bad.push('Liste: ' + e.message); }
+      if (!/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[2] || '') || !/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[7] || '')) bad.push('Liste F0 „' + (zellen[2] || '').replace(/<[^>]+>/g, '') + '“ SHR „' + (zellen[7] || '').replace(/<[^>]+>/g, '') + '“');
+    } catch (e) { bad.push('Ausnahme ' + e.message); }
     check('I2d', 'Detail und Liste: F0 und SHR aus sicheren Rahmen, der unsichere Anteil in Rost daneben (SHR mit Höchstwerten beider Raster), Rost erst ab der Hälfte; Korrektur nicht rostig; keine SHR-Warnung aus unsicheren Rahmen; ältere Auswertung benannt',
       !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : 'F0 „' + f0.v + '“ | SHR „' + shr.v + '“ | „' + okt.k + '“ ' + okt.v);
   }
