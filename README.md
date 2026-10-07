@@ -103,8 +103,8 @@ Ein Formant gilt nur als gültig, wenn alles zutrifft:
 
 ΔF3–4 ist nur gültig, wenn F3 und F4 gültig sind. Ein ungültiger Wert verschwindet nicht: Er steht
 gestrichelt in Rost, ohne Klammer und ohne Wertung, und nennt live jeden zutreffenden Grund, im Hover
-der Chronik jeden gespeicherten. Die Zahl der Fenster wird nicht gespeichert: „nur in 2 Fenstern“ steht
-im Hover nur, wenn kein anderer Grund zutrifft.
+der Chronik jeden gespeicherten. Die Zahl der Fenster steht je Rahmen im Verlauf (CSV `n_win1…5`); nur ältere
+Verläufe ohne sie zeigen „nur in 2 Fenstern“ allein dann, wenn kein anderer Grund zutrifft.
 
 | Grund | heißt |
 |---|---|
@@ -315,7 +315,7 @@ die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`
 Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
 (nicht gemessen, als Pause geführt).
 
-Stand Kern 4.0.0: 101 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
+Stand Kern 4.0.0: 101 Spalten je Take, 74 je Rahmen. Neu mit Kern 4.0.0:
 
 - **Take:** `f0_unsure_share`, `f0_korrektur_share`, `shr_unsure_share`, `shr_unsure_max_db`,
   `shr_other_max_db`, `voicing_floor_dbfs`. F0, Note, SHR und H1−H2 kommen nur aus sicheren Rahmen; die
@@ -326,7 +326,8 @@ Stand Kern 4.0.0: 101 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
   `valid1…5`; `f0_unsure`, `f0_grund`, `f0_korrektur`, `f0_cep`, `f0_yin`, `octave_unter_grenze`;
   `shr_grid_hz`, `shr_other_db`, `shr_unsure`, `shr_grund`, `shr_kamm_db`, `shr_zweitpuls`.
   `valid1…5` = 0 heißt ungültig; den Grund liefern `slot_grund`, `rauschboden` und die Streuungen
-  `sdw1…5`, `sdo1…5`. Wie viele Fenster einen Formanten sahen, steht nicht in der CSV. Die Streuungsgrenze,
+  `sdw1…5`, `sdo1…5`; `n_win1…5` sagt, in wie vielen der 4 Analysefenster der Formant stand (unter 3 ungültig;
+  −99 in stimmlosen Rahmen und in älteren Verläufen). Die Streuungsgrenze,
   gegen die `sdw` und `sdo` geprüft wurden, steht je Take in `spread_max_hz` (Vorgabe 130 Hz).
 - **Ältere Rahmenverläufe** ohne diese Felder: Marken und Zahlen −99, Slot-Grund `?`, übrige Gründe
   leer — nie still „sicher“.

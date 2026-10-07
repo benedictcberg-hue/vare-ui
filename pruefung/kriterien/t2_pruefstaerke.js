@@ -55,7 +55,8 @@ const TEXTE = {
 
 /* Rahmen-CSV: Spalte, Art, Quelle, Nachkommastellen.
    feld = Serienfeld; bit = [Feld, Bitmaske oder Name in A.FLAG]; gate = Wort zum Gatterzustand;
-   vokal = Klassenname aus V.CENTROIDS; grund = Codefeld, in der CSV der Text des Kerns (GRUND_ZEILEN).
+   vokal = Klassenname aus V.CENTROIDS; grund = Codefeld, in der CSV der Text des Kerns (GRUND_ZEILEN);
+   nwin = Fensterzahl des Slots aus dem Feld nWin (3 Bit je Slot, Slot k in Bit 3k…3k+2), nur in stimmhaften Rahmen.
    Die Bitbedeutung folgt analysis.js (fillFrame, FLAG). */
 const FRAME_SOLL = [
   ['t_s', 'feld', 't', 3], ['voiced', 'bit', ['flags', 'VOICED']], ['gate', 'gate'], ['vowel', 'vokal'],
@@ -72,6 +73,7 @@ FRAME_SOLL.push(
   ['slot_grund1', 'slotgrund', 0], ['slot_grund2', 'slotgrund', 1], ['slot_grund3', 'slotgrund', 2], ['slot_grund4', 'slotgrund', 3], ['slot_grund5', 'slotgrund', 4],
   ['rauschboden1', 'bit', ['rauschBoden', 1]], ['rauschboden2', 'bit', ['rauschBoden', 2]], ['rauschboden3', 'bit', ['rauschBoden', 4]],
   ['rauschboden4', 'bit', ['rauschBoden', 8]], ['rauschboden5', 'bit', ['rauschBoden', 16]],
+  ['n_win1', 'nwin', 0], ['n_win2', 'nwin', 1], ['n_win3', 'nwin', 2], ['n_win4', 'nwin', 3], ['n_win5', 'nwin', 4],
   ['octave_corrected', 'bit', ['flags', 'OCTAVE']], ['octave_ambiguous', 'bit', ['flags', 'OCTAMBIG']],
   ['h1h2_unsure', 'bit', ['flags', 'H1H2UNSURE']],
   ['f0_unsure', 'bit', ['flags', 'F0UNSURE']], ['f0_grund', 'grund', 'f0Grund'], ['f0_korrektur', 'grund', 'f0Korrektur'],
@@ -189,6 +191,8 @@ function buildSeries(A) {
     s.slotUnsure[r] = u; if (s.slotVerschmolzen) s.slotVerschmolzen[r] = m;
   });
   if (s.rauschBoden) RAUSCHBODEN_ZEILEN.forEach((v, r) => { s.rauschBoden[r] = v; });
+  // Fensterzahl je Slot und Zeile: (2r + 3k) mod 5, in jeder Spalte ein anderes Muster.
+  if (s.nWin) for (let r = 0; r < n; r++) { let v = 0; for (let k = 0; k < 5; k++) v |= ((2 * r + 3 * k) % 5) << (3 * k); s.nWin[r] = v; }
   [5, 4, 3, 2, 1, 0].forEach((v, r) => { s.nPeaks[r] = v; });
   [1, 2, 4, 8, 16, 22].forEach((v, r) => { s.valid[r] = v; });
   [F.VOICED, F.OCTAVE | F.SCORE, F.H1H2UNSURE | F.SUBGRID, F.OCTAMBIG | F.D34VALID,
@@ -210,6 +214,7 @@ function expectFrame(entry, s, r, dialect, A, V) {
   if (kind === 'vokal') return s.cls[r] >= 0 ? V.CENTROIDS[s.cls[r]].cls : '';
   if (kind === 'grund') return GRUND_ZEILEN[src][r];
   if (kind === 'slotgrund') return SLOTGRUND_ZEILEN[r][src];
+  if (kind === 'nwin') return !s.nWin ? '(Serienfeld nWin fehlt)' : (s.flags[r] & A.FLAG.VOICED) ? String((2 * r + 3 * src) % 5) : expectCell(0, null, dialect);
   throw new Error('Art ' + kind);
 }
 
@@ -369,7 +374,7 @@ module.exports = async function (H) {
     const sum = takeZwei.summary, ser = takeZwei.series, n = ser.t.length, fehlt = [];
     for (const [key, path] of TAKE_SOLL) if (path.indexOf('summary.') === 0 && !resolvePath({ summary: sum }, path).found) fehlt.push(key + '←' + path);
     for (const [name, kind, src] of FRAME_SOLL) {
-      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : kind === 'slotgrund' ? 'slotVerschmolzen' : 'cls';
+      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : kind === 'slotgrund' ? 'slotVerschmolzen' : kind === 'nwin' ? 'nWin' : 'cls';
       if (!(ArrayBuffer.isView(ser[field]) && ser[field].length === n)) fehlt.push(name + '←' + field);
       if (kind === 'bit' && typeof src[1] === 'string' && typeof A.FLAG[src[1]] !== 'number') fehlt.push(name + '←FLAG.' + src[1]);
     }

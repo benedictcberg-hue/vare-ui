@@ -104,23 +104,29 @@
     return { db: Math.max(-95, levels[0] - 24), known: false, gapDb: gap };
   }
 
-  /* Speicher je Rahmen: 39 Float32, 10 Byte-Felder und die Flags (Uint16), 168 Byte (vorher 139). Eine Stunde bei 10 ms
-     sind 360 000 Rahmen, also 60 MB statt 50 MB im Speicher; die Gründe kosten als Codes 3 Byte. Ältere
-     gespeicherte Serien haben die Felder f0Cep … shrGrund, slotVerschmolzen und rauschBoden nicht: Wer sie
+  /* Speicher je Rahmen: 39 Float32, 10 Byte-Felder, die Flags und nWin (je Uint16), 170 Byte (vorher 139). Eine Stunde
+     bei 10 ms sind 360 000 Rahmen, also 61 MB statt 50 MB im Speicher; die Gründe kosten als Codes 3 Byte. Ältere
+     gespeicherte Serien haben die Felder f0Cep … shrGrund, slotVerschmolzen, rauschBoden und nWin nicht: Wer sie
      liest, muss das Fehlen als „nicht gemessen“ behandeln, nicht als 0 (csv.js, chronik.js).
      Warum ein Slot unsicher ist (dsp.js slotGrund), steht als Maske wie valid und slotUnsure, Bit k für Fk+1:
      slotVerschmolzen = Grund 'verschmolzen' (zwei Resonanzen in einem Gipfel möglich); ein gesetztes
-     slotUnsure-Bit ohne dieses Bit heißt 'nummer'. rauschBoden = Gipfel im Rauschboden, unabhängig davon. */
+     slotUnsure-Bit ohne dieses Bit heißt 'nummer'. rauschBoden = Gipfel im Rauschboden, unabhängig davon.
+     nWin = in wie vielen Analysefenstern jeder Formant stand (dsp.js nWin), je Slot 3 Bit, Slot k in Bit 3k…3k+2
+     (nWinAus). Ohne sie ließ sich „nur in 2 Fenstern“ nur erschließen, wenn sonst kein Grund vorlag; neben einem
+     anderen Grund fehlte er in Hover und CSV. */
   function makeSeries(n) {
     var f = function () { return new Float32Array(n); };
     var s = { t: f(), f0: f(), ap: f(), rms: f(), d34: f(), d45: f(), score: f(), sfr: f(), sfrn: f(), shr: f(), cpp: f(), h1h2: f(), h1h2c: f(),
       f0Cep: f(), f0Yin: f(), shrGrid: f(), shrOther: f(), shrKamm: f(), shrZweitpuls: f(),
       f0Grund: new Uint8Array(n), f0Korrektur: new Uint8Array(n), shrGrund: new Uint8Array(n),
       valid: new Uint8Array(n), slotUnsure: new Uint8Array(n), slotVerschmolzen: new Uint8Array(n), rauschBoden: new Uint8Array(n), nPeaks: new Uint8Array(n),
-      gate: new Uint8Array(n), flags: new Uint16Array(n), cls: new Int8Array(n) };
+      gate: new Uint8Array(n), flags: new Uint16Array(n), nWin: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
     return s;
   }
+
+  // Zahl der Fenster, in denen Formant k+1 im Rahmen i stand; null, wenn die Serie sie nicht kennt (ältere Fassung).
+  function nWinAus(series, i, k) { return series && series.nWin ? (series.nWin[i] >> (3 * k)) & 7 : null; }
 
   function applyGate(series, states) {
     for (var i = 0; i < states.length; i++) {
@@ -148,6 +154,9 @@
       if (r.rauschBoden && r.rauschBoden[u]) bmask |= (1 << u);
     }
     series.slotUnsure[i] = umask; series.slotVerschmolzen[i] = vmerk; series.rauschBoden[i] = bmask;
+    var nw = 0;
+    for (var w = 0; w < 5; w++) nw |= Math.min(7, (r.nWin && r.nWin[w]) || 0) << (3 * w);
+    series.nWin[i] = nw;
     series.nPeaks[i] = r.nPeaksRef;
     series.d34[i] = r.d34; series.d45[i] = r.d45; series.sfr[i] = r.sfr; series.shr[i] = r.shr; series.cpp[i] = r.cpp; series.h1h2[i] = r.h1h2; series.h1h2c[i] = r.h1h2c;
     // Gegenprobe und SHR-Raster: was den Wert unsicher macht oder ändert, gehört zum Rahmen.
@@ -602,7 +611,7 @@
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

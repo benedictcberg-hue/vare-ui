@@ -260,21 +260,27 @@ module.exports = async function (H) {
     for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
     const CHR = sb.VARECHRONIK, bad = [], zaehl = {};
     let geprueft = 0;
-    for (let i = 0; i < Math.min(n, R.length); i++) {
-      if (!R[i].voiced) continue;
-      let h = '';
-      try { h = CHR.hoverText(ser, i, SMAX); } catch (e) { bad.push('Ausnahme ' + e.message); break; }
-      const rost = (h.match(/<span class="rust">[^<]*<\/span>/g) || []).map(x => x.replace(/<[^>]+>/g, '').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&'));
-      for (let k = 0; k < 5; k++) {
-        const kopf = 'F' + (k + 1) + ' ', teil = rost.find(x => x.startsWith(kopf));
-        if (R[i].valid[k]) { if (teil) bad.push('t ' + i + ' F' + (k + 1) + ' gültig, aber Rost „' + teil + '“'); continue; }
-        const soll = kopf + CHR.fmt(ser['f' + (k + 1)][i]) + '? (' + sollGruende(R[i], k, true, ser['sdw' + (k + 1)][i], ser['sdo' + (k + 1)][i]).join(', ') + ')';
-        if (teil !== soll) { if (bad.length < 6) bad.push('t ' + i + ': „' + teil + '“ statt „' + soll + '“'); } else geprueft++;
-        for (const g of sollGruende(R[i], k, true)) zaehl[g.replace(/ \d+ Hz$/, '')] = (zaehl[g.replace(/ \d+ Hz$/, '')] || 0) + 1;
+    /* Seit B2 trägt die Serie die Fensterzahl (nWin): „nur in 2 Fenstern“ steht dann auch neben anderen Gründen, wie
+       live. Vorher schrieb dieses Kriterium die Lücke fest (ohneZaehlung für jede Serie). Eine ältere Serie ohne nWin
+       wird weiter mit der alten Regel geprüft: dort nur, wenn sonst kein Grund vorliegt. */
+    const ohneNWin = Object.assign({}, ser); delete ohneNWin.nWin;
+    for (const [s0, ohneZ, art] of [[ser, !ser.nWin, 'Serie'], [ohneNWin, true, 'ältere Serie ohne nWin']]) {
+      for (let i = 0; i < Math.min(n, R.length); i++) {
+        if (!R[i].voiced) continue;
+        let h = '';
+        try { h = CHR.hoverText(s0, i, SMAX); } catch (e) { bad.push(art + ': Ausnahme ' + e.message); break; }
+        const rost = (h.match(/<span class="rust">[^<]*<\/span>/g) || []).map(x => x.replace(/<[^>]+>/g, '').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&'));
+        for (let k = 0; k < 5; k++) {
+          const kopf = 'F' + (k + 1) + ' ', teil = rost.find(x => x.startsWith(kopf));
+          if (R[i].valid[k]) { if (teil) bad.push(art + ' t ' + i + ' F' + (k + 1) + ' gültig, aber Rost „' + teil + '“'); continue; }
+          const soll = kopf + CHR.fmt(s0['f' + (k + 1)][i]) + '? (' + sollGruende(R[i], k, ohneZ, s0['sdw' + (k + 1)][i], s0['sdo' + (k + 1)][i]).join(', ') + ')';
+          if (teil !== soll) { if (bad.length < 6) bad.push(art + ' t ' + i + ': „' + teil + '“ statt „' + soll + '“'); } else geprueft++;
+          if (s0 === ser) for (const g of sollGruende(R[i], k, ohneZ)) zaehl[g.replace(/ \d+ Hz$/, '')] = (zaehl[g.replace(/ \d+ Hz$/, '')] || 0) + 1;
+        }
+        const d34 = rost.find(x => x.startsWith('ΔF3–4 '));
+        if (!!d34 !== !R[i].d34valid) bad.push(art + ' t ' + i + ': ΔF3–4 ' + (d34 ? 'in Rost, obwohl gültig' : 'ungültig ohne Rost'));
+        if (/Resonanzen\]/.test(h)) bad.push(art + ' t ' + i + ': alter Zusatz „Resonanzen“');
       }
-      const d34 = rost.find(x => x.startsWith('ΔF3–4 '));
-      if (!!d34 !== !R[i].d34valid) bad.push('t ' + i + ': ΔF3–4 ' + (d34 ? 'in Rost, obwohl gültig' : 'ungültig ohne Rost'));
-      if (/Resonanzen\]/.test(h)) bad.push('t ' + i + ': alter Zusatz „Resonanzen“');
     }
     // Ältere Serie ohne Masken: Grund nicht erfunden.
     const alt = {};
@@ -283,8 +289,8 @@ module.exports = async function (H) {
     let altText = '';
     try { altText = iU >= 0 ? CHR.hoverText(alt, iU, SMAX) : ''; } catch (e) { bad.push('ältere Serie: Ausnahme ' + e.message); }
     if (iU < 0 || !/Zuordnung unsicher, Grund nicht gespeichert/.test(altText) || /Nummer mehrdeutig|zwei Resonanzen/.test(altText)) bad.push('ältere Serie: „' + altText.replace(/<[^>]+>/g, '').slice(0, 160) + '“');
-    check('I3b', 'Hover (Detail): ungültige Formanten in Rost mit denselben Gründen wie live, aus den Masken der Serie; ΔF3–4 ungültig in Rost; ältere Serie „Grund nicht gespeichert“ statt eines erfundenen',
-      !bad.length && geprueft >= 100 && zaehl['Nummer mehrdeutig'] > 0 && zaehl['zwei Resonanzen in einem Gipfel möglich'] > 0 && zaehl['im Rauschboden'] > 0,
+    check('I3b', 'Hover (Detail): ungültige Formanten in Rost mit denselben Gründen wie live, aus den Masken der Serie (mit Fensterzahl auch „nur in 2 Fenstern“ neben anderen Gründen); ΔF3–4 ungültig in Rost; ältere Serie „Grund nicht gespeichert“ statt eines erfundenen',
+      !bad.length && geprueft >= 100 && zaehl['Nummer mehrdeutig'] > 0 && zaehl['zwei Resonanzen in einem Gipfel möglich'] > 0 && zaehl['im Rauschboden'] > 0 && zaehl['nur in 2 Fenstern'] > 0,
       geprueft + ' ungültige Formanten geprüft, Gründe ' + JSON.stringify(zaehl) + (bad.length ? ' — ' + bad.join(' | ') : ''));
   }
 

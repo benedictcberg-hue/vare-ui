@@ -114,10 +114,11 @@
      (slotGrund leer) und Gipfel über dem Rauschboden. Genannt wird jeder zutreffende Grund, nicht nur der
      erste: am tiefen engen Cluster im Rauschen trifft oft „Nummer mehrdeutig“ und „im Rauschboden“ zugleich.
      g = { F, grund ('', 'nummer', 'verschmolzen', '?'), rauschBoden, sdWin, sdOrder, smax, nWin, nOrders };
-     null heißt nicht gespeichert. Die Serie kennt nWin und nOrders nicht: Unter 2 Werten ist die Streuung
-     NaN, daraus folgt „nur in einem Fenster“ bzw. „in weniger als 2 Ordnungen“; „nur in 2 Fenstern“ ist das,
-     was übrig bleibt, wenn sonst nichts die Ungültigkeit erklärt. Ältere Serien kennen rauschBoden und den
-     Unterschied nummer/verschmolzen nicht: dann „Grund nicht gespeichert“, kein erfundener. */
+     null heißt nicht gespeichert. Die Serie kennt nOrders nicht: Unter 2 Werten ist die Streuung NaN, daraus folgt
+     „in weniger als 2 Ordnungen“. nWin steht seit B2 in der Serie; ältere Serien kennen es nicht: Dann folgt
+     „nur in einem Fenster“ aus der Streuung, und „nur in 2 Fenstern“ ist das, was übrig bleibt, wenn sonst nichts
+     die Ungültigkeit erklärt. Ältere Serien kennen rauschBoden und den Unterschied nummer/verschmolzen nicht:
+     dann „Grund nicht gespeichert“, kein erfundener. */
   function formantGruende(g) {
     if (!zahl(g.F)) return ['nicht gefunden'];
     var t = [], smax = zahl(g.smax) ? g.smax : NaN;
@@ -350,8 +351,9 @@
       if (series.valid[i] & (1 << k)) return esc(txt) + bwT;
       var b = 1 << k, uns = series.slotUnsure ? (series.slotUnsure[i] & b) : 0;
       var grund = !uns ? '' : (series.slotVerschmolzen ? ((series.slotVerschmolzen[i] & b) ? 'verschmolzen' : 'nummer') : '?');
+      // Fensterzahl aus der Serie (analysis.js nWin); ältere Serien kennen sie nicht (null), dann wird sie erschlossen.
       var gr = formantGruende({ F: wert('f' + (k + 1)), grund: grund, rauschBoden: series.rauschBoden ? !!(series.rauschBoden[i] & b) : null,
-        sdWin: wert('sdw' + (k + 1)), sdOrder: wert('sdo' + (k + 1)), smax: smax, nWin: null, nOrders: null });
+        sdWin: wert('sdw' + (k + 1)), sdOrder: wert('sdo' + (k + 1)), smax: smax, nWin: A.nWinAus ? A.nWinAus(series, i, k) : null, nOrders: null });
       return rost(txt + '? (' + gr.join(', ') + ')') + bwT;
     };
     var d34 = 'ΔF3–4 ' + v('d34') + (isFinite(series.score[i]) ? ' (gewertet)' : '');

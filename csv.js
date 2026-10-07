@@ -166,6 +166,9 @@
     };
   }
   function maskenSpalte(feld, k) { var b = 1 << k; return function (s, i) { return s[feld] ? ((s[feld][i] & b) ? 1 : 0) : null; }; }
+  /* In wie vielen Analysefenstern Formant k+1 stand (analysis.js nWin, je Slot 3 Bit): Grund „nur in 2 Fenstern“ auch
+     neben anderen Gründen. In stimmlosen Rahmen ist nichts analysiert, in älteren Serien fehlt das Feld: −99. */
+  function fensterSpalte(k) { return function (s, i) { return (s.nWin && (s.flags[i] & 1)) ? (s.nWin[i] >> (3 * k)) & 7 : null; }; }
 
   // Rahmenweise Spalten: Name → Serienfeld (oder Funktion) und Nachkommastellen.
   var FRAME_COLUMNS = [
@@ -186,6 +189,7 @@
     ['slot_grund1', slotGrundSpalte(0)], ['slot_grund2', slotGrundSpalte(1)], ['slot_grund3', slotGrundSpalte(2)], ['slot_grund4', slotGrundSpalte(3)], ['slot_grund5', slotGrundSpalte(4)],
     ['rauschboden1', maskenSpalte('rauschBoden', 0), 0], ['rauschboden2', maskenSpalte('rauschBoden', 1), 0], ['rauschboden3', maskenSpalte('rauschBoden', 2), 0],
     ['rauschboden4', maskenSpalte('rauschBoden', 3), 0], ['rauschboden5', maskenSpalte('rauschBoden', 4), 0],
+    ['n_win1', fensterSpalte(0), 0], ['n_win2', fensterSpalte(1), 0], ['n_win3', fensterSpalte(2), 0], ['n_win4', fensterSpalte(3), 0], ['n_win5', fensterSpalte(4), 0],
     ['octave_corrected', function (s, i) { return (s.flags[i] & 2) ? 1 : 0; }, 0],
     ['octave_ambiguous', function (s, i) { return (s.flags[i] & 128) ? 1 : 0; }, 0],
     ['h1h2_unsure', function (s, i) { return (s.flags[i] & 8) ? 1 : 0; }, 0],

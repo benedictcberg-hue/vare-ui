@@ -691,7 +691,8 @@ module.exports = async function (H) {
    B2d: Die Sicherung zählt die ganze Datei und scheitert nie mit „Invalid string length“ (N19).
    B2e: README und pages.yml nennen dieselbe Pages-Quelle „GitHub Actions“ (N24).
    B2f: Ohne Grundton steht „–“ statt der Note „--“.
-   B2g: Die Take-CSV nennt die Streuungsgrenze des Takes (spread_max_hz). */
+   B2g: Die Take-CSV nennt die Streuungsgrenze des Takes (spread_max_hz).
+   B2h: Die Serie trägt die Fensterzahl je Formant: „nur in 2 Fenstern“ auch neben anderen Gründen (Hover, CSV). */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -957,6 +958,47 @@ async function kriterienB2(H) {
       ok, 'Standard ' + JSON.stringify(st) + ' | Excel DE ' + JSON.stringify(de));
     p.schliessen();
   } catch (e) { check('B2g', 'Ablauf Streuungsgrenze in der CSV läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2h · Fensterzahl je Formant in Serie, Hover und Rahmen-CSV ---------- */
+  try {
+    const A = H.A, C = H.C, TSR = D.TARGET_SR;
+    // Tiefer enger Cluster auf A2 in Rauschen 30 dB unter dem Vokal, /a/ auf E4, /o/ auf B3 mit F6 im Band: Hier stehen
+    // ungültige Formanten in genau 2 Fenstern, jeweils neben einem anderen Grund.
+    const mitR = (x, db, seed) => { const z = noise(x.length, 1, seed), g = rms(x) / rms(z) * Math.pow(10, -db / 20), y = Float64Array.from(x); for (let i = 0; i < y.length; i++) y[i] += g * z[i]; return y; };
+    const SIGh = H.concat([noise(Math.round(0.2 * SR), 2e-4, 21), mitR(D.synthVowel(110, [500, 1500, 1700, 2200, 3150], [70, 90, 90, 90, 100], 0.9, SR), 30, 22),
+      D.synthVowel(330, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 0.5, SR), D.synthVowel(247, [500, 800, 2600, 2950, 4100, 4600], [70, 90, 120, 150, 200, 220], 0.5, SR), noise(Math.round(0.2 * SR), 2e-4, 23)]);
+    const hopS = 0.02, res = await A.analyseTake(SIGh, SR, { hopS }), ser = res.series, n = ser.t.length;
+    // Dieselben Rahmen nachrechnen wie analyseTake: Raster, Rand 30 ms, Boden aus dem Take.
+    const ds = D.resample(SIGh, SR, TSR), hop = Math.round(hopS * TSR), half = Math.round(0.03 * TSR), floorDb = A.estimateFloor(ds, TSR, hopS).db, R = [];
+    for (let c = half; c + half <= ds.length; c += hop) R.push(D.analyseAt(ds, TSR, c, { align: 'centre', floorDb, spreadMaxHz: D.SPREAD_MAX_HZ }));
+    const CHR = U.chronikNeu().VARECHRONIK, bad = [];
+    const z = C.framesToCsv(ser, 'standard', H.V).split('\r\n').filter(Boolean).map(x => x.split(',')), kopf = z[0];
+    const alt = Object.assign({}, ser); delete alt.nWin;
+    const za = C.framesToCsv(alt, 'standard', H.V).split('\r\n').filter(Boolean).map(x => x.split(','));
+    let zweiMitAnderem = 0, zweiGeprueft = 0, zellen = 0;
+    if (R.length !== n) bad.push(n + ' Rahmen, ' + R.length + ' nachgerechnet');
+    if (!(ser.nWin instanceof Uint16Array)) bad.push('Serie ohne nWin (Uint16Array)');
+    for (let i = 0; i < Math.min(n, R.length) && !bad.length; i++) {
+      const r = R[i], h = CHR.hoverText(ser, i, D.SPREAD_MAX_HZ);
+      const rost = (h.match(/<span class="rust">[^<]*<\/span>/g) || []).map(x => x.replace(/<[^>]+>/g, ''));
+      for (let k = 0; k < 5; k++) {
+        const ist = (ser.nWin[i] >> (3 * k)) & 7;
+        if (ist !== (r.voiced ? r.nWin[k] : 0)) { if (bad.length < 6) bad.push('t ' + i + ' F' + (k + 1) + ': nWin ' + ist + ' statt ' + r.nWin[k]); }
+        const c = kopf.indexOf('n_win' + (k + 1)), soll = r.voiced ? String(r.nWin[k]) : '-99';
+        if (c < 0 || z[i + 1][c] !== soll || za[i + 1][c] !== '-99') { if (bad.length < 6) bad.push('CSV n_win' + (k + 1) + '[' + i + '] ' + (c < 0 ? 'fehlt' : z[i + 1][c] + ' statt ' + soll + ', ältere Serie ' + za[i + 1][c])); } else zellen++;
+        if (!r.voiced || r.valid[k]) continue;
+        const teil = rost.find(x => x.startsWith('F' + (k + 1) + ' ')) || '', zwei = /nur in 2 Fenstern/.test(teil);
+        if (r.nWin[k] === 2) {
+          zweiGeprueft++;
+          if (r.slotGrund[k] || r.rauschBoden[k] || r.sdOrder[k] >= D.SPREAD_MAX_HZ || r.sdWin[k] >= D.SPREAD_MAX_HZ || r.nOrders[k] < 2) zweiMitAnderem++;
+          if (!zwei) bad.push('t ' + i + ' F' + (k + 1) + ' in 2 Fenstern, Hover „' + teil + '“');
+        } else if (zwei) bad.push('t ' + i + ' F' + (k + 1) + ' in ' + r.nWin[k] + ' Fenstern, Hover „' + teil + '“');
+      }
+    }
+    check('B2h', 'Fensterzahl je Formant (nWin) in der Serie wie analyseAt; Hover nennt „nur in 2 Fenstern“ auch neben anderen Gründen; Rahmen-CSV n_win1…5 (stimmlos und ältere Serie −99)',
+      !bad.length && zweiMitAnderem >= 1 && zellen === 5 * n,
+      (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + n + ' Rahmen, ungültig in 2 Fenstern ' + zweiGeprueft + ' (davon mit anderem Grund ' + zweiMitAnderem + '), CSV-Zellen ' + zellen + '/' + 5 * n);
+  } catch (e) { check('B2h', 'Ablauf Fensterzahl läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
