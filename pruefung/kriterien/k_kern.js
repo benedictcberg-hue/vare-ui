@@ -872,7 +872,7 @@ module.exports = async function (H) {
           if (r.shrUnsure !== (zweifel || r.f0Unsure)) e.push('shrUnsure ' + r.shrUnsure);
           if ((String(r.shrGrund).indexOf('grundton') >= 0) !== r.f0Unsure) e.push('Grund ' + r.shrGrund);
           if (in2) {
-            const k = D.kammKontrast(sp, 2 * f0);
+            const k = typeof D.kammKontrast === 'function' ? D.kammKontrast(sp, 2 * f0) : NaN;
             if (!(Math.abs(r.shrKamm - k) < 1e-9)) e.push('shrKamm ' + r1(r.shrKamm) + ' statt ' + r1(k));
             if (k <= D.SHR_KAMM_RASTER_DB && !aufZwei) e.push('deutlicher Kamm ohne Raster 2·F0');
             if (aufZwei && !(k <= D.SHR_KAMM_ZWEIFEL_DB)) e.push('Raster 2·F0 ohne Kamm');
