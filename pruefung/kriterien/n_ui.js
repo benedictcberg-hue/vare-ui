@@ -3,7 +3,8 @@
    Transaktionen mit Abbruch (alles oder nichts), Versionswechsel, Speicherquote und gezielt scheiternde
    Schreibvorgänge; die Daten überstehen das Neuladen der Seite. Eine „geschlossene“ Seite rechnet nicht weiter
    (ihre Zeitgeber und Datenbankrückrufe laufen ins Leere), so wie ein Tab, der neu geladen wird.
-   B1a: Take und Rahmenverlauf in einer Transaktion (Take, Neu-Analyse). */
+   B1a: Take und Rahmenverlauf in einer Transaktion (Take, Neu-Analyse).
+   B1b: Bearbeiten im Detail überschreibt keine laufende oder abgeschlossene Neu-Analyse. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto');
 const { Blob } = require('buffer');
@@ -265,6 +266,55 @@ module.exports = async function (H) {
       + ' | Neu-Analyse mit scheiterndem Verlauf: Take ' + (vorA === nachA ? 'unverändert' : 'verändert (Historie ' + (A2 && (A2.history || []).length) + ', Kern ' + (A2 && A2.analysis.kernelVersion) + ')') + ', Meldung „' + p.status().slice(0, 60) + '“');
     p.schliessen();
   } catch (e) { check('B1a', 'Ablauf Transaktion Take und Verlauf läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1b · Speichern im Detail während und nach „Alle neu analysieren“ ---------- */
+  try {
+    const br = idbNeu(), p = await seiteNeu(br, normal, SR);
+    p.kalibriert('cal-1'); await p.mikrofon();
+    p.el('take-label').value = 'Erster'; const A = await p.take();
+    p.el('take-label').value = 'Zweiter'; const B = await p.take();
+    // Beide gelten als mit einem älteren Kern gerechnet, wie nach einem Versionswechsel.
+    for (const t of [A, B]) { const x = await p.S.getTake(t.id); x.analysis.kernelVersion = '3.0.0'; await p.S.putTake(x); }
+    // Detail öffnen und die Felder so füllen, wie die Ansicht sie aus dem Take beim Öffnen füllt; Kommentar dazu.
+    async function detail(id, kommentar) {
+      const t = await p.S.getTake(id), q = s => p.el('take-detail').querySelector(s);
+      p.geheZu('#/take/' + id);
+      if (!(await p.warte(() => /d-save/.test(p.el('take-detail').innerHTML) && p.el('take-detail').innerHTML.indexOf('<h2>' + t.code + ' ') >= 0, 5000))) throw new Error('Detail ' + t.code + ' nicht gezeigt');
+      q('#d-label').value = t.label; q('#d-intent').value = t.vowelIntent || ''; q('#d-warmup').value = ''; q('#d-warmup-min').value = '';
+      q('#d-comment').value = kommentar;
+      const knopf = q('#d-save');
+      return () => knopf.click();
+    }
+    // Lauf starten und mitten in der Analyse von A anhalten (Zeitgeber der Seite stehen, Datenbank und Klicks nicht).
+    const lauf = async () => {
+      p.geheZu('#/chronik'); p.klick('btn-reanalyse-all');
+      const ok = await p.warte(() => /Neu-Analyse 1 von 2: A .* — \d+ \/ \d+ Rahmen/.test(p.el('reanalyse-all-text').textContent), 10000);
+      p.halt();
+      return ok;
+    };
+    const ende = () => { p.weiter(); return p.warte(() => !p.st().busy && /Alle neu analysiert/.test(p.el('reanalyse-all-text').textContent), 60000); };
+    // 1. Wie im Befund: Detail von B öffnen, solange der Lauf noch bei A ist; erst nach dem Lauf speichern.
+    const imLauf1 = await lauf();
+    const speichernB = await detail(B.id, 'Notiz nach dem Lauf');
+    const bOffenAlt = /Kern 3\.0\.0/.test(p.el('take-detail').innerHTML);
+    await ende();
+    speichernB();
+    await p.warte(() => /Gespeichert/.test(p.status()), 5000);
+    const b = await p.S.getTake(B.id);
+    // 2. Detail von A öffnen und speichern, während der Lauf A gerade rechnet.
+    const imLauf2 = await lauf();
+    const speichernA = await detail(A.id, 'Notiz während des Laufs');
+    speichernA();
+    await p.warte(() => /Gespeichert/.test(p.status()), 5000);
+    await ende();
+    const a = await p.S.getTake(A.id);
+    const z = t => t.code + ': Kern ' + t.analysis.kernelVersion + ', Historie ' + (t.history || []).length + ', Kommentar „' + t.comment + '“';
+    check('B1b', 'Speichern im Detail nach und während „Alle neu analysieren“: die Neu-Analyse bleibt (Kern, Historie), nur die Notiz kommt dazu',
+      imLauf1 && imLauf2 && bOffenAlt && b.analysis.kernelVersion === D.VERSION && (b.history || []).length === 1 && b.comment === 'Notiz nach dem Lauf' && b.label === 'Zweiter'
+      && a.analysis.kernelVersion === D.VERSION && (a.history || []).length === 2 && a.comment === 'Notiz während des Laufs' && a.label === 'Erster',
+      'Läufe beobachtet=' + imLauf1 + '/' + imLauf2 + ', Detail B zeigte beim Öffnen Kern 3.0.0=' + bOffenAlt + ' | nach dem Lauf gespeichert ' + z(b) + ' | im Lauf gespeichert ' + z(a));
+    p.schliessen();
+  } catch (e) { check('B1b', 'Ablauf Speichern im Detail während der Neu-Analyse läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

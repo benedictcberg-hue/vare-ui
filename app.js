@@ -876,16 +876,26 @@
         route();
       });
     },
+    /* take ist der Stand beim Öffnen des Details. Zurückgeschrieben wird nicht er, sondern der Take, wie er
+       JETZT gespeichert ist, mit den Notizfeldern — sonst machte eine Notiz eine inzwischen gelaufene
+       Neu-Analyse rückgängig (Kern, Historie, Zusammenfassung), und der neue Rahmenverlauf stünde neben der
+       alten Zusammenfassung. Lesen und Schreiben in einer Transaktion (storage.js updateTake). */
     saveEdit: function (take, edit) {
-      take.label = edit.label || take.label; take.vowelIntent = edit.vowelIntent; take.comment = edit.comment;
-      /* Einsing-Status darf nachgetragen werden — er fällt beim Singen oft hinten runter.
-         Die gerechneten Felder (Uhrzeit, Stelle, Pause) bleiben unberührt: die kann man
-         nicht nachträglich wissen, und geraten werden sie nicht. */
-      if (edit.warmup !== undefined) {
-        if (!take.sitzung) take.sitzung = { id: null, nr: null, startedAt: null, position: null, pauseVorherS: null, pauseSelbeSitzung: null, warmup: '', warmupMin: null };
-        take.sitzung.warmup = edit.warmup || ''; take.sitzung.warmupMin = edit.warmupMin;
-      }
-      S.putTake(take).then(recomputeRefs).then(function () { status('Gespeichert.'); route(); });
+      S.updateTake(take.id, function (t) {
+        t.label = edit.label || t.label; t.vowelIntent = edit.vowelIntent; t.comment = edit.comment;
+        /* Einsing-Status darf nachgetragen werden — er fällt beim Singen oft hinten runter.
+           Die gerechneten Felder (Uhrzeit, Stelle, Pause) bleiben unberührt: die kann man
+           nicht nachträglich wissen, und geraten werden sie nicht. */
+        if (edit.warmup !== undefined) {
+          if (!t.sitzung) t.sitzung = { id: null, nr: null, startedAt: null, position: null, pauseVorherS: null, pauseSelbeSitzung: null, warmup: '', warmupMin: null };
+          t.sitzung.warmup = edit.warmup || ''; t.sitzung.warmupMin = edit.warmupMin;
+        }
+        return t;
+      }).then(function (t) {
+        if (!t) throw new Error('Take ' + take.code + ' ist nicht mehr in der Chronik');
+        return recomputeRefs();
+      }).then(function () { status('Gespeichert.'); route(); })
+        .catch(function (e) { status('Nicht gespeichert: ' + (e && e.message || e), true); });
     }
   };
   function openDetail(id) {
