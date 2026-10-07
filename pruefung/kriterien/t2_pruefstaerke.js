@@ -35,7 +35,7 @@ TAKE_SOLL.push(
   ['cpp_med_db', 'summary.cpp.med', 2],
   ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3],
   ['rms_med_dbfs', 'summary.rms.med', 2], ['rms_max_dbfs', 'summary.rms.max', 2], ['floor_dbfs', 'summary.floorDb', 2],
-  ['floor_source', 'summary.floorSource', 'text'], ['snr_db', 'summary.snrDb', 2],
+  ['floor_source', 'summary.floorSource', 'text'], ['voicing_floor_dbfs', 'summary.voicingFloorDb', 2], ['snr_db', 'summary.snrDb', 2],
   ['tube_cm', 'summary.tubeCm', 1], ['tube_q1', 'summary.tube.q1', 1], ['tube_q3', 'summary.tube.q3', 1], ['tube_n', 'summary.tube.n', 0],
   ['octave_corrected_share', 'summary.octaveCorrectedShare', 3], ['octave_ambiguous_share', 'summary.octaveAmbiguousShare', 3],
   ['slot_unsure_share', 'summary.slotUnsureShare', 3], ['jumps_held', 'summary.spruenge.gehalten', 0], ['jumps_edge', 'summary.spruenge.kante', 0],

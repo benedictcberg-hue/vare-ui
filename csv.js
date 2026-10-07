@@ -90,8 +90,14 @@
       { key: 'h1h2_unsure_share', get: g('summary.h1h2.unsureShare'), dec: 3 },
       { key: 'rms_med_dbfs', get: g('summary.rms.med'), dec: 2 },
       { key: 'rms_max_dbfs', get: g('summary.rms.max'), dec: 2 },
-      { key: 'floor_dbfs', get: g('summary.floorDb'), dec: 2 },
+      /* floor_dbfs: nur ein gemessener Boden (Kalibrierung oder Stille im Take), sonst −99 — auch bei älteren
+         Takes ohne Stille, die die Annahme noch als floorDb trugen (vor V3: q05 − 12). voicing_floor_dbfs: der
+         Boden, gegen den die Stimmhaftigkeit geprüft wurde (Pegel > Boden + 12), gemessen oder angenommen
+         (analysis.js voicingFloorDb). Ältere Auswertungen haben das Feld nicht; dort war floorDb genau dieser
+         Wert, er steht dann hier. */
+      { key: 'floor_dbfs', get: function (t) { var s = t && t.summary; return (!s || s.floorSource === 'unknown') ? null : s.floorDb; }, dec: 2 },
       { key: 'floor_source', get: g('summary.floorSource') },
+      { key: 'voicing_floor_dbfs', get: function (t) { var s = t && t.summary; return !s ? null : (s.voicingFloorDb != null ? s.voicingFloorDb : s.floorDb); }, dec: 2 },
       { key: 'snr_db', get: g('summary.snrDb'), dec: 2 },
       { key: 'tube_cm', get: g('summary.tubeCm'), dec: 1 },
       { key: 'tube_q1', get: g('summary.tube.q1'), dec: 1 },

@@ -347,7 +347,7 @@ module.exports = async function (H) {
   {
     // Dieselbe Regel wie offline, Takt für Takt auf dem Puffer davor; Anzeige: geschätzt aus Stille als Zahl,
     // sonst „Stimmschwelle angenommen“ und kein Bodenwert.
-    const sig = mitNz(concat([leise(1.5, 41), vokal(147, 2.5), leise(0.8, 42), vokal(196, 11, t => -6 * t / 11), leise(1, 43)]), 44);
+    const sig = mitNz(concat([leise(1.2, 41), vokal(147, 1.5), leise(0.7, 42), vokal(196, 10.6, t => -6 * t / 10.6), leise(0.7, 43)]), 44);
     const bad = [], z = { bekannt: 0, angenommen: 0 };
     try {
       const L = await liveLauf(sig);
@@ -389,5 +389,52 @@ module.exports = async function (H) {
     } catch (e) { bad.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
     check('I3c', 'Stille ohne Kalibrierung: mit angenommenem Boden nie „Ton“, und ist das Gatterfenster voll, steht Pause statt „Übergang“; Pegelbalken nur mit der angenommenen Stimmschwelle, ohne Bodenstrich',
       !bad.length && z.angenommen >= 50 && z.ohnePeriode >= 20, JSON.stringify(z) + ' | „' + beleg + '“' + (bad.length ? ' — ' + bad.join('; ') : ''));
+  }
+
+  /* ---------- I3d: angenommene Stimmschwelle in CSV und Chronik ---------- */
+  {
+    const ohne = await A.analyseTake(mitNz(vokal(147, 1.0), 61), SR, {});
+    const mitStille = await A.analyseTake(mitNz(concat([leise(0.4, 62), vokal(147, 1.0), leise(0.4, 63)]), 64), SR, {});
+    const kal = await A.analyseTake(mitNz(vokal(147, 1.0), 61), SR, { floorDb: bodenEcht });
+    // Ältere Auswertung (vor V3): ohne voicingFloorDb, die Annahme stand als floorDb da.
+    const alt = JSON.parse(JSON.stringify(ohne.summary), (k, v) => v === null ? NaN : v);
+    delete alt.voicingFloorDb; alt.floorDb = -61.25;
+    const FAELLE = [
+      ['ohne Stille', ohne.summary, NaN, ohne.summary.voicingFloorDb, 'unknown'],
+      ['mit Stille', mitStille.summary, mitStille.summary.floorDb, mitStille.summary.floorDb, 'estimate'],
+      ['kalibriert', kal.summary, bodenEcht, bodenEcht, 'calibration'],
+      ['ältere Auswertung ohne Stille', alt, NaN, -61.25, 'unknown']
+    ];
+    const z2 = (v, dec) => (typeof v === 'number' && isFinite(v) ? v : -99).toFixed(dec);
+    const sb = { console: { log() { }, warn() { }, error() { } }, devicePixelRatio: 1 };
+    sb.self = sb; sb.window = sb; vm.createContext(sb);
+    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+    const CHR = sb.VARECHRONIK;
+    const El = function () { this.innerHTML = ''; };
+    El.prototype.querySelector = function () { return { addEventListener() { }, value: '', hidden: false, getContext: () => leinwand().cv.getContext() }; };
+    El.prototype.querySelectorAll = function () { return []; };
+    const kacheln = html => { const out = [], re = /<div class="stat([^"]*)"><span class="k">([\s\S]*?)<\/span><span class="v">([\s\S]*?)<\/span><\/div>/g; let m; while ((m = re.exec(html))) out.push({ klasse: m[1].trim(), k: m[2].replace(/<[^>]+>/g, ''), v: m[3].replace(/<[^>]+>/g, ''), vHtml: m[3] }); return out; };
+    const badC = [], badA = [], belegeC = [], belegeA = [];
+    for (const [name, su, boden, stimm, quelleSoll] of FAELLE) {
+      if (su.floorSource !== quelleSoll) badC.push(name + ': Bodenquelle ' + su.floorSource + ' statt ' + quelleSoll);
+      const z = zeilen(H.C.takesToCsv([{ code: 'S', summary: su }], 'standard'), ','), kopf = z[0], w = z[1] || [];
+      const zelle = k => kopf.indexOf(k) < 0 ? '(fehlt)' : w[kopf.indexOf(k)];
+      if (zelle('floor_dbfs') !== z2(boden, 2) || zelle('voicing_floor_dbfs') !== z2(stimm, 2) || !isFinite(stimm)) badC.push(name + ': floor_dbfs ' + zelle('floor_dbfs') + ' statt ' + z2(boden, 2) + ', voicing_floor_dbfs ' + zelle('voicing_floor_dbfs') + ' statt ' + z2(stimm, 2));
+      belegeC.push(name + ' ' + zelle('floor_dbfs') + '/' + zelle('voicing_floor_dbfs'));
+      let ks = [];
+      try { const d = new El(); CHR.renderDetail(d, { id: 'i3', code: 'S', label: name, createdAt: '2026-03-02T09:00:00.000Z', durationS: 1.5, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }, null, {}, false, {}); ks = kacheln(d.innerHTML); }
+      catch (e) { badA.push(name + ': Ausnahme ' + e.message); continue; }
+      const kb = ks.find(x => /^Rauschboden/.test(x.k)) || { v: '', klasse: '?' }, ksch = ks.find(x => /^Stimmschwelle/.test(x.k));
+      if (quelleSoll === 'unknown') {
+        const soll = 'angenommen: ' + CHR.fmt(stimm + 12, 1) + ' dBFS';
+        if (!ksch || !ksch.v.startsWith(soll) || ksch.klasse !== '' || /rust|befund/.test(ksch.vHtml)) badA.push(name + ': Stimmschwelle „' + (ksch ? ksch.v + '“ (' + ksch.klasse + ')' : 'fehlt“') + ' statt neutral „' + soll + '“');
+        if (!/^– dBFS \(unbekannt/.test(kb.v) || !/nicht messbar/.test(kb.v)) badA.push(name + ': Rauschboden „' + kb.v + '“ — eine Annahme als Boden');
+        belegeA.push(name + ': „' + kb.v + '“ | „' + (ksch ? ksch.k + ' ' + ksch.v : '') + '“');
+      } else if (ksch) badA.push(name + ': Stimmschwelle-Kachel bei bekanntem Boden');
+    }
+    check('I3d', 'Take-CSV: floor_dbfs nur für einen gemessenen Boden (sonst −99, auch bei älteren Takes ohne Stille); voicing_floor_dbfs ist der Boden der Stimmhaftigkeit, gemessen oder angenommen (ältere Auswertung: deren floorDb)',
+      !badC.length, (badC.length ? badC.join(' | ') : belegeC.join(' | ')));
+    check('I3d', 'Chronik bei unbekanntem Boden: Rauschboden „–“ (unbekannt, SNR nicht messbar), dazu neutral „Stimmschwelle angenommen: … dBFS“ (Annahme + 12 dB, kein Rost); bei bekanntem Boden keine solche Kachel',
+      !badA.length && belegeA.length === 2, (badA.length ? badA.join(' | ') : belegeA.join(' | ')));
   }
 };

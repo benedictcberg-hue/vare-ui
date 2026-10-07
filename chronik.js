@@ -357,6 +357,12 @@
     if (b) return '/' + esc(k) + '/ ' + fmt(b.d34Med) + zweideutigText(b.ambiguousShare);
     return '/' + esc(k) + '/ –' + ((pv && pv.segmentsAmbiguous > 0) ? ' <span class="small">(nur zweideutig zugeordnete Segmente)</span>' : '');
   }
+  /* Rauschboden: Als Zahl steht nur ein gemessener Boden (Kalibrierung oder Stille im Take). Ohne Stille ist er
+     unbekannt, und die Stimmhaftigkeit wurde gegen eine Annahme geprüft (analysis.js voicingFloorDb: 24 dB
+     unter dem leisesten Rahmen, also Schwelle 12 dB darunter). Die steht neutral in einer eigenen Kachel, als
+     Schwelle, nicht als Boden und nicht in Rost: Sie ist kein unsicherer Messwert, sondern eine genannte
+     Annahme. Ältere Auswertungen ohne voicingFloorDb trugen die Annahme in floorDb (vor V3: q05 − 12). */
+  function stimmBoden(s) { return zahl(s.voicingFloorDb) ? s.voicingFloorDb : (s.voicingFloorDb == null && zahl(s.floorDb) ? s.floorDb : NaN); }
   function summaryGrid(s, take) {
     function cell(k, v, unsure, befund) { return '<div class="stat' + (unsure ? ' unsure' : (befund ? ' befund' : '')) + '"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
     var thr = f3Schwelle(take), f3u = f3Unter(take);
@@ -380,7 +386,8 @@
       cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–') + shrZusatz(s), shrUnsicher(s), shrBefund(s)) +
       cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben'
         + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozentHtml(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')', s.h1h2 && s.h1h2.unsureShare > 0.5) +
-      cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
+      cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorSource === 'unknown' ? NaN : s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
+      (s.floorSource === 'unknown' ? cell('Stimmschwelle', 'angenommen: ' + fmt(stimmBoden(s) + 12, 1) + ' dBFS (Boden unbekannt, kein Messwert)') : '') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
       /* Korrigiert ist kein Zweifel: Teilerkontrolle und Gegenprobe liefern einen geprüften Wert. Rost nur,
          wenn die Oktave in vielen Rahmen offen ist. Früher machten schon 5 % Korrekturen die Kachel rostig. */
