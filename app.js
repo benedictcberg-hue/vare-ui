@@ -767,7 +767,13 @@
   function clearAll() {
     if (!window.confirm('Wirklich die gesamte Chronik dieses Browsers löschen? Vorher JSON-Sicherung anlegen!')) return;
     if (!window.confirm('Letzte Frage: alles löschen?')) return;
-    S.clearAll().then(function () { st.refs = {}; st.cal = null; st.calSession = false; renderCalStatus([]); refreshChronik(); status('Chronik gelöscht.'); });
+    S.clearAll().then(function () {
+      st.refs = {}; st.cal = null; st.calSession = false; renderCalStatus([]);
+      // Die Kalibrierung ist mitgelöscht. Ohne diesen Aufruf bliebe der Take-Knopf frei, während
+      // daneben „Ohne Kalibrierung ist kein Take möglich“ steht.
+      updateTakeButton();
+      refreshChronik(); status('Chronik gelöscht.');
+    });
   }
 
   /* ---------- Prüfsignal ---------- */

@@ -342,6 +342,27 @@ module.exports = async function (H) {
     p.schliessen();
   } catch (e) { check('U1.13', 'Ablauf Einsing-Angaben über Neuladen läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
+  /* ---------- U2 · „Alles löschen“: Kalibrierung ist mitgelöscht ---------- */
+  const statusText = p => (p.st().statusEl ? p.st().statusEl.textContent : '');
+  try {
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 5 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-L1'); await p.mikrofon();
+    await p.take();
+    p.klick('btn-clear-all');
+    await p.warte(() => sp.d.takes.size === 0 && /gelöscht/.test(statusText(p)));
+    await p.ruhe(20);
+    const gesperrt = p.el('btn-take').disabled, hint = p.el('take-hint').textContent;
+    // Ein Klick darf keinen Take starten (takeToggle prüft den Knopf).
+    p.klick('btn-take');
+    const gestartet = p.st().taking;
+    if (gestartet) { p.klick('btn-take'); await p.warte(() => !p.st().busy, 60000); }
+    check('U2.1', '„Alles löschen“ löscht die Kalibrierung mit: Take-Knopf gesperrt, ein Klick startet keinen Take',
+      gesperrt && !gestartet && p.st().cal === null && /Kalibrierung/.test(hint),
+      'gesperrt=' + gesperrt + ' | Klick startete Take=' + gestartet + ' | Hinweis „' + hint + '“');
+    p.schliessen();
+  } catch (e) { check('U2.1', 'Ablauf „Alles löschen“ läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
 };
