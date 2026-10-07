@@ -106,6 +106,14 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
 In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
 
+## JSON-Sicherung
+
+Version 3: Takes, Referenzen, Kalibrierungen und Einstellungen als JSON; nicht endliche Zahlen ausgeschrieben
+(`{"$nf":"NaN"}`). Die Rahmenverläufe stehen exakt als Bytes (Base64, little-endian, `{ $type, n, b64 }`),
+also bitgleich mit dem gespeicherten Float32-Wert — die Rahmen-CSV ist nach Sicherung → Import byte-gleich.
+Sicherungen der Versionen 1 und 2 (Verläufe auf 0,001 gerundet) bleiben lesbar. Eine ältere Seite lehnt
+Version 3 als unbekannt ab, statt sie falsch zu lesen.
+
 ## Dateien
 
 | Datei | Zweck | unter Node testbar |

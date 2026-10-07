@@ -238,8 +238,11 @@
   /* Nicht endliche Zahlen: JSON kennt weder NaN noch Infinity und schreibt null. Zurückgelesen ist
      null aber keine Lücke, sondern fast überall 0 — isFinite(null) ist wahr, und die Chronik zeichnete
      nie gemessene Formanten bei 0 Hz (Bericht 4, Befund 5). Deshalb stehen sie in der Sicherung
-     ausgeschrieben als {"$nf":"NaN"}, {"$nf":"Infinity"} oder {"$nf":"-Infinity"}. Ab Version 2. */
-  var BACKUP_VERSION = 2;
+     ausgeschrieben als {"$nf":"NaN"}, {"$nf":"Infinity"} oder {"$nf":"-Infinity"}. Ab Version 2.
+     Version 3: typisierte Serien exakt als Bytes (Base64, little-endian). Bis Version 2 standen Float-Serien
+     auf 0,001 gerundet da; die Rahmen-CSV rundet ein zweites Mal und wich nach Sicherung → Import in der
+     letzten Stelle ab (−11,845 → −11,85 statt −11,84). Jetzt ist die Rahmen-CSV nach dem Rundlauf byte-gleich. */
+  var BACKUP_VERSION = 3;
   function nfSchreiben(v) {
     if (typeof v === 'number') return isFinite(v) ? v : { $nf: String(v) };
     if (v === null || typeof v !== 'object' || typeof v.toJSON === 'function') return v;
@@ -269,25 +272,77 @@
     return v;
   }
 
-  /* Serien: NaN bleibt wie bisher null (kompakt, Hunderttausende Werte je Take), ±Infinity wird
-     ausgeschrieben — sonst käme es als NaN zurück. */
+  /* ---------- Serien exakt: Bytes in Base64 (ab Version 3) ----------
+     Jedes typisierte Feld steht als { $type, n, b64 }: n Werte, ihre Bytes little-endian in Base64.
+     Float32 bleibt bitgleich, auch NaN, ±Infinity und −0; nichts wird gerundet. Feste Byte-Reihenfolge,
+     damit eine Sicherung auf jedem Gerät gleich gelesen wird; auf big-endian-Geräten wird getauscht. */
+  var LITTLE = (function () { var b = new ArrayBuffer(2); new Uint16Array(b)[0] = 1; return new Uint8Array(b)[0] === 1; })();
+  var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', B64_CODE = [], B64_WERT = [];
+  (function () { for (var i = 0; i < 64; i++) { B64_CODE[i] = B64.charCodeAt(i); B64_WERT[B64.charCodeAt(i)] = i; } })();
+  // Byte-Reihenfolge je Element umdrehen (nur auf big-endian-Geräten nötig), in einer Kopie.
+  function getauscht(u8, bpe) {
+    var o = new Uint8Array(u8.length);
+    for (var i = 0; i < u8.length; i += bpe) for (var j = 0; j < bpe; j++) o[i + j] = u8[i + bpe - 1 - j];
+    return o;
+  }
+  function base64Aus(u8) {
+    var teile = [], STUECK = 3 * 8192, n = u8.length, codes = new Uint16Array(STUECK / 3 * 4);
+    for (var a = 0; a < n; a += STUECK) {
+      var e = Math.min(n, a + STUECK), j = a, c = 0, x;
+      for (; j + 2 < e; j += 3) {
+        x = (u8[j] << 16) | (u8[j + 1] << 8) | u8[j + 2];
+        codes[c++] = B64_CODE[x >> 18]; codes[c++] = B64_CODE[(x >> 12) & 63]; codes[c++] = B64_CODE[(x >> 6) & 63]; codes[c++] = B64_CODE[x & 63];
+      }
+      if (j < e) {                                   // Rest (nur im letzten Stück): 1 oder 2 Bytes, mit '='
+        x = (u8[j] << 16) | (j + 1 < e ? u8[j + 1] << 8 : 0);
+        codes[c++] = B64_CODE[x >> 18]; codes[c++] = B64_CODE[(x >> 12) & 63]; codes[c++] = j + 1 < e ? B64_CODE[(x >> 6) & 63] : 61; codes[c++] = 61;
+      }
+      teile.push(String.fromCharCode.apply(null, c === codes.length ? codes : codes.subarray(0, c)));
+    }
+    return teile.join('');
+  }
+  function base64Ein(s) {
+    if (typeof s !== 'string' || s.length % 4) throw new Error('Serie: Base64 mit falscher Länge');
+    var rest = s.charAt(s.length - 1) === '=' ? (s.charAt(s.length - 2) === '=' ? 2 : 1) : 0;
+    var out = new Uint8Array(s.length / 4 * 3 - rest), o = 0;
+    for (var i = 0; i < s.length; i += 4) {
+      var a = B64_WERT[s.charCodeAt(i)], b = B64_WERT[s.charCodeAt(i + 1)], c = B64_WERT[s.charCodeAt(i + 2)], d = B64_WERT[s.charCodeAt(i + 3)];
+      var ende = i + 4 === s.length;
+      if (a === undefined || b === undefined || (c === undefined && !(ende && rest === 2)) || (d === undefined && !(ende && rest >= 1))) throw new Error('Serie: kein Base64');
+      var x = (a << 18) | (b << 12) | ((c || 0) << 6) | (d || 0);
+      out[o++] = x >> 16;
+      if (o < out.length) out[o++] = (x >> 8) & 255;
+      if (o < out.length) out[o++] = x & 255;
+    }
+    return out;
+  }
+  function feldAus(v) {
+    var u8 = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    return { $type: v.constructor.name, n: v.length, b64: base64Aus(LITTLE || v.BYTES_PER_ELEMENT === 1 ? u8 : getauscht(u8, v.BYTES_PER_ELEMENT)) };
+  }
+  function feldEin(k, v) {
+    var T = TYPED[v.$type], u8 = base64Ein(v.b64);
+    if (typeof v.n !== 'number' || u8.length !== v.n * T.BYTES_PER_ELEMENT) throw new Error('Serie ' + k + ': ' + u8.length + ' Bytes für ' + v.n + ' Werte ' + v.$type);
+    if (!LITTLE && T.BYTES_PER_ELEMENT > 1) u8 = getauscht(u8, T.BYTES_PER_ELEMENT);
+    return new T(u8.buffer, 0, v.n);
+  }
   function packSeries(series) {
     var out = {};
     for (var k in series) {
       var v = series[k];
-      if (ArrayBuffer.isView(v)) {
-        var arr = new Array(v.length), isF = (v instanceof Float32Array || v instanceof Float64Array);
-        for (var i = 0; i < v.length; i++) arr[i] = isF ? (isFinite(v[i]) ? Math.round(v[i] * 1000) / 1000 : (v[i] !== v[i] ? null : { $nf: String(v[i]) })) : v[i];
-        out[k] = { $type: v.constructor.name, data: arr };
-      } else out[k] = nfSchreiben(v);
+      if (ArrayBuffer.isView(v) && TYPED[v.constructor.name]) out[k] = feldAus(v);
+      else out[k] = nfSchreiben(v);
     }
     return out;
   }
+  /* Liest Version 3 ({ $type, n, b64 }) und die älteren Fassungen: Version 1 und 2 schrieben { $type, data }
+     mit gerundeten Zahlen, NaN als null; Version 2 dazu ±Infinity als {"$nf":…}. */
   function unpackSeries(p) {
     var out = {};
     for (var k in p) {
       var v = p[k];
-      if (v && v.$type && TYPED[v.$type]) {
+      if (v && v.$type && TYPED[v.$type] && typeof v.b64 === 'string') out[k] = feldEin(k, v);
+      else if (v && v.$type && TYPED[v.$type] && v.data) {
         var T = TYPED[v.$type], arr = new T(v.data.length);
         for (var i = 0; i < v.data.length; i++) arr[i] = (v.data[i] == null) ? NaN : nfWert(v.data[i]);
         out[k] = arr;
@@ -296,9 +351,9 @@
     return out;
   }
   /* bundle = { takes: [take], series: { takeId: series }, refs, calibrations, settings, kernelVersion, exportedAt, audio?: {takeId: base64} } */
-  /* Version 2 schreibt nicht endliche Zahlen aus (nfSchreiben). Eine ältere Seite lehnt sie deshalb
-     als unbekannt ab, statt {"$nf":…} als Wert zu übernehmen und in der CSV „[object Object]“ zu
-     schreiben. Version 1 bleibt lesbar; was sie als null trägt, bleibt null und gilt als fehlend. */
+  /* Version 2 schreibt nicht endliche Zahlen aus (nfSchreiben), Version 3 die Serien als Bytes. Eine ältere
+     Seite lehnt beides als unbekannt ab, statt {"$nf":…} als Wert zu übernehmen oder Serien ohne data zu
+     lesen. Versionen 1 und 2 bleiben lesbar; was Version 1 als null trägt, bleibt null und gilt als fehlend. */
   function serializeBackup(bundle) {
     var takes = [];
     for (var i = 0; i < bundle.takes.length; i++) {
@@ -313,7 +368,7 @@
   function parseBackup(text) {
     var o = JSON.parse(text);
     if (!o || o.format !== 'vare-backup') throw new Error('Keine VARE-Sicherung (format fehlt)');
-    if (o.version !== 1 && o.version !== BACKUP_VERSION) throw new Error('Sicherungsversion ' + o.version + ' unbekannt');
+    if (o.version !== 1 && o.version !== 2 && o.version !== BACKUP_VERSION) throw new Error('Sicherungsversion ' + o.version + ' unbekannt');
     if (!Array.isArray(o.takes)) throw new Error('Sicherung ohne takes');
     var neu = o.version >= 2, lies = function (v) { return neu ? nfLesen(v) : v; };
     var takes = [], series = {}, audio = {};

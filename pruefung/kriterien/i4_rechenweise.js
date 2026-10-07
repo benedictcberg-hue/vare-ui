@@ -3,7 +3,8 @@
    vergleicht D.VERSION, die Chronik zeigt „älterer Kern“. K1 (Sprungzählung), K2 (Formantgültigkeit),
    K3 (Grundton) und K4 (SHR) haben den Kern geändert, die Version blieb 3.0.0 — alte und neue Takes galten
    als gleich gerechnet und speisten dieselben Referenzen.
-   I4a Kernversion und Kern-Fingerabdruck. Die übrigen Teile folgen unten. */
+   I4a Kernversion und Kern-Fingerabdruck, I4b „Alle neu analysieren“, I4c CSV für Excel DE (Formelschutz, f0_note),
+   I4d Sicherung Version 3 (Serien exakt als Bytes). */
 'use strict';
 const path = require('path'), crypto = require('crypto');
 
@@ -191,6 +192,54 @@ module.exports = async function (H) {
     const got = [note(ohne, 'standard', ','), note(ohne, 'excelde', ';'), note(altImport, 'standard', ','), note(mit, 'standard', ','), note(mit, 'excelde', ';')];
     check('I4c', 'CSV: f0_note ohne gemessenen Grundton leer (beide Dialekte, auch null aus einer älteren Sicherung), mit Grundton die Note',
       still.summary.f0.note === '--' && got.join(' ') === '|-99.0 |-99,0 |-99.0 G3|196.0 G3|196,0', 'Zusammenfassung „' + still.summary.f0.note + '“ → ' + got.join(' '));
+  }
+
+  /* ---------- I4d: Sicherung exakt (Version 3) ---------- */
+  {
+    const { C, V } = H;
+    // Prüftake: Stille, /a/ bei 147 Hz, Rauschen, /e/ bei 415 Hz — dazu Werte, die JSON nicht kennt.
+    const sig = H.concat([H.noise(Math.round(0.2 * H.SR), 2e-4, 81), D.synthVowel(147, [700, 1200, 2500, 3300, 4200], H.BW5, 0.5, H.SR, { gain: 0.3 }),
+      H.noise(Math.round(0.15 * H.SR), 3e-3, 82), D.synthVowel(415, [400, 1900, 2600, 3400, 4300], H.BW5, 0.4, H.SR, { gain: 0.2 })]);
+    const ser = (await A.analyseTake(sig, H.SR, { hopS: 0.01 })).series;
+    ser.f1[2] = Infinity; ser.f2[3] = -Infinity; ser.f3[4] = -0; ser.rms[5] = -11.845; ser.d34[6] = 1e-7;
+    const bundle = { takes: [{ id: 'r', code: 'R', summary: { snrDb: NaN } }], series: { r: ser }, refs: null, calibrations: [], settings: null };
+    const text = C.serializeBackup(bundle), back = C.parseBackup(text).series.r;
+    const bad = [];
+    let felder = 0;
+    for (const k of Object.keys(ser)) {
+      if (!ArrayBuffer.isView(ser[k])) continue;
+      felder++;
+      const b = back[k];
+      if (!b || b.constructor.name !== ser[k].constructor.name || b.length !== ser[k].length) { bad.push(k + ': ' + (b ? b.constructor.name + '[' + b.length + ']' : 'fehlt')); continue; }
+      const u = new Uint8Array(ser[k].buffer, ser[k].byteOffset, ser[k].byteLength), w = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+      let i = 0; while (i < u.length && u[i] === w[i]) i++;
+      if (i < u.length) bad.push(k + '[' + Math.floor(i / ser[k].BYTES_PER_ELEMENT) + '] ' + ser[k][Math.floor(i / ser[k].BYTES_PER_ELEMENT)] + ' → ' + b[Math.floor(i / ser[k].BYTES_PER_ELEMENT)]);
+    }
+    let zeilen = 0;
+    for (const d of ['standard', 'excelde']) {
+      const a = C.framesToCsv(ser, d, V), z = C.framesToCsv(back, d, V);
+      if (a !== z) { const la = a.split('\r\n'), lz = z.split('\r\n'); const j = la.findIndex((x, i) => x !== lz[i]); bad.push(d + ': ' + la.filter((x, i) => x !== lz[i]).length + ' Zeilen anders, erste ' + j); }
+      else zeilen = a.split('\r\n').length - 2;
+    }
+    check('I4d', 'Sicherung → Import: Rahmen-CSV byte-gleich (beide Dialekte), jedes typisierte Serienfeld bitgleich mit Typ (auch NaN, ±Infinity, −0, Werte auf der Rundungskante)',
+      JSON.parse(text).version === 3 && !bad.length && felder >= 40,
+      'Version ' + JSON.parse(text).version + ', ' + felder + ' Felder, ' + zeilen + ' Rahmen' + (bad.length ? ' | ' + bad.slice(0, 4).join(' | ') : ''));
+
+    // Ältere Sicherungen: Version 1 (NaN als null) und 2 (±Infinity als $nf, Serien als gerundete Zahlen).
+    const alt = v => JSON.stringify({ format: 'vare-backup', version: v, takes: [{ take: { id: 'a', summary: { snrDb: v === 2 ? { $nf: 'NaN' } : null } },
+      series: { f1: { $type: 'Float32Array', data: [700.123, null, v === 2 ? { $nf: 'Infinity' } : 3300] }, flags: { $type: 'Uint16Array', data: [1, 0, 65] }, cls: { $type: 'Int8Array', data: [-1, 3, 0] } }, audio: null }],
+      refs: null, calibrations: [], settings: null });
+    const b1 = C.parseBackup(alt(1)), b2 = C.parseBackup(alt(2)), s1 = b1.series.a, s2 = b2.series.a;
+    const lesbar = s1.f1 instanceof Float32Array && s1.f1[0] === Math.fround(700.123) && Number.isNaN(s1.f1[1]) && s1.f1[2] === 3300 && b1.takes[0].summary.snrDb === null
+      && s2.f1[2] === Infinity && Number.isNaN(b2.takes[0].summary.snrDb) && s2.flags instanceof Uint16Array && s2.flags[2] === 65 && s2.cls instanceof Int8Array && s2.cls[0] === -1;
+    // Beschädigt: eine Serie mit fehlenden Bytes darf nicht still kürzer oder verschoben ankommen.
+    const o = JSON.parse(text), k0 = Object.keys(o.takes[0].series).find(k => o.takes[0].series[k].$type === 'Float32Array');
+    o.takes[0].series[k0].b64 = o.takes[0].series[k0].b64.slice(4);
+    const wirft = t => { try { C.parseBackup(t); return ''; } catch (e) { return e.message; } };
+    const kaputt = wirft(JSON.stringify(o)), v4 = wirft(JSON.stringify(Object.assign(JSON.parse(text), { version: 4 })));
+    check('I4d', 'Sicherung schreibt Version 3; Versionen 1 und 2 bleiben lesbar (null → NaN, $nf, Typen); fehlende Bytes und eine unbekannte Version werden abgelehnt, nicht still übernommen',
+      C.BACKUP_VERSION === 3 && lesbar && new RegExp('Serie ' + k0 + ':').test(kaputt) && /Sicherungsversion 4 unbekannt/.test(v4),
+      'Version ' + C.BACKUP_VERSION + ', alt lesbar ' + lesbar + ', beschädigt „' + kaputt + '“, Version 4 „' + v4 + '“');
   }
 };
 module.exports.fingerabdruck = fingerabdruck;
