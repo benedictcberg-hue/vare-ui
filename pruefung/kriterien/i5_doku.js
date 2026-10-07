@@ -2,7 +2,8 @@
    I5a: Jede Browserdatei (alle *.js im Hauptordner außer test_dsp.js) ist ES5-Syntax. Ein Parser im
         ES5-Modus steht in CI nicht zur Verfügung (keine Abhängigkeiten), darum ein eigener Abtaster: Er
         überspringt Kommentare, Zeichenketten und reguläre Ausdrücke und meldet Schlüsselwörter und
-        Zeichen, die es erst ab ES2015 gibt. Er ist ein Stolperdraht, kein vollständiger Parser. */
+        Zeichen, die es erst ab ES2015 gibt. Er ist ein Stolperdraht, kein vollständiger Parser.
+   I5b: Der Hilfetext zu Schritt 0 (index.html) nennt die Platzhalter, die die CSV wirklich schreibt. */
 'use strict';
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
@@ -57,7 +58,7 @@ function es5Funde(src) {
 }
 
 module.exports = async function (H) {
-  const { check } = H;
+  const { check, C } = H;
   {
     const dateien = fs.readdirSync(ROOT).filter(f => /\.js$/.test(f) && f !== 'test_dsp.js').sort();
     const bad = [];
@@ -67,6 +68,26 @@ module.exports = async function (H) {
     }
     check('I5a', 'Browserdateien in ES5-Syntax: kein class/let/const, keine Pfeilfunktion, kein Template-String, keine Module, kein ...',
       dateien.length >= 10 && !bad.length, bad.length ? bad.join(' | ') : dateien.length + ' Dateien: ' + dateien.join(', '));
+  }
+  {
+    /* Hilfetext Schritt 0: Was er über die CSV sagt, muss die CSV auch schreiben. Früher stand dort
+       „Sentinel −99,00“; geschrieben wird −99 mit den Stellen der Spalte, fehlender Text bleibt leer. */
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const a = html.indexOf('<h2>Schritt 0'), b = html.indexOf('<h2>Take</h2>');
+    const text = (a >= 0 && b > a ? html.slice(a, b) : '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const geschrieben = new Set(), bad = [];
+    for (const d of ['standard', 'excelde']) {
+      const tr = d === 'excelde' ? ';' : ',', L = C.takesToCsv([{ code: 'B', createdAt: 'x' }], d).replace(/^﻿/, '').split(/\r?\n/);
+      const kopf = L[0].split(tr), w = L[1].split(tr), v = k => w[kopf.indexOf(k)];
+      for (const k of ['session_nr', 'take_in_session', 'pause_before_s', 'warmup_min']) geschrieben.add(v(k));
+      if (v('warmup_state') !== '') bad.push(d + ': warmup_state „' + v('warmup_state') + '“ statt leer');
+    }
+    const behauptet = (text.match(/[−-]99(?:[.,]\d+)?/g) || []).map(s => s.replace('−', '-'));
+    for (const s of behauptet) if (!geschrieben.has(s)) bad.push('Hilfetext nennt „' + s + '“, die CSV schreibt ' + Array.from(geschrieben).join(' / '));
+    if (!behauptet.length) bad.push('Hilfetext nennt keinen Platzhalter für fehlende Zahlen');
+    if (!/leere Zelle/.test(text)) bad.push('Hilfetext sagt nicht, dass fehlender Text als leere Zelle steht');
+    check('I5b', 'Hilfetext Schritt 0 nennt die Platzhalter, die die CSV schreibt: Zahl −99 mit den Stellen der Spalte, Text leer',
+      a >= 0 && b > a && !bad.length, bad.length ? bad.join(' | ') : (text.match(/[^.]*CSV[^.]*\./) || [''])[0].trim());
   }
 };
 module.exports.es5Funde = es5Funde;

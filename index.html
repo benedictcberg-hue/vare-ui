@@ -132,9 +132,9 @@
 
     <div class="panel">
       <h2>Schritt 0 — Sitzungskontext</h2>
-      <p class="small muted">Sieben Lieder zum Warmwerden, und nach zehn Minuten Kaffee ist die Hälfte wieder weg.
+      <p class="small muted">Einsingen und Pausen verändern die Stimme.
         Diese vier Angaben entscheiden, ob zwei Takes überhaupt vergleichbar sind. Sie werden mitgeschrieben,
-        nicht geschätzt: was hier leer bleibt, steht in der CSV als Sentinel −99,00.</p>
+        nicht geschätzt: was hier leer bleibt, steht in der CSV als −99 (Zahl) oder als leere Zelle (Text).</p>
       <div class="row">
         <label class="inline">Einsing-Status
           <select id="ctx-warmup">
@@ -159,7 +159,7 @@
       <div class="small muted">Die Pause wird aus der Uhrzeit des letzten Takes gerechnet und läuft
         mit — sie wird im Moment des Take-Starts festgehalten. Die Take-Position zählt innerhalb
         dieser Sitzung fortlaufend; die Nummer eines gelöschten Takes wird nicht neu vergeben.
-        „Neue Sitzung beginnen" setzt sie auf 1 zurück und verlangt eine neue Kalibrierung.
+        „Neue Sitzung beginnen“ setzt sie auf 1 zurück und verlangt eine neue Kalibrierung.
         Die Minuten seit Einsingbeginn laufen mit: eingetragen wird der Stand im Moment der Eingabe,
         jeder Take rechnet die Minute seines Starts. Liegen letzte Eingabe und letzter Take über drei
         Stunden zurück, werden die Einsing-Angaben geleert — das ist dann eine andere Übungseinheit.</div>
