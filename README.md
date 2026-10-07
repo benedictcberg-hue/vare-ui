@@ -73,6 +73,10 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    „Alle neu analysieren“ für jeden Take mit gespeichertem Audio (abbrechbar; Takes ohne Audio werden
    genannt und bleiben „anders gerechnet“). Verglichen und als Referenz genutzt werden nur Takes mit
    gleicher Rechenweise (Kernversion, Zusammenfassung, Gatter, Rahmenabstand, Streuungsgrenze).
+   Kein Take geht verloren: Vor der Analyse liegt die Aufnahme mit allen Angaben in IndexedDB. Wird die
+   Seite währenddessen neu geladen oder geschlossen, bietet sie die Aufnahme danach unter „Unvollendete
+   Analyse“ an (fortsetzen, WAV sichern, verwerfen); während Aufnahme und Analyse fragt der Browser vor
+   dem Verlassen nach. Take und Rahmenverlauf (und das WAV) werden in einer Transaktion gespeichert.
 3. **Kalibrierpflicht.** 5 s Stille, 3 s /a/, 1 s Ausklang vor dem ersten Take. Rauschboden,
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
@@ -203,6 +207,29 @@ Gezählt wird nur Weite und Dauer, ohne Urteil (`dsp.js` `detectJumps`):
 - Vibrato und Portamento ab 300 ms lösen nichts aus. Schnelles Gleiten über 80–200 ms zählt
   teilweise als Sprung.
 
+## Signallücken
+
+Fehlen mitten im Take Abtastwerte — Gerätewechsel unter Windows, USB- oder Bluetooth-Aussetzer,
+angehaltener Audiokontext —, stößt das Signal vor und nach der Lücke ohne Pause aneinander. Über einer
+Atempause entsteht so ein gehaltener Tonsprung, den niemand gesungen hat. Deshalb:
+
+- **Erkennen** (`recorder-worklet.js`, `recorder.js`): Jedes Stück aus dem AudioWorklet trägt den
+  Rahmenzähler des Kontexts und die Uhrzeit im Audiofaden. Springt der Rahmenzähler weiter, als
+  Abtastwerte da sind, fehlt Eingang (auf den Abtastwert genau). Läuft die Uhr dem Rahmenzähler um mehr
+  als 0,1 s davon und holt nicht wieder auf, stand der Kontext. Kam das erste Stück mehr als 0,3 s nach
+  dem Start oder das letzte mehr als 0,3 s vor dem Stopp, fehlt dort Signal. Ein Stück, das nur spät
+  kommt, ist keine Lücke; Stücke, die vor dem Stopp abgeschickt, aber noch nicht angekommen sind, gehören
+  dazu.
+- **Speichern und kennzeichnen:** Der Take wird gespeichert, mit Stelle und Dauer jeder Lücke
+  (`signalLuecken`), und steht in Ergebnis, Liste (Marke „Signallücke“), Detail und Hover in Rost. Die
+  Sprung-Kachel gilt dann als unsicher: Was in der Lücke gesungen wurde, fehlt.
+- **Naht als Pause** (`analysis.js`, auch bei jeder Neu-Analyse): Rahmen, deren längstes Fenster die
+  Naht überdeckt, werden nicht gemessen und als Pause geführt (Bit 8192 in `flags` der Rahmen-CSV); kein
+  Segment reicht über die Naht, und Feinspur und Sprungsuche laufen je Abschnitt.
+- **Keine Referenz:** Ein Take mit Lücke zählt nie als Referenz und lässt sich nicht anpinnen; eine
+  angepinnte Referenz aus ihm steht verwaist mit Grund da.
+- CSV `signal_gap_s`: fehlende Sekunden; 0 = geprüft, keine Lücke; −99 = nicht geprüft (ältere Takes).
+
 ## Prüfung
 
 ```
@@ -211,11 +238,11 @@ node test_dsp.js
 
 Erst die eingebauten Kriterien T1–T27 in `test_dsp.js`, danach jedes Modul unter
 `pruefung/kriterien/` in alphabetischer Reihenfolge (Format: `pruefung/kriterien/README.md`).
-Stand Kern 4.0.0: 424 Kriterien gegen synthetische Signale mit bekannter Wahrheit. Exit-Code 1,
+Stand Kern 4.0.0: 433 Kriterien gegen synthetische Signale mit bekannter Wahrheit. Exit-Code 1,
 sobald eines reißt. **Reißt ein Kriterium, ist das ein Befund, keine Toleranzfrage — melden, nicht
 die Schwelle anheben.** Läuft in CI auf `ubuntu-latest` und `windows-latest` mit Node 22.
 
-Laufzeit unter Linux mit Node 22: rund 3½ Minuten, davon `k_kern.js` allein knapp zwei Minuten. Unter
+Laufzeit unter Linux mit Node 22: knapp 4 Minuten, davon `k_kern.js` allein knapp zwei Minuten. Unter
 Windows länger.
 
 | Modul | IDs | prüft | Linux |
@@ -231,7 +258,7 @@ Windows länger.
 | `i1_versoehnen.js` | I1 | Nummerierung über alle Fenster an Vokalwechseln | 4 s |
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 2 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
-| `n_ui.js` | B1 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Rahmenverlauf in einer Transaktion | 2 s |
+| `n_ui.js` | B1 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite | 17 s |
 
 Jede Änderung am Kern, die einen Rahmenwert ändert, erhöht `VERSION` in `dsp.js` und trägt einen neuen
 Fingerabdruck in `i4_rechenweise.js` ein; sonst reißt I4a.
@@ -247,11 +274,13 @@ Linux: `NODE_PATH="$(npm root -g)" node pruefung/browser-test.js`
 Windows (PowerShell): `$env:NODE_PATH = (npm root -g); node pruefung\browser-test.js`
 
 Chromium kommt aus der Umgebungsvariablen `VARE_CHROMIUM`, sonst aus `/opt/pw-browsers/chromium`, falls
-vorhanden, sonst aus der Playwright-Installation. 68 Prüfungen, Laufzeit rund 1½ Minuten: Token-Tor (leere Hülle
+vorhanden, sonst aus der Playwright-Installation. 73 Prüfungen, Laufzeit rund 2 Minuten: Token-Tor (leere Hülle
 ohne Token, Meldung bei falschem Token, Oberfläche erst nach Verbindung), Mikrofon über das
 AudioWorklet, Kalibrierung, Take gegen bekannte Formanten, Live-Gatter, Chronik, CSV, Sicherung,
 Import, Detailansicht mit Hover, Neu-Analyse einzeln und „Alle neu analysieren“, Schritt 0 über
-Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px.
+Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px,
+Datenbank Version 1 → 2, Neuladen mitten in der Analyse mit Rückfrage und Fortsetzen, Take ohne
+vorgetäuschte Lücke und ein Aussetzer von 1,5 s als Signallücke.
 Die GitHub-API wird nachgestellt — kein Netz, kein echtes Token.
 
 ## CSV
@@ -266,6 +295,10 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
 
 In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
+
+`signal_gap_s` (Take): Sekunden, die in der Aufnahme fehlen (siehe „Signallücken“); 0 = geprüft, keine
+Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
+(nicht gemessen, als Pause geführt).
 
 Stand Kern 4.0.0: 100 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
 
@@ -289,7 +322,9 @@ Version 3: Takes, Referenzen, Kalibrierungen und Einstellungen als JSON; nicht e
 (`{"$nf":"NaN"}`). Die Rahmenverläufe stehen exakt als Bytes (Base64, little-endian, `{ $type, n, b64 }`),
 also bitgleich mit dem gespeicherten Float32-Wert — die Rahmen-CSV ist nach Sicherung → Import byte-gleich.
 Sicherungen der Versionen 1 und 2 (Verläufe auf 0,001 gerundet) bleiben lesbar. Eine ältere Seite lehnt
-Version 3 als unbekannt ab, statt sie falsch zu lesen.
+Version 3 als unbekannt ab, statt sie falsch zu lesen. Unvollendete Analysen (Aufnahmen, deren Auswertung
+noch nicht gespeichert ist) gehören nicht zur Sicherung; liegen welche vor, sagt die Seite es nach dem
+Sichern.
 
 ## Dateien
 
@@ -302,8 +337,8 @@ Version 3 als unbekannt ab, statt sie falsch zu lesen.
 | `csv.js` | CSV-Spalten, Rahmen-CSV, JSON-Sicherung | ja |
 | `wav.js` | WAV schreiben und lesen (PCM 8/16/24/32, Float32, EXTENSIBLE) | ja |
 | `korpus.js` | Lesen von `korpus.json` aus dem privaten Repo, Token-Verwaltung | Browser |
-| `storage.js` | IndexedDB: takes, series, audio, calibrations, meta | Browser |
-| `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet, Ringpuffer | Browser |
+| `storage.js` | IndexedDB (Version 2): takes, series, audio, calibrations, meta, pending; Take und Verlauf in einer Transaktion | Browser |
+| `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet mit Rahmenzähler und Uhrzeit, Ringpuffer, Erkennung von Signallücken | Browser |
 | `chronik.js` | Liste, Referenzen, Detailansicht mit vier Zeitspuren, Gründe im Hover | Browser |
 | `app.js` | Verdrahtung: Anmeldung, Live-Schleife, Kalibrierung, Take, Export, Prüfsignal, Einstellungen | Browser |
 | `index.html`, `style.css` | Oberfläche, Forest Green und Gold | – |
@@ -339,6 +374,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   ein Urteil „Periodenverdopplung“ fällt das Werkzeug nicht. Sicher wäre nur die Zyklusalternation —
   die misst dieses Werkzeug nicht und verspricht sie auch nicht.
 - Adduktion wird nicht geschätzt. Dafür bleibt EGG die einzige Option, und das ist ein Gerät.
+- Ein Take mit Signallücke steht überall in Rost als lückenhaft da und ist keine Referenz (siehe
+  „Signallücken“). Meldungen nach dem Take sagen, was gespeichert ist: „NICHT gespeichert“ nur, wenn der
+  Take nicht in der Chronik steht; passt nur das WAV nicht mehr, heißt es „gespeichert, das WAV nicht“.
 
 ## Ausbaustufen (Anschlussstellen vorhanden)
 

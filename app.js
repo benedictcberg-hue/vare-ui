@@ -723,7 +723,7 @@
       vorabText = 'Aufnahme nicht vorab gesichert (' + fehlerText(e) + ') — bis die Analyse fertig ist, liegt sie nur im Speicher dieser Seite. Seite nicht schließen.';
       status(vorabText, true);
     });
-    var opts = {}; for (var ok in feld.opts) opts[ok] = feld.opts[ok];
+    var opts = {}; for (var schluessel in feld.opts) opts[schluessel] = feld.opts[schluessel];
     opts.naehteS = nahtStellen(feld.signalLuecken);
     vorab.then(function () {
       return A.analyseTake(samples, sr, opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; });
