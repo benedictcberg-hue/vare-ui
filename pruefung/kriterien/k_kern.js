@@ -383,8 +383,11 @@ module.exports = async function (H) {
     const l1 = lu([794, 2522, 3299, 4432]), l2 = lu([380, 750, 2400, 3350, 4150]), l3 = lu([680, 1250, 2450, 3400]), l4 = lu([738, 1174, 2553, 3933, 4432], [3, 3, 3, 3, 1]);
     // l3/l4: Seit F4 ab 1900 Hz zulässig ist (tiefe enge Cluster, K2d), kann der dritte Gipfel ohne sichtbares
     // F5 auch F4 sein; F3 ist dann ebenfalls unsicher.
-    check('K2a', 'Lesarten: unterster Gipfel 794 Hz über F3-tauglichen Gipfeln → alles unsicher; /o/ vollständig → sicher; /a/ ohne F5 → F3/F4 unsicher; F6 nur in einer Ordnung → F3–F5 unsicher',
-      l1 === '11110' && l2 === '00000' && l3 === '00110' && l4 === '00111', [l1, l2, l3, l4].join(' '));
+    // l1/l3 mit vier Gipfeln: Eine Lesart legt den obersten Gipfel als F5 (bei l3: „F3 fehlt“), also ist auch der
+    // F5-Slot dieses Fensters unsicher. Vorher stand hier 11110/00110 — das schrieb fest, dass ein leerer Slot
+    // als sicher gilt, obwohl eine Lesart ihn füllt; an Vokalwechseln galt so ein verschobenes F5 als gültig (I1a).
+    check('K2a', 'Lesarten: unterster Gipfel 794 Hz über F3-tauglichen Gipfeln → alles unsicher; /o/ vollständig → sicher; /a/ ohne F5 → F3–F5 unsicher; F6 nur in einer Ordnung → F3–F5 unsicher',
+      l1 === '11111' && l2 === '00000' && l3 === '00111' && l4 === '00111', [l1, l2, l3, l4].join(' '));
     // Gegenproben: saubere Vokale verlieren nichts
     check('K2a', 'Gegenprobe: saubere Vokale a/e/i/o/u, 98–247 Hz: alle fünf Formanten in jedem Rahmen gültig', E.sauber.alle === E.sauber.n && E.sauber.n > 0, E.sauber.alle + '/' + E.sauber.n);
     check('K2a', 'Gegenprobe: mit F6 4400–4800 Hz bleibt ΔF3–4 in mindestens 90 % der Rahmen gültig', E.f6.d34 >= 0.9 * E.f6.n, E.f6.d34 + '/' + E.f6.n);

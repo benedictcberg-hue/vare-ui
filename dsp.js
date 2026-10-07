@@ -498,10 +498,20 @@
 
   // Slot k ist sicher, wenn jede zulässige Lesart den k-ten Gipfel als F(k+1) liest. Ist keine Lesart
   // zulässig, ist alles unsicher.
+  // Auch ein Slot über dem obersten Gipfel ist unsicher, sobald eine Lesart einen Gipfel dorthin legt:
+  // Das Fenster liefert für ihn keinen Wert, seine Nummerierung kann aber den anderen Fenstern
+  // widersprechen. Gemessen an Vokalwechseln (9 Paare, 98–262 Hz, Rahmen alle 5 ms): ein Fenster mit
+  // vier Gipfeln führt F4 des neuen Vokals als F4, die längeren Fenster denselben Gipfel als F5, und
+  // F5 3488 statt 4300 Hz galt als gültig. Gültige Slots, die ein anderes Fenster unter anderer Nummer
+  // führt: ohne diese Regel 15, mit ihr 0. Preis an denselben Wechseln: 225 gültige F5 weniger (davon 16
+  // falsch), F1–F4 unverändert; Prüfsatz K2 (sauber, F6, Rauschen, Rosenberg): unverändert. Erwogen:
+  // nur sperren, wenn ein Fenster den Wert ± 130 Hz unter anderer Nummer führt — 15 F5 weniger (13
+  // falsch), lässt aber F5 3454 statt 4200 Hz durch (dort liegt der Gipfel 154 Hz daneben).
   function slotNumberUnsure(P, nOrd) {
     var n = Math.min(5, P.length), uns = [false, false, false, false, false], deut = deutungen(P, nOrd), i, k;
     if (!deut.length) return [true, true, true, true, true];
     for (k = 0; k < n; k++) for (i = 0; i < deut.length; i++) if (deut[i].slot[k] !== k) uns[k] = true;
+    for (k = n; k < 5; k++) for (i = 0; i < deut.length; i++) if (deut[i].slot[k] >= 0) uns[k] = true;
     return uns;
   }
 
