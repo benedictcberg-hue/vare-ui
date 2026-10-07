@@ -689,7 +689,8 @@ module.exports = async function (H) {
    B2b: Die Neu-Analyse nennt jede geänderte Rechenweise und sperrt währenddessen den Take-Knopf (N20).
    B2c: Kein Take-Code, den pandas oder Excel als fehlend, Zahl oder Wahrheitswert lesen (N18).
    B2d: Die Sicherung zählt die ganze Datei und scheitert nie mit „Invalid string length“ (N19).
-   B2e: README und pages.yml nennen dieselbe Pages-Quelle „GitHub Actions“ (N24). */
+   B2e: README und pages.yml nennen dieselbe Pages-Quelle „GitHub Actions“ (N24).
+   B2f: Ohne Grundton steht „–“ statt der Note „--“. */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -901,6 +902,32 @@ async function kriterienB2(H) {
       gate && quelleYml && nenntActions && !branchAnweisung,
       'pages.yml: deploy needs test=' + gate + ', verlangt GitHub Actions=' + quelleYml + ' | README: „' + abschnitt.replace(/\s+/g, ' ').trim().slice(0, 160) + '“, nennt GitHub Actions=' + nenntActions + ', Branch als Anweisung=' + branchAnweisung);
   } catch (e) { check('B2e', 'Ablauf README/pages.yml läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2f · Ohne Grundton keine Note „--“, sondern „–“ wie bei jedem fehlenden Wert ---------- */
+  try {
+    // Take nur aus Raumrauschen (kein Grundton) und ein /a/ auf G3 (Note G3) als Gegenprobe.
+    const still = noise(Math.round(1.3 * SR), 3e-3, 91);
+    const vokal = H.concat([noise(Math.round(0.1 * SR), 2e-4, 92), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], H.BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 93)]);
+    let sig = still;
+    const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(sig), sampleRate: SR, durationS: sig.length / SR }), SR);
+    p.kalibriert('cal-f'); await p.mikrofon();
+    const ansicht = async T => {
+      const erg = (U.kacheln(p.el('take-result').innerHTML).find(k => k.k === 'F0') || {}).v || '?';
+      p.sb.VAREAPP.refreshChronik(); await p.warte(() => p.el('takes-list').innerHTML.indexOf('data-id="' + T.id + '"') >= 0, 3000);
+      const m = new RegExp('<tr data-id="' + T.id + '">([\\s\\S]*?)</tr>').exec(p.el('takes-list').innerHTML), zellen = m ? m[1].split('</td>').map(z => z.replace(/<[^>]+>/g, '')) : [];
+      p.geheZu('#/take/' + T.id); await p.warte(() => p.el('take-detail').innerHTML.indexOf('<h2>' + T.code + ' ') >= 0, 3000);
+      const det = (U.kacheln(p.el('take-detail').innerHTML).find(k => /^F0 Median/.test(k.k)) || {}).v || '?';
+      p.geheZu('#/aufnahme');
+      return { erg, liste: zellen[2] || '?', det };
+    };
+    const Ts = await p.take(), a = await ansicht(Ts);
+    sig = vokal; const Tv = await p.take(), b = await ansicht(Tv);
+    const ohneOk = Ts.summary.f0.note === '--' && !/--/.test(a.erg + a.liste + a.det) && /^–/.test(a.erg) && /^–/.test(a.liste) && /^–/.test(a.det);
+    const mitOk = /G3/.test(b.erg) && /G3/.test(b.liste) && /G3/.test(b.det);
+    check('B2f', 'Ohne gemessenen Grundton steht keine Note „--“, sondern „–“ (Take-Ergebnis, Liste, Detail); mit Grundton die Note',
+      ohneOk && mitOk, 'ohne Grundton (Zusammenfassung „' + Ts.summary.f0.note + '“): Ergebnis „' + a.erg + '“, Liste „' + a.liste + '“, Detail „' + a.det + '“ | /a/ G3: „' + b.erg + '“, „' + b.liste + '“, „' + b.det + '“');
+    p.schliessen();
+  } catch (e) { check('B2f', 'Ablauf Note ohne Grundton läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

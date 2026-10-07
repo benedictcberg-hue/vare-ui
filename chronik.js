@@ -25,6 +25,9 @@
     ctx.fillStyle = COL.bg; ctx.fillRect(0, 0, w, cssH);
     return { ctx: ctx, w: w, h: cssH };
   }
+  /* Note zu einem Grundton, nur zu einem gemessenen: ohne Wert liefert dsp.js hzToNote „--“, ein Text, wo nichts
+     gemessen ist. Fehlend heißt hier „–“ wie bei jedem anderen Wert (in der CSV leer). Roh, nicht maskiert. */
+  function noteText(hz, note) { return (zahl(hz) && note && note !== '--') ? String(note) : ''; }
   function statRange(s) { return s && zahl(s.med) ? fmt(s.med) + ' [' + fmt(s.q1) + '–' + fmt(s.q3) + ']' : '–'; }
   function statRangeShare(summary, s) {
     if (!s || !zahl(s.med)) return '–';
@@ -209,7 +212,7 @@
         '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span>'
           + (A.lueckenhaft(t) ? ' <span class="tag rust" title="' + esc(lueckenText(t)) + '">Signallücke</span>' : '') + '</td>' +
         '<td class="mono">' + esc(t.vowelIntent || '–') + ' / ' + esc(s.vowel && s.vowel.dominant || '–') + '</td>' +
-        '<td class="num">' + (s.f0 ? fmt(s.f0.med) + ' ' + esc(s.f0.note) + listeUnsicher(s.f0UnsureShare, 'Grundton unsicher') : '–') + '</td>' +
+        '<td class="num">' + (s.f0 ? fmt(s.f0.med) + (noteText(s.f0.med, s.f0.note) ? ' ' + esc(s.f0.note) : '') + listeUnsicher(s.f0UnsureShare, 'Grundton unsicher') : '–') + '</td>' +
         '<td><canvas class="bars" height="28"></canvas></td>' +
         '<td class="num">' + (s.d34stable && s.d34stable.n ? statRange(s.d34stable) : (f3u ? '<span class="muted" title="nicht gewertet: F3 stabil unter dem Mindestwert dieses Takes">–</span>' : '<span class="rust">–</span>')) + '</td>' +
         '<td class="num">' + (s.f3stable && s.f3stable.n ? (f3u ? '<span class="befund" title="unter dem F3-Mindestwert ' + fmt(thr) + ' Hz dieses Takes, ΔF3–4 dort nicht gewertet">' : (thr == null ? '<span title="F3-Mindestwert dieses Takes nicht gespeichert">' : '<span>')) + fmt(s.f3stable.med) + '</span>' : '–') + '</td>' +
@@ -393,7 +396,7 @@
     return '<div class="grid">' +
       cell('Dauer · Rahmen', fmt(take.durationS, 1) + ' s · ' + fmt(s.nFrames)) +
       cell('stimmhaft · gültig · stabil', fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' %') +
-      cell('F0 Median [q1–q3]', statRange(s.f0) + ' ' + esc(s.f0 && s.f0.note || '') + f0Zusatz(s), f0Unsicher(s)) +
+      cell('F0 Median [q1–q3]', statRange(s.f0) + (s.f0 && noteText(s.f0.med, s.f0.note) ? ' ' + esc(s.f0.note) : '') + f0Zusatz(s), f0Unsicher(s)) +
       [0, 1, 2, 3, 4].map(function (k) { var f = s.F && s.F[k]; return cell('F' + (k + 1), statRangeShare(s, f), formantSchwach(s, f)); }).join('') +
       cell('ΔF3–4 alle gültigen', statRange(s.d34)) +
       // Keine Wertung, weil F3 sicher unter dem Mindestwert liegt, ist ein Befund, kein unsicherer Wert.
@@ -513,5 +516,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

@@ -303,7 +303,8 @@
     if (fr.octaveAmbiguous) f0z.push(CH.oktavText(fr.octaveUnterGrenze));
     if (fr.f0Korrektur) f0z.push(CH.f0KorrText(fr.f0Korrektur, fr.f0Yin));
     else if (fr.octaveCorrected) f0z.push('Teiler ' + fr.subFactor + ' aus Teiltonreihe');
-    setStat('f0', fmt(fr.f0, 1) + ' Hz ' + fr.note + (f0z.length ? ' (' + f0z.join('; ') + ')' : ''), f0Uns);
+    var note = CH.noteText(fr.f0, fr.note);
+    setStat('f0', fmt(fr.f0, 1) + ' Hz' + (note ? ' ' + note : '') + (f0z.length ? ' (' + f0z.join('; ') + ')' : ''), f0Uns);
     /* Warum ein Formant ungültig ist, gehört neben die Zahl — „Nummer mehrdeutig“ heißt etwas anderes als
        „Streuung“: im ersten Fall ist womöglich der falsche Formant gemeint. Früher stand hier „Zuordnung
        unsicher, nur N Resonanzen“, auch bei fünf Gipfeln und bei einem verschmolzenen Gipfel, und ein Formant
@@ -830,7 +831,7 @@
       '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
       // F0 und SHR max aus sicheren Rahmen; der Rest steht in Rost daneben (wie im Detail).
-      '<div class="stat' + (CH.f0Unsicher(s) ? ' unsure' : '') + '"><span class="k">F0</span><span class="v">' + fmt(s.f0.med) + ' Hz ' + CH.esc(s.f0.note) + CH.f0Zusatz(s) + '</span></div>' +
+      '<div class="stat' + (CH.f0Unsicher(s) ? ' unsure' : '') + '"><span class="k">F0</span><span class="v">' + (CH.zahl(s.f0.med) ? fmt(s.f0.med) + ' Hz' + (CH.noteText(s.f0.med, s.f0.note) ? ' ' + CH.esc(s.f0.note) : '') : '–') + CH.f0Zusatz(s) + '</span></div>' +
       // Schwach belegte Formanten in Rost mit ihrem Anteil, nach derselben Regel wie Liste und Detail (CH.formantSchwach).
       '<div class="stat"><span class="k">F1–F5 Median</span><span class="v">' + s.F.map(function (f) { return CH.formantSchwach(s, f) ? '<span class="rust unsicher-teil">' + fmt(f.med) + ' (' + CH.formantBeleg(s, f) + ')</span>' : fmt(f.med); }).join(' · ') + '</span></div>' +
       // Ohne Wertung, weil F3 sicher unter dem Mindestwert liegt: Befund, nicht Rost (wie in der Chronik).
