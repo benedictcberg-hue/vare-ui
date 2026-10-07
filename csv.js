@@ -58,6 +58,9 @@
     { key: 'sample_rate', get: g('sampleRate'), dec: 0 },
     { key: 'device', get: g('deviceLabel') },
     { key: 'kernel_version', get: g('analysis.kernelVersion') },
+    /* Gültigkeitsgrenze der Streuung, mit der dieser Take gerechnet wurde (Hz). Ohne sie musste, wer in der Rahmen-CSV
+       sdw/sdo gegen den Grund „Streuung“ nachprüft, 130 Hz annehmen; ältere Takes ohne Angabe −99. */
+    { key: 'spread_max_hz', get: g('analysis.spreadMaxHz'), dec: 0 },
     { key: 'calibration_id', get: g('calibrationId') },
     { key: 'vowel_intent', get: g('vowelIntent') },
     { key: 'vowel_class', get: g('summary.vowel.dominant') },

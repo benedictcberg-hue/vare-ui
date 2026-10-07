@@ -15,7 +15,7 @@ const TAKE_SOLL = [
   ['session_id', 'sitzung.id', 'text'], ['take_in_session', 'sitzung.position', 0], ['pause_before_s', 'sitzung.pauseVorherS', 1],
   ['pause_same_session', 'sitzung.pauseSelbeSitzung', 'bool'], ['warmup_state', 'sitzung.warmup', 'text'], ['warmup_min', 'sitzung.warmupMin', 0],
   ['duration_s', 'durationS', 2], ['signal_gap_s', 'signalLueckeS', 2], ['sample_rate', 'sampleRate', 0], ['device', 'deviceLabel', 'text'],
-  ['kernel_version', 'analysis.kernelVersion', 'text'], ['calibration_id', 'calibrationId', 'text'], ['vowel_intent', 'vowelIntent', 'text'],
+  ['kernel_version', 'analysis.kernelVersion', 'text'], ['spread_max_hz', 'analysis.spreadMaxHz', 0], ['calibration_id', 'calibrationId', 'text'], ['vowel_intent', 'vowelIntent', 'text'],
   ['vowel_class', 'summary.vowel.dominant', 'text'], ['vowel_share', 'summary.vowel.dominantShare', 3],
   ['f0_med_hz', 'summary.f0.med', 1], ['f0_q1_hz', 'summary.f0.q1', 1], ['f0_q3_hz', 'summary.f0.q3', 1], ['f0_note', 'summary.f0.note', 'text'],
   ['f0_unsure_share', 'summary.f0UnsureShare', 3], ['f0_korrektur_share', 'summary.f0KorrekturShare', 3]

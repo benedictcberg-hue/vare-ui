@@ -690,7 +690,8 @@ module.exports = async function (H) {
    B2c: Kein Take-Code, den pandas oder Excel als fehlend, Zahl oder Wahrheitswert lesen (N18).
    B2d: Die Sicherung zählt die ganze Datei und scheitert nie mit „Invalid string length“ (N19).
    B2e: README und pages.yml nennen dieselbe Pages-Quelle „GitHub Actions“ (N24).
-   B2f: Ohne Grundton steht „–“ statt der Note „--“. */
+   B2f: Ohne Grundton steht „–“ statt der Note „--“.
+   B2g: Die Take-CSV nennt die Streuungsgrenze des Takes (spread_max_hz). */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -928,6 +929,34 @@ async function kriterienB2(H) {
       ohneOk && mitOk, 'ohne Grundton (Zusammenfassung „' + Ts.summary.f0.note + '“): Ergebnis „' + a.erg + '“, Liste „' + a.liste + '“, Detail „' + a.det + '“ | /a/ G3: „' + b.erg + '“, „' + b.liste + '“, „' + b.det + '“');
     p.schliessen();
   } catch (e) { check('B2f', 'Ablauf Note ohne Grundton läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2g · Take-CSV nennt die Streuungsgrenze, mit der der Take gerechnet wurde ---------- */
+  try {
+    const SIGg = H.concat([noise(Math.round(0.1 * SR), 2e-4, 101), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], H.BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 102)]);
+    const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(SIGg), sampleRate: SR, durationS: SIGg.length / SR }), SR);
+    p.kalibriert('cal-g'); await p.mikrofon();
+    const T1 = await p.take();
+    p.st().settings.spreadMaxHz = 120;
+    const T2 = await p.take();
+    // Ein Take aus einer älteren Fassung ohne die Angabe.
+    const alt = Object.assign(await p.S.getTake(T1.id), { id: 'b2g-alt', code: 'Q', createdAt: '2026-01-01T09:00:00.000Z' });
+    delete alt.analysis.spreadMaxHz; await p.S.putTake(alt);
+    const lies = async dialekt => {
+      p.st().settings.csvDialect = dialekt;
+      const n0 = p.downloads.length; p.geheZu('#/chronik'); p.klick('btn-export-csv');
+      await p.warte(() => p.downloads.length > n0, 5000);
+      const text = (await p.downloads[p.downloads.length - 1].text()).replace(/^\uFEFF/, ''), sep = dialekt === 'excelde' ? ';' : ',';
+      const z = text.split('\r\n').filter(Boolean).map(x => x.split(sep)), k = z[0].indexOf('spread_max_hz'), c = z[0].indexOf('code');
+      const o = {}; z.slice(1).forEach(r => { o[r[c]] = k >= 0 ? r[k] : '(Spalte fehlt)'; });
+      return o;
+    };
+    const st = await lies('standard'), de = await lies('excelde');
+    const soll = { [T1.code]: '130', [T2.code]: '120', Q: '-99' };
+    const ok = Object.keys(soll).every(c => st[c] === soll[c] && de[c] === soll[c]) && T1.analysis.spreadMaxHz === 130 && T2.analysis.spreadMaxHz === 120;
+    check('B2g', 'Take-CSV: spread_max_hz trägt die Streuungsgrenze, mit der der Take gerechnet wurde (130 bzw. 120 Hz), ältere Takes ohne Angabe −99, beide Dialekte',
+      ok, 'Standard ' + JSON.stringify(st) + ' | Excel DE ' + JSON.stringify(de));
+    p.schliessen();
+  } catch (e) { check('B2g', 'Ablauf Streuungsgrenze in der CSV läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
