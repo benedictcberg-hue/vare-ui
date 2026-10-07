@@ -810,7 +810,9 @@ module.exports = async function (H) {
     vertragNachbauen(p.sb);
     regler(p, 'f3MinHz', 2600);
     await p.warte(() => !p.st().refs.a, 2000);
-    const ohne = { refs: Object.keys(p.st().refs).join(','), ueb: JSON.stringify(p.st().refsUebergangen), zeile: p.sb.VARECHRONIK.refZeile('a', p.st().refs.a, NaN, p.st().refsUebergangen.a || 0) };
+    // Ohne die Korrektur fehlen refsUebergangen und refZeile: dann reißt das Kriterium, statt abzubrechen.
+    const ueb = p.st().refsUebergangen || {}, refZ = typeof p.sb.VARECHRONIK.refZeile === 'function' ? p.sb.VARECHRONIK.refZeile : () => '';
+    const ohne = { refs: Object.keys(p.st().refs).join(','), ueb: JSON.stringify(ueb), zeile: refZ('a', p.st().refs.a, NaN, ueb.a || 0) };
     if (p.st().statusEl) p.st().statusEl.textContent = '';
     p.sb.VAREAPP.handlers.pinRef('a', sp.d.takes.get(A1.id));
     await p.ruhe(30);
@@ -830,7 +832,7 @@ module.exports = async function (H) {
     await p.warte(() => p.st().refs.a && p.st().refs.a.verwaist, 2000);
     p.sb.VAREAPP.refreshChronik();
     await p.warte(() => /verwaist:/.test(p.el('refs-table').innerHTML), 2000);
-    const r = p.st().refs.a || {}, zeile = p.sb.VARECHRONIK.refZeile('a', r, 700, 0), tab2 = p.el('refs-table').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const r = p.st().refs.a || {}, zeile = refZ('a', r, 700, 0), tab2 = p.el('refs-table').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     check('U3.19', 'Angepinnte Referenz, deren Take jetzt anders gerechnet ist: verwaist mit Grund in Tabelle und Live-Zeile, ohne Wert und ohne Differenz',
       r.verwaist === true && !p.sb.VARECHRONIK.zahl(r.d34) && /verwaist: Take A ist anders gerechnet/.test(tab2) && /Lösen/.test(tab2) && /verwaist/.test(zeile) && !/live/.test(zeile),
       'Live „' + zeile + '“ | Tabelle „' + tab2.trim() + '“');
@@ -867,7 +869,8 @@ module.exports = async function (H) {
       /^–$/.test((zellenA[1] || '').replace(/<[^>]+>/g, '')) && /verwaist: Take C ist gelöscht\./.test(za) && /zuletzt 612 Hz/.test(za) && /data-act="unpin"/.test(za)
       && /700/.test(zo) && /zweideutig 30 %/.test(zo) && !/<img/.test(div.innerHTML) && /\/e\/ 2 Takes/.test(div.innerHTML),
       div.innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
-    const zv = CHR.refZeile('a', refs.a, 650, 0), zn = CHR.refZeile('a', undefined, 650, 2), zr = CHR.refZeile('o', refs.o, 650, 0), z0 = CHR.refZeile('a', undefined, NaN, 0);
+    const refZ = typeof CHR.refZeile === 'function' ? CHR.refZeile : () => '';
+    const zv = refZ('a', refs.a, 650, 0), zn = refZ('a', undefined, 650, 2), zr = refZ('o', refs.o, 650, 0), z0 = refZ('a', undefined, NaN, 0);
     check('U3.22', 'Live-Zeile: verwaist ohne Wert und Differenz, mit Grund; ohne Referenz die Zahl der anders gerechneten Takes; sonst Wert und Differenz',
       /verwaist: Take C ist gelöscht\./.test(zv) && /zuletzt 612 Hz/.test(zv) && !/live|−|\+/.test(zv) && /2 Takes sind anders gerechnet/.test(zn) && /700 Hz/.test(zr) && /live 650 \(-50\)/.test(zr) && /erste stabile Aufnahme/.test(z0),
       [zv, zn, zr, z0].join(' | '));
