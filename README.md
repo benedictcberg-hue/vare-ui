@@ -231,6 +231,7 @@ Windows länger.
 | `i1_versoehnen.js` | I1 | Nummerierung über alle Fenster an Vokalwechseln | 4 s |
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 2 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
+| `n_ui.js` | B1 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Rahmenverlauf in einer Transaktion | 2 s |
 
 Jede Änderung am Kern, die einen Rahmenwert ändert, erhöht `VERSION` in `dsp.js` und trägt einen neuen
 Fingerabdruck in `i4_rechenweise.js` ein; sonst reißt I4a.

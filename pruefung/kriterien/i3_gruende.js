@@ -176,6 +176,8 @@ module.exports = async function (H) {
     const seite = { el, canv, raf: null, quelle: { sig: new Float64Array(48000), pos: 48000 } };
     const meta = new Map(), P = v => Promise.resolve(v);
     const store = { open: () => P(), putTake: () => P(), getTake: () => P(null), allTakes: () => P([]), deleteTake: () => P(), putSeries: () => P(), getSeries: () => P(null), putAudio: () => P(), getAudio: () => P(null),
+      // Schnittstelle seit B1: Take und Verlauf in einer Transaktion, Aufnahme vor der Analyse in pending.
+      putTakeSeries: () => P(), updateTake: () => P(null), updateTakeSeries: () => P(null), putPending: () => P(), allPending: () => P([]), deletePending: () => P(),
       deleteAudio: () => P(), hasAudio: () => P(false), audioIds: () => P([]), putCalibration: () => P(), allCalibrations: () => P([]), deleteCalibration: () => P(),
       getMeta: (k, fb) => P(meta.has(k) ? meta.get(k) : fb), setMeta: (k, v) => { meta.set(k, v); return P(); }, clearAll: () => P(), estimate: () => P(null), persist: () => P(false), persisted: () => P(false) };
     const rec = { active: false, info: null, sampleRate: 48000, samplesSeen: 0, recordedSeconds: 0,

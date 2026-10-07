@@ -688,7 +688,8 @@
           vowelIntent: feld.vowelIntent, calibrationId: feld.calibrationId,
           analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio
         };
-        return S.putTake(take).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); return S.putSeries(take.id, res.series); }).then(function () {
+        // Take und Rahmenverlauf in einer Transaktion: nie der eine ohne den anderen (storage.js putTakeSeries).
+        return S.putTakeSeries(take, res.series).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); }).then(function () {
           if (!feld.storeAudio) return null;
           var wav = W.encode(samples, sr, feld.audioFormat);
           return S.putAudio(take.id, sr, feld.audioFormat, new Blob([wav], { type: 'audio/wav' }));
@@ -774,16 +775,22 @@
         });
       });
     }).then(function (res) {
-      return S.getTake(id).then(function (take) {
-        if (!take) throw new Error('Take während der Neu-Analyse gelöscht');
-        var neu = analysisMeta(res.meta, new Date()), alt = take.analysis || {}, geaendert = [];
+      /* Lesen, Historie anhängen, Take und Rahmenverlauf schreiben: eine Transaktion. Getrennt geschrieben,
+         stand nach einem Abbruch zwischen beiden eine neue Zusammenfassung neben dem alten Verlauf. */
+      var geaendert = [];
+      return S.updateTakeSeries(id, function (take) {
+        var neu = analysisMeta(res.meta, new Date()), alt = take.analysis || {};
+        geaendert = [];
         take.history = (take.history || []).concat([{ analysis: take.analysis, summary: take.summary }]);
         if (alt.gate && neu.gate && alt.gate.f3MinHz !== neu.gate.f3MinHz) geaendert.push('F3-Mindestwert ' + alt.gate.f3MinHz + ' → ' + neu.gate.f3MinHz + ' Hz');
         if (alt.spreadMaxHz !== neu.spreadMaxHz) geaendert.push('Streuungsgrenze ' + alt.spreadMaxHz + ' → ' + neu.spreadMaxHz + ' Hz');
         if (alt.hopS !== neu.hopS) geaendert.push('Rahmenabstand ' + alt.hopS + ' → ' + neu.hopS + ' s');
         if (alt.kernelVersion !== neu.kernelVersion) geaendert.push('Kern ' + alt.kernelVersion + ' → ' + neu.kernelVersion);
         take.summary = res.summary; take.analysis = neu; take.reanalysisNote = geaendert.join(', ');
-        return S.putTake(take).then(function () { return S.putSeries(take.id, res.series); }).then(function () { return { take: take, geaendert: geaendert }; });
+        return take;
+      }, res.series).then(function (take) {
+        if (!take) throw new Error('Take während der Neu-Analyse gelöscht');
+        return { take: take, geaendert: geaendert };
       });
     });
   }
@@ -934,7 +941,8 @@
              aber die Doppelung wird gesagt statt still hingenommen. */
           if (codeDa['c:' + t.code]) doppelt.push(t.code);
           codeDa['c:' + t.code] = true;
-          chain = chain.then(function () { return S.putTake(t); }).then(function () { return b.series[t.id] ? S.putSeries(t.id, b.series[t.id]) : null; }).then(function () { return b.audio[t.id] ? S.putAudio(t.id, t.sampleRate, 'wav', blobFromB64(b.audio[t.id])) : null; });
+          // Take, Verlauf und WAV eines Takes in einer Transaktion: ein abgebrochener Import hinterlässt keine halben Takes.
+          chain = chain.then(function () { return S.putTakeSeries(t, b.series[t.id] || null, b.audio[t.id] ? { audio: { sampleRate: t.sampleRate, format: 'wav', blob: blobFromB64(b.audio[t.id]) } } : null); });
         });
         (b.calibrations || []).forEach(function (c) { chain = chain.then(function () { return S.putCalibration(c); }); });
         return chain;

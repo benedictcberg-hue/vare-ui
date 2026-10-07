@@ -65,7 +65,7 @@ function uhrNeu(startMs) {
 // IndexedDB-Ersatz mit derselben Schnittstelle wie storage.js. Kopien wie beim echten Speichern;
 // bleibt über „Neuladen“ hinweg bestehen. langsam = Verzögerung beim Lesen aller Takes (ms).
 function speicherNeu() {
-  const d = { takes: new Map(), series: new Map(), audio: new Map(), cal: new Map(), meta: new Map() };
+  const d = { takes: new Map(), series: new Map(), audio: new Map(), cal: new Map(), meta: new Map(), pending: new Map() };
   // Wie IndexedDB: eine echte Kopie, NaN und typisierte Felder bleiben erhalten.
   const kopie = v => (v == null ? v : v8.deserialize(v8.serialize(v)));
   const P = v => Promise.resolve(v);
@@ -80,6 +80,25 @@ function speicherNeu() {
     },
     deleteTake: id => { d.takes.delete(id); d.series.delete(id); d.audio.delete(id); return P(); },
     putSeries: (id, s) => { d.series.set(id, s); return P(); },
+    // Seit B1 schreibt storage.js Take und Verlauf (und was dazugehört) in einer Transaktion und ändert Takes
+    // durch Lesen-Ändern-Schreiben; Aufnahmen liegen vor der Analyse in pending. Die Nachbildung folgt der Schnittstelle.
+    putTakeSeries: (t, s, x) => {
+      d.takes.set(t.id, kopie(t)); if (s) d.series.set(t.id, s);
+      if (x && x.audio) d.audio.set(t.id, { takeId: t.id, sampleRate: x.audio.sampleRate, format: x.audio.format, blob: x.audio.blob, bytes: x.audio.blob.size });
+      else if (x && x.audioLoeschen) d.audio.delete(t.id);
+      if (x && x.offenErledigt) d.pending.delete(t.id);
+      return P();
+    },
+    updateTake: (id, fn) => api.updateTakeSeries(id, fn, null),
+    updateTakeSeries: (id, fn, s) => {
+      if (!d.takes.has(id)) return P(null);
+      let n; try { n = fn(kopie(d.takes.get(id))); } catch (e) { return Promise.reject(e); }
+      d.takes.set(id, kopie(n)); if (s) d.series.set(id, s);
+      return P(kopie(n));
+    },
+    putPending: (rec, a) => { d.pending.set(rec.id, kopie(rec)); d.audio.set(rec.id, { takeId: rec.id, sampleRate: a.sampleRate, format: a.format, blob: a.blob, bytes: a.blob.size }); return P(); },
+    allPending: () => P([...d.pending.values()].map(kopie)),
+    deletePending: id => { d.pending.delete(id); d.audio.delete(id); return P(); },
     getSeries: id => P(d.series.get(id) || null),
     putAudio: (id, sr, f, blob) => { d.audio.set(id, { takeId: id, sampleRate: sr, format: f, blob, bytes: blob.size }); return P(); },
     getAudio: id => P(d.audio.get(id)),
