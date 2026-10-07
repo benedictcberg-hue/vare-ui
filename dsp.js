@@ -20,6 +20,30 @@
   var SPREAD_MAX_HZ = 130;        // Gültigkeitsgrenze beider Sweeps
   var SLOT_TOL_HZ = 400;          // Zuordnung Gipfel → Slot über Ordnungen hinweg
   var MERGED_BW_HZ = 250;
+  /* Obergrenze für Formantgipfel. Der Wandlungs-Tiefpass (Grenze 0,46·12000 Hz) lässt bis 4,6 kHz alles
+     durch (−0,07 dB) und dämpft ab 4,8 kHz merklich (−0,4 dB; 5 kHz −1 dB; 5,5 kHz −5,7 dB). Darüber
+     formt der Filter die Hüllkurve, nicht das Ansatzrohr: die Preemphase hebt Rauschen an, der Filter
+     senkt es wieder, dazwischen entsteht bei 4,9–5,2 kHz ein Scheingipfel. F5 liegt beim Bariton bei
+     3,9–4,3 kHz (spec_v16). Gemessen auf dem Prüfsatz K2 (Vokale a/e/i/o/u, 98–247 Hz, mit F6, mit
+     Rauschen, mit Rosenberg-Quelle), falsch-gültige Slots:
+     - nur diese Grenze, Rauschteil: ohne Grenze 1349, mit 5000 Hz 703, mit 4800 Hz 692;
+     - mit allen Regeln dieses Kerns, ganzer Satz: ohne Grenze 63, mit 5000 Hz 0, mit 4800 Hz 0.
+     4600 Hz bringt nichts mehr und kostet gültige F5. */
+  var F_PEAK_MAX_HZ = 4800;
+  /* Grenzen je Slot F1…F6 für die Nummerierungsprüfung (deutungen). Bewusst weit: sie schließen nur
+     Lesarten aus, die es bei einer Männerstimme nicht gibt, sie unterscheiden keine Vokale.
+     - F1 bis 1100 Hz: offenes /a/ liegt auch in hoher Lage unter 900 Hz.
+     - F2 ab 550 Hz: das tiefste F2 des Vokalmodells (vowel.js) hat /u/ mit 700 Hz, gemessen 690–735 Hz;
+       F1 der geschlossenen Vokale liegt mit 270–380 Hz darunter. Das ist die Grenze für „der unterste
+       Gipfel kann nicht F1 sein“: unter 550 Hz ist er F1. Darüber ist er nur dann sicher F1, wenn die
+       Gipfel darüber nicht als F3, F4 … gelesen werden können (bei /a/ steht F2 um 1250 Hz, und das
+       kann kein F3 sein).
+     - F3 1700–3500 Hz, F4 2600–4500 Hz, F5 ab 3000 Hz: der engste Fall der Abnahmetabelle (Cluster eng,
+       F4 2800, F5 3150 Hz) muss zulässig bleiben.
+     - F6 ab 4450 Hz: 11·c/(4·L) für ein Rohr bis 21,6 cm. F5 bei 4300 Hz (Abnahmetabelle /i/ und
+       Cluster weit) darf nicht als F6 gelesen werden. */
+  var SLOT_LO = [0, 550, 1700, 2600, 3000, 4450];
+  var SLOT_HI = [1100, 2800, 3500, 4500, F_PEAK_MAX_HZ, Infinity];
   var BW_ARTIFACT_HZ = 40;        // physik.md 2.4: LPC-Bandbreiten darunter sind Artefakt, keine Messung         // ab hier gilt ein Gipfel als verschmolzen (zwei Formanten in einem)
   var SENTINEL = -99;             // Darstellung für „keine Messung“
   var SPEED_OF_SOUND_CM_S = 35000;
@@ -258,6 +282,7 @@
   /* Gipfel mit Prominenz, parabolisch verfeinert. Bandbreite aus der −3-dB-Breite. */
   function peaksFromEnvelope(env, sr, nMax, minProm) {
     var nBins = env.length, df = (sr / 2) / (nBins - 1), cand = [];
+    var fTop = Math.min(sr / 2 - 250, F_PEAK_MAX_HZ);
     for (var i = 2; i < nBins - 2; i++) {
       if (env[i] <= env[i - 1] || env[i] < env[i + 1]) continue;
       var l = i, r = i;
@@ -278,7 +303,7 @@
       if (lo < i && env[lo + 1] !== env[lo]) loX = lo + (half - env[lo]) / (env[lo + 1] - env[lo]);
       if (hi > i && env[hi - 1] !== env[hi]) hiX = hi - (half - env[hi]) / (env[hi - 1] - env[hi]);
       var bw = (hiX - loX) * df;
-      if (f > 120 && f < sr / 2 - 250) cand.push({ f: f, bw: bw, amp: env[i], prom: prom, bwArtifact: bw < BW_ARTIFACT_HZ });
+      if (f > 120 && f < fTop) cand.push({ f: f, bw: bw, amp: env[i], prom: prom, bwArtifact: bw < BW_ARTIFACT_HZ });
     }
     cand.sort(function (p, q) { return q.prom - p.prom; });
     var keep = cand.slice(0, nMax);
@@ -334,13 +359,15 @@
         }
       }
     }
-    var F = [], sdOrder = [], nOrders = [], merged = [];
+    var F = [], sdOrder = [], nOrders = [], merged = [], refF = [];
     for (var k = 0; k < 5; k++) {
       F.push(median(slots[k])); sdOrder.push(spread(slots[k])); nOrders.push(slots[k].length);
       merged.push(isFinite(bwSlot[k]) && bwSlot[k] > MERGED_BW_HZ);
     }
+    if (refIdx >= 0) for (var r = 0; r < per[refIdx].length; r++) refF.push(per[refIdx][r].f);
     return { F: F, sdOrder: sdOrder, nOrders: nOrders, BW: bwSlot, bwArtifact: bwArt, merged: merged,
-      nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN };
+      nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN,
+      slotUnsure: slotNumberUnsure(refF, nOrders) };
   }
 
   /* Zuordnung Gipfel → Slot ist eine Annahme, keine Messung: der k-te gefundene Gipfel gilt als Fk.
@@ -349,7 +376,8 @@
      Die Lücke liegt beim größten Abstand zwischen benachbarten gefundenen Gipfeln; alles darüber gilt
      als unsicher. Ohne diese Prüfung meldet der Kern einen verschmolzenen F3/F4-Buckel als ΔF3–4 von
      1614 Hz statt 150 Hz — und zwar „gültig“, weil alle Sweeps denselben Fehler wiederholen.
-     Wiederholbarkeit ist nicht Richtigkeit. */
+     Wiederholbarkeit ist nicht Richtigkeit.
+     Nur noch im Einzelrahmen-Aufruf analyse(); der Fenstersweep prüft mit slotNumberUnsure. */
   function slotGapUnsure(F, nPeaksRef) {
     var unsure = [false, false, false, false, false];
     if (nPeaksRef >= 5) return unsure;
@@ -366,6 +394,48 @@
     }
     for (var s = worstAt + 1; s < 5; s++) unsure[s] = true;
     return unsure;
+  }
+
+  /* Nummerierungsprüfung im Fenstersweep. Die Regel „größte Lücke“ (slotGapUnsure) greift nur bei
+     weniger als fünf Gipfeln und rät, wo die fehlende Resonanz liegt. Zwei Fälle gehen damit durch:
+     - Ein zusätzlicher Gipfel (F6 eines langen Rohres oder Rauschen an der Filterkante) macht die Zahl
+       wieder fünf: F3/F4 verschmolzen + F6 ergibt ΔF3–4 1380 statt 150 Hz, gültig.
+     - Fehlt die tiefste Resonanz, gibt es keine Lücke darunter: F2 steht im F1-Slot, gültig.
+     Stattdessen werden alle Lesarten der Gipfel einer Referenzordnung durchgespielt:
+     - jeder Gipfel ist ein Formant F1…F6, aufsteigend, innerhalb der Slotgrenzen SLOT_LO/SLOT_HI;
+     - höchstens eine Resonanz fehlt, an beliebiger Stelle, auch unter dem untersten Gipfel; bei fünf
+       Gipfeln ist der oberste dann F6;
+     - ein Gipfel, den nur eine Ordnung findet, kann auch ein Scheingipfel sein (Lesart ohne ihn).
+     P: Gipfelfrequenzen der Referenzordnung (aufsteigend), nOrd: Zahl der Ordnungen je Slot.
+     Jede Lesart: slot[k] = Index des Gipfels, der als F(k+1) gelesen wird (−1: keiner); use = die
+     Gipfel, die als Resonanz zählen; fehlt = Stelle in use, vor der eine Resonanz fehlt (use.length:
+     über dem obersten; −1: keine fehlt). */
+  function deutungen(P, nOrd) {
+    var n = Math.min(5, P.length), frei = [], deut = [], i;
+    for (i = 0; i < n; i++) if (!(nOrd[i] >= 2)) frei.push(i);
+    for (var mask = 0; mask < (1 << frei.length); mask++) {
+      var use = [];
+      for (i = 0; i < n; i++) { var u = frei.indexOf(i); if (u < 0 || !(mask & (1 << u))) use.push(i); }
+      var m = use.length;
+      for (var j = 0; j <= m; j++) {                     // j < m: eine Resonanz fehlt vor use[j]
+        var slot = [-1, -1, -1, -1, -1, -1], ok = true;
+        for (var q = 0; q < m && ok; q++) {
+          var s = q + (j < m && q >= j ? 1 : 0), f = P[use[q]];
+          if (s > 5 || (j === m && s > 4) || f < SLOT_LO[s] || f > SLOT_HI[s]) ok = false;
+          else slot[s] = use[q];
+        }
+        if (ok) deut.push({ slot: slot, use: use, fehlt: j < m ? j : (m < 5 ? m : -1) });
+      }
+    }
+    return deut;
+  }
+  // Slot k ist sicher, wenn jede zulässige Lesart den k-ten Gipfel als F(k+1) liest. Ist keine Lesart
+  // zulässig, ist alles unsicher.
+  function slotNumberUnsure(P, nOrd) {
+    var n = Math.min(5, P.length), uns = [false, false, false, false, false], deut = deutungen(P, nOrd), i, k;
+    if (!deut.length) return [true, true, true, true, true];
+    for (k = 0; k < n; k++) for (i = 0; i < deut.length; i++) if (deut[i].slot[k] !== k) uns[k] = true;
+    return uns;
   }
 
   /* ---------- F0: YIN mit kumulativer mittlerer Normierung ---------- */
@@ -634,7 +704,7 @@
       voiced: false, f0: NaN, note: '--', ap: 1, rmsDb: NaN,
       F: nan5.slice(), sdOrder: nan5.slice(), sdWin: nan5.slice(), BW: nan5.slice(),
       nOrders: [0, 0, 0, 0, 0], nWin: [0, 0, 0, 0, 0], valid: [false, false, false, false, false], merged: [false, false, false, false, false],
-      slotUnsure: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
+      slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
@@ -705,11 +775,12 @@
       out.sdOrder[k] = mainRes.sdOrder[k]; out.BW[k] = mainRes.BW[k]; out.nOrders[k] = mainRes.nOrders[k]; out.merged[k] = mainRes.merged[k];
       out.bwArtifact[k] = !!mainRes.bwArtifact[k];
     }
-    // Slot-Nummerierung prüfen, bevor Gültigkeit vergeben wird: fehlt eine Resonanz, ist alles
-    // oberhalb der Lücke falsch benannt — auch wenn alle Sweeps denselben Wert wiederholen.
-    var minPeaks = Infinity;
-    for (i = 0; i < perWin.length; i++) minPeaks = Math.min(minPeaks, perWin[i].nPeaksRef);
-    out.slotUnsure = slotGapUnsure(out.F, Math.min(mainRes.nPeaksRef, minPeaks));
+    // Slot-Nummerierung prüfen, bevor Gültigkeit vergeben wird: ist die Lesart mehrdeutig, ist der Wert
+    // vielleicht ein anderer Formant — auch wenn alle Sweeps denselben Wert wiederholen. Jedes Fenster
+    // prüft seine eigene Referenzordnung; ist es in einem Fenster mehrdeutig, ist es der Median auch.
+    for (i = 0; i < perWin.length; i++) for (k = 0; k < 5; k++) {
+      if (perWin[i].slotUnsure[k]) { out.slotUnsure[k] = true; out.slotGrund[k] = 'nummer'; }
+    }
     for (k = 0; k < 5; k++) {
       out.valid[k] = isFinite(out.F[k]) && out.nWin[k] >= 3 && out.sdWin[k] < smax && out.nOrders[k] >= 2 && out.sdOrder[k] < smax && !out.slotUnsure[k];
     }
@@ -1007,7 +1078,7 @@
     analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
-    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,

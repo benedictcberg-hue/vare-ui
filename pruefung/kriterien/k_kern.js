@@ -1,4 +1,5 @@
 /* Kriterien K1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps).
+   Kriterien K2: Formant-Nummerierung und Gültigkeit im Fenstersweep (analyseAt).
    Testsignale: allgemeine Baritonlage 75–470 Hz, synthetische Vokale mit bekannter Wahrheit.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
 'use strict';
@@ -281,5 +282,105 @@ module.exports = async function (H) {
     // Der Detektor entscheidet keinen Registerbruch: ein legato gesungener Melodiesprung bleibt ein gehaltenes Ereignis
     const leg = ereig(concat([ton(220, 0.6), ton(330, 0.6)]));
     check('K1d', 'legato Melodiesprung +7 HT ohne Pause: ein gehaltenes Ereignis, keine Bruch-Entscheidung im Detektor', leg.length === 1 && leg[0].art === 'gehalten' && Math.abs(leg[0].halbtoene - 7) <= 1, kurz(leg));
+  }
+
+  /* ---------- K2: Formant-Nummerierung (peaksFromEnvelope, analyseAt, Lesarten der Gipfel) ---------- */
+  {
+    // Prüfsatz K2: Vokale a/e/i/o/u, F1/F2 nach dem Vokalmodell (vowel.js), F3–F5 baritontypisch;
+    // Grundton 98/147/196/247 Hz; Rahmen alle 20 ms. Rauschen deterministisch (LCG, feste Samen).
+    const V2 = {
+      a: [[680, 1250, 2450, 3400, 4200], [80, 90, 120, 150, 200]],
+      e: [[350, 2000, 2550, 3450, 4250], [60, 100, 130, 160, 200]],
+      i: [[270, 2150, 2750, 3500, 4300], [60, 100, 130, 160, 200]],
+      o: [[380, 750, 2400, 3350, 4150], [70, 90, 120, 150, 200]],
+      u: [[300, 700, 2300, 3300, 4100], [60, 90, 120, 150, 200]]
+    };
+    const F0S = [98, 147, 196, 247];
+    // Glottisquelle mit natürlichem Gefälle: Rosenberg-Puls (Öffnungsquotient 0,6), Abstrahlung als Differenz
+    function rosenberg(f0, F, B, s) {
+      const n = Math.round(s * SR), g = new Float64Array(n), T = SR / f0, Tp = 0.6 * T * 2 / 3, Tn = 0.6 * T / 3;
+      for (let i = 0; i < n; i++) { const t = i % T; g[i] = t < Tp ? 0.5 * (1 - Math.cos(Math.PI * t / Tp)) : (t < Tp + Tn ? Math.cos(Math.PI * (t - Tp) / (2 * Tn)) : 0); }
+      let y = new Float64Array(n); for (let i = 1; i < n; i++) y[i] = g[i] - g[i - 1];
+      for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
+      let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+      for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+      return y;
+    }
+    // rosa Rauschen: Filter nach P. Kellet auf dem LCG-Rauschen des Prüflaufs
+    function rosa(n, seed) {
+      const w = noise(n, 1, seed), y = new Float64Array(n); let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < n; i++) { const v = w[i]; b0 = 0.99886 * b0 + v * 0.0555179; b1 = 0.99332 * b1 + v * 0.0750759; b2 = 0.96900 * b2 + v * 0.1538520; b3 = 0.86650 * b3 + v * 0.3104856; b4 = 0.55000 * b4 + v * 0.5329522; b5 = -0.7616 * b5 - v * 0.0168980; y[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + v * 0.5362; b6 = v * 0.115926; }
+      return y;
+    }
+    const eff = x => { let p = 0; for (let i = 0; i < x.length; i++) p += x[i] * x[i]; return Math.sqrt(p / x.length); };
+    // c: { v, f0, f6?, ros?, art?: 'weiss'|'rosa', snr?, seed? }. SNR im Analyseband (nach der Wandlung) gemessen.
+    function signal(c) {
+      const [F, B] = V2[c.v], FF = c.f6 ? F.concat([c.f6]) : F, BB = c.f6 ? B.concat([250]) : B;
+      const x48 = c.ros ? rosenberg(c.f0, FF, BB, 0.4) : D.synthVowel(c.f0, FF, BB, 0.4, SR, { gain: 0.3 });
+      const x = D.resample(x48, SR, TSR);
+      if (c.snr == null) return x;
+      const nz = D.resample(c.art === 'rosa' ? rosa(x48.length, c.seed) : noise(x48.length, 1, c.seed), SR, TSR);
+      const g = eff(x) * Math.pow(10, -c.snr / 20) / eff(nz), y = new Float64Array(x.length);
+      for (let i = 0; i < x.length; i++) y[i] = x[i] + g * nz[i];
+      return y;
+    }
+    const name = c => '/' + c.v + '/ ' + c.f0 + (c.f6 ? ' F6 ' + c.f6 : '') + (c.ros ? ' Rosenberg' : '') + (c.snr != null ? ' ' + c.art + ' ' + c.snr + ' dB' : '');
+    // Auswertung je Teilsatz: falsch-gültige Slots (> 130 Hz), davon Nummernvertauschungen (Wert liegt bei
+    // einem Nachbarformanten oder F6), F1-Slot mit F2, falsch-gültige ΔF3–4 (> 120 Hz)
+    function auswerten(faelle) {
+      const z = { n: 0, gueltig: [0, 0, 0, 0, 0], falsch: 0, falsch345: 0, nummer: 0, f1f2: 0, d34: 0, d34falsch: 0, alle: 0, bsp: [] };
+      for (const c of faelle) {
+        const x = signal(c), T = V2[c.v][0];
+        for (let i = 900; i + 900 <= x.length; i += 240) {
+          const r = D.analyseAt(x, TSR, i, {}); if (!r.voiced) continue;
+          z.n++; if (r.valid.every(Boolean)) z.alle++;
+          for (let k = 0; k < 5; k++) {
+            if (!r.valid[k]) continue;
+            z.gueltig[k]++;
+            const e = Math.abs(r.F[k] - T[k]); if (e <= 130) continue;
+            z.falsch++; if (k >= 2) z.falsch345++;
+            if ([T[k - 1], T[k + 1], c.f6].some(t => t && Math.abs(r.F[k] - t) <= 130)) z.nummer++;
+            if (k === 0 && Math.abs(r.F[0] - T[1]) <= 130) z.f1f2++;
+            if (z.bsp.length < 3) z.bsp.push(name(c) + ' t ' + (i / TSR).toFixed(2) + ' F' + (k + 1) + ' ' + r0(r.F[k]) + ' (Soll ' + T[k] + ')');
+          }
+          if (r.d34valid) { z.d34++; if (Math.abs(r.d34 - (T[3] - T[2])) > 120) { z.d34falsch++; if (z.bsp.length < 3) z.bsp.push(name(c) + ' ΔF3–4 ' + r0(r.d34) + ' (Soll ' + (T[3] - T[2]) + ')'); } }
+        }
+      }
+      return z;
+    }
+    const satz = { sauber: [], f6: [], f6ros: [], rauschen: [], rauschenRos: [] };
+    for (const v of Object.keys(V2)) for (const f0 of F0S) {
+      satz.sauber.push({ v, f0 });
+      for (const f6 of [4400, 4600, 4800]) satz.f6.push({ v, f0, f6 });
+      for (const f6 of [4400, 4800]) satz.f6ros.push({ v, f0, f6, ros: true });
+      for (const art of ['weiss', 'rosa']) for (const snr of [30, 40, 50]) {
+        satz.rauschen.push({ v, f0, art, snr, seed: 11 });
+        satz.rauschenRos.push({ v, f0, art, snr, seed: 37, ros: true });
+      }
+    }
+    const E = {}; for (const k of Object.keys(satz)) E[k] = auswerten(satz[k]);
+    const det = z => z.n + ' Rahmen' + (z.bsp.length ? ' — ' + z.bsp.join(' | ') : '');
+
+    // K2a: Fälle aus Bericht 1 Befund 1. (a) F3/F4 verschmolzen und F6 im Band: fünf Gipfel, aber F5 im F4-Slot.
+    const ra = D.analyseAt(D.resample(D.synthVowel(196, [700, 1200, 2500, 2650, 4000, 4600], [80, 90, 140, 120, 200, 250], 0.5, SR), SR, TSR), TSR, 3000, {});
+    check('K2a', 'F3/F4 verschmolzen und F6 bei 4600 Hz: ΔF3–4 nicht gültig oder richtig (150 ± 120 Hz)', !ra.d34valid || Math.abs(ra.d34 - 150) <= 120, 'ΔF3–4 ' + r0(ra.d34) + ', gültig ' + ra.valid.map(v => v ? 1 : 0).join(''));
+    // (b) tiefe Lage, F3–F5 eng, weißes Rauschen 50 dB: Rauschgipfel an der Filterkante als fünfter Gipfel
+    const sb = D.synthVowel(95.5, [729, 982, 2061, 2297, 2580], [54, 110, 170, 182, 279], 0.4, SR, { gain: 0.3 });
+    { const nz = noise(sb.length, Math.pow(10, D.rmsDb(sb) / 20) * Math.pow(10, -50 / 20) * Math.sqrt(3), 325); for (let i = 0; i < sb.length; i++) sb[i] += nz[i]; }
+    const rb = D.analyseAt(D.resample(sb, SR, TSR), TSR, 2400, {});
+    check('K2a', 'tiefe Lage 95,5 Hz, F3–F5 eng, weißes Rauschen 50 dB: ΔF3–4 nicht gültig oder richtig (236 ± 120 Hz)', !rb.d34valid || Math.abs(rb.d34 - 236) <= 120, 'ΔF3–4 ' + r0(rb.d34) + ', F ' + rb.F.map(r0).join(' '));
+    // Nummerierung über den Prüfsatz: kein gültiger Slot trägt einen anderen Formanten
+    const num = ['f6', 'f6ros', 'rauschen', 'rauschenRos'].reduce((s, k) => s + E[k].nummer, 0), num1 = E.rauschen.f1f2 + E.rauschenRos.f1f2 + E.f6ros.f1f2;
+    check('K2a', 'Prüfsatz K2 (F6 4400–4800 Hz, Rauschen 30/40/50 dB, Rosenberg): kein gültiger Slot trägt einen Nachbarformanten oder F6', num === 0,
+      num + ' Vertauschungen — ' + ['f6', 'f6ros', 'rauschen', 'rauschenRos'].map(k => k + ' ' + E[k].nummer).join(', '));
+    check('K2a', 'fehlende tiefste Resonanz: kein gültiger F1-Slot trägt F2 (Prüfsatz K2)', num1 === 0, num1 + ' Rahmen');
+    // Lesarten direkt: der unterste Gipfel kann F2 sein, wenn alle Gipfel darüber auch eine Stufe höher passen
+    const lu = (P, n) => typeof D.slotNumberUnsure === 'function' ? D.slotNumberUnsure(P, n || P.map(() => 3)).map(v => v ? 1 : 0).join('') : 'fehlt';
+    const l1 = lu([794, 2522, 3299, 4432]), l2 = lu([380, 750, 2400, 3350, 4150]), l3 = lu([680, 1250, 2450, 3400]), l4 = lu([738, 1174, 2553, 3933, 4432], [3, 3, 3, 3, 1]);
+    check('K2a', 'Lesarten: unterster Gipfel 794 Hz über F3-tauglichen Gipfeln → alles unsicher; /o/ vollständig → sicher; /a/ ohne F5 → nur F4 unsicher; F6 nur in einer Ordnung → F4/F5 unsicher',
+      l1 === '11110' && l2 === '00000' && l3 === '00010' && l4 === '00011', [l1, l2, l3, l4].join(' '));
+    // Gegenproben: saubere Vokale verlieren nichts
+    check('K2a', 'Gegenprobe: saubere Vokale a/e/i/o/u, 98–247 Hz: alle fünf Formanten in jedem Rahmen gültig', E.sauber.alle === E.sauber.n && E.sauber.n > 0, E.sauber.alle + '/' + E.sauber.n);
+    check('K2a', 'Gegenprobe: mit F6 4400–4800 Hz bleibt ΔF3–4 in mindestens 90 % der Rahmen gültig', E.f6.d34 >= 0.9 * E.f6.n, E.f6.d34 + '/' + E.f6.n);
   }
 };
