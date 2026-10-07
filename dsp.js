@@ -1171,7 +1171,9 @@
      unsichtbar. Der Tiefpass ist nicht die Ursache: Mit Rosenberg-Quelle bleibt der Fehler auch ohne
      ihn und mit 2500 Hz. Deshalb dieselbe Teilerkontrolle wie in der Hauptspur (subMultipleTest,
      Teiler 3, dann 2), auf dem Spektrum des ungefilterten Fensters. Teiler 3: /ø/ mit F1 nahe 3·F0
-     (um 165 Hz) gab mit Impulsquelle Rahmen auf 3·F0. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
+     (um 165 Hz) gab mit Impulsquelle Rahmen auf 3·F0; dort nimmt YIN auch 2/3 der Periode (Rahmen auf
+     1,5·F0, nur 61 % richtig) — deshalb zuletzt die Teiltonreihe bei 2f/3 (Teiler 3 von 2f). Bei einem
+     richtigen f liegen dort keine Linien. FINE_FFT_N 1024 genügt: Bei 35 ms trennt das
      Hann-Fenster Linien erst ab etwa 60 Hz Abstand, mehr Stützstellen ändern daran nichts; mit 2048
      rechnete die Feinspur rund 1,5-mal so lange wie mit 1024. */
   var FINE_WINDOW_S = 0.035, FINE_HOP_S = 0.005, FINE_FMIN = 70, FINE_LOWPASS_HZ = 1500, FINE_EDGE_RATIO = 0.1, FINE_FFT_N = 1024;
@@ -1209,6 +1211,7 @@
         var spk = spectrum(ds.subarray(s0, s0 + n), sr, FINE_FFT_N);
         if (fx / 3 >= fmin && subMultipleTest(spk, fx, 3, 8, OCTAVE_ODD_EVEN_DB).pass) fx /= 3;
         else if (subMultipleTest(spk, fx, 2, 8, OCTAVE_ODD_EVEN_DB).pass) fx /= 2;
+        else if (2 * fx / 3 >= fmin && subMultipleTest(spk, 2 * fx, 3, 8, OCTAVE_ODD_EVEN_DB).pass) fx = 2 * fx / 3;
       }
       t[i] = c / sr; f0[i] = fx; ap[i] = p.ap;
       rand[i] = (randR > 0 && Math.min(e1, e2) < randR * Math.max(e1, e2)) ? 1 : 0;
@@ -1229,6 +1232,47 @@
       if (z > bestN || (z === bestN && d < bestD)) { bestN = z; bestD = d; best = v[a]; }
     }
     return best;
+  }
+
+  /* Mischrahmen: Ändert sich der Ton innerhalb einer Fensterlänge, enthält das Fenster beide Töne, und YIN
+     findet oft eine Periode, die zu keinem passt (Oktave darüber oder darunter, gemeinsamer Unterton).
+     Gemessen: An fast jedem legato Tonwechsel von 2–4 HT blieb so eine Kante von ±11–13 HT über
+     10–30 ms, bei 150 → 168 Hz auf /a/ eine von 24 HT. Die Kontexte sind die Rahmen eine Fensterlänge
+     davor und danach — ihre Fenster überlappen den Rahmen nicht. Liegen sie um mindestens mischMinSt
+     auseinander (ein Wechsel ist im Gang) und der Rahmen um mehr als mischTolSt außerhalb ihrer Spanne,
+     ist er ein Mischwert und gilt als stimmlos. Ein Gleiten bleibt innerhalb der Spanne.
+     Kiekser bleiben: Mitten im Ton liegen beide Kontexte auf dem Grundton; Vibrato 6 Hz ±50 Cent trennt
+     sie höchstens um knapp 1 HT (mit 0,7 HT fielen 38 von 288 Ausflügen im Vibrato weg). Ein Kiekser beim
+     Ankommen auf dem neuen Ton liegt auf 2·R oder 3·R (R = Kontext danach) und sieht im Wechsel aus wie
+     ein Oktavfehler des neuen Tons; diese Werte bleiben stehen (mischSchutzSt). Gemessen trugen die
+     Restkanten fast nur 2·L und 3·L, den Oktavfehler des alten Tons. Ohne den Schutz fielen 61 von 84
+     Kieksern am Tonwechsel weg. */
+  function mischRahmen(track, periodisch, opts) {
+    var n = track.t.length, out = new Uint8Array(n);
+    var minSt = (opts.mischMinSt == null) ? 1 : opts.mischMinSt, tol = (opts.mischTolSt == null) ? 1.5 : opts.mischTolSt;
+    if (!(minSt > 0)) return out;
+    var w = Math.max(1, Math.round((track.windowS || FINE_WINDOW_S) / track.hopS));
+    // Kontext = Median aus fünf Rahmen (25 ms) jenseits der Fensterlänge: Ein einzelner Kontextrahmen lag
+    // am Rand eines Kieksers selbst oft auf einem Mischwert, und echte Kiekser-Rahmen fielen heraus.
+    function kontext(k, d) {
+      var v = [];
+      for (var j = w; j <= w + 4; j++) { var q = k + d * j; if (q >= 0 && q < n && periodisch(q)) v.push(track.f0[q]); }
+      return v.length ? median(v) : NaN;
+    }
+    var schutz = (opts.mischSchutzSt == null) ? 1 : opts.mischSchutzSt;
+    function nahe(f, g, t) { return Math.abs(12 * Math.log2(f / g)) <= t; }
+    for (var k = 0; k < n; k++) {
+      if (!periodisch(k)) continue;
+      var a = kontext(k, -1), b = kontext(k, 1);
+      if (!(a > 0 && b > 0)) continue;
+      var lo = Math.min(a, b), hi = Math.max(a, b);
+      if (12 * Math.log2(hi / lo) < minSt) continue;
+      var f = track.f0[k];
+      if (!(12 * Math.log2(f / hi) > tol || 12 * Math.log2(lo / f) > tol)) continue;
+      if (schutz > 0 && (nahe(f, 2 * b, schutz) || nahe(f, 3 * b, schutz))) continue;
+      out[k] = 1;
+    }
+    return out;
   }
 
   /* Sprünge in der kurzen Spur: Läufe, die mindestens minSemitones von der ruhigen Umgebung
@@ -1258,6 +1302,7 @@
     var minRef = (opts.minRefFrames == null) ? 3 : opts.minRefFrames;
     var pauseS = (opts.pauseMs == null ? 120 : opts.pauseMs) / 1000;
     var glideAp = (opts.glideApMax == null) ? 0.15 : opts.glideApMax;
+    var minLauf = (opts.minRunFrames == null) ? 3 : opts.minRunFrames;
     var n = track.t.length, back = Math.max(3, Math.round(backS / track.hopS));
     var pauseFr = Math.max(1, Math.round(pauseS / track.hopS));
     var ruhe = [], events = [], run = null, seitRuhe = 0, luecke = 0, i;
@@ -1271,7 +1316,37 @@
       for (var k = 0; k < ruhe.length; k++) if (Math.abs(12 * Math.log2(ruhe[k] / m)) < ruheSt) z++;
       return z >= minRef ? m : NaN;
     }
-    function gueltig(k) { return isFinite(track.f0[k]) && track.ap[k] < apMax && !(track.rand && track.rand[k]); }
+    function periodisch(k) { return isFinite(track.f0[k]) && track.ap[k] < apMax && !(track.rand && track.rand[k]); }
+    var misch = mischRahmen(track, periodisch, opts);
+    function gueltig(k) { return periodisch(k) && !misch[k]; }
+    // Mittlere Lage (log) der Bezugsrahmen bis 1 HT um den Median: mit Vibrato genauer als der Median allein.
+    function mittelLage(v, m) {
+      var s = 0, z = 0;
+      for (var q = 0; q < v.length; q++) { var x = Math.log2(v[q] / m); if (Math.abs(x) <= 1 / 12) { s += x; z++; } }
+      return z ? m * Math.pow(2, s / z) : m;
+    }
+    /* Ein Lauf zählt erst, wenn er mindestens minRunFrames Rahmen hat und der Ton, auf dem er liegt, den
+       Bezug wirklich um minSemitones verlässt.
+       - minRunFrames 3 (15 ms): Läufe aus zwei Rahmen waren gemessen nur Mischwerte an Tonwechseln, deren
+         Kontexte mit Vibrato knapp unter mischMinSt auseinanderlagen (7 in 96 legato Melodien), und am Ende
+         eines Oktavflips mit −6 dB. Der kürzeste gemessene Kiekser-Lauf (50 ms, 75–470 Hz, ±12 dB) hat
+         15 ms; mit 4 Rahmen fielen 3 von 280 Kieksern (−12 dB) weg.
+       - Lage: Der Lauf enthält nur die Rahmen über der Schwelle; ein legato Schritt knapp unter 5 HT mit
+         Vibrato ±50 Cent ragt in jedem Zyklus darüber (gemessen: Schritte von 4,7–4,8 HT gaben in 27 von
+         72 Fällen Kanten). Verglichen wird deshalb die mittlere Lage des ganzen Plateaus — alle gültigen
+         Rahmen um den Lauf, die bis 1,5 HT um seinen Kern liegen — mit der mittleren Lage des Bezugs.
+         Bleibt der Abstand unter minSemitones, war es kein Sprung. Ein Schritt genau an der Schwelle
+         bleibt Zufall der Messung. */
+    var plateauMax = Math.round(0.3 / track.hopS);
+    function zaehlt(r) {
+      if (r.dauerFrames < minLauf) return false;
+      var c = kernGruppe(r.sts), sum = 0, z = 0, k, s;
+      function nah(q) { if (!gueltig(q)) return NaN; var x = 12 * Math.log2(track.f0[q] / r.refMittel); return Math.abs(x - c) <= 1.5 ? x : NaN; }
+      for (k = r.iVon; k <= r.iBis; k++) { s = nah(k); if (isFinite(s)) { sum += s; z++; } }
+      for (k = r.iVon - 1; k >= 0 && k >= r.iVon - plateauMax; k--) { s = nah(k); if (!isFinite(s)) break; sum += s; z++; }
+      for (k = r.iBis + 1; k < n && k <= r.iBis + plateauMax; k++) { s = nah(k); if (!isFinite(s)) break; sum += s; z++; }
+      return z > 0 && Math.abs(sum / z) >= minSt;
+    }
     for (i = 0; i < n; i++) {
       if (!gueltig(i)) {
         /* Eine kurze stimmlose Lücke (Konsonant, Staccato) unterbricht weder den Bezug noch einen
@@ -1283,7 +1358,7 @@
            bestehen alle geprüften Fälle; 120 ms hält Abstand zu den längsten Lücken (80 ms) und zur
            kürzesten Atempause (200 ms). */
         if (++luecke >= pauseFr) {
-          if (run) { if (run.dauerFrames >= 2) events.push(run); run = null; }
+          if (run) { if (zaehlt(run)) events.push(run); run = null; }
           ruhe = []; seitRuhe = 0;
         }
         continue;
@@ -1301,13 +1376,13 @@
           run.bis = track.t[i]; run.iBis = i; run.dauerFrames++; run.sts.push(st); run.fs.push(track.f0[i]); run.zurueck = 0;
         } else if (++run.zurueck >= 2) {
           /* Zurück beim Bezug erst nach zwei Rahmen: Ein einzelner Mischrahmen am Rand eines lauten
-             Kieksers beendete den Lauf sonst mittendrin. Ein Lauf aus einem einzigen Rahmen ist ein
+             Kieksers beendete den Lauf sonst mittendrin. Ein Lauf, der nicht zählt (zaehlt), ist ein
              Messfehler am Übergang und wird verworfen, ohne den Bezug zu löschen. Nach einer Kante ist
              die Stimme zurück am Bezugston, der Bezug bleibt; erst nach einem gehaltenen Wechsel wird
              er neu aufgebaut. Gemessen: Wurde der Bezug nach jedem Lauf gelöscht, machte ein
              Fehlrahmen am Übergang den neuen Ton zum Bezug, und die Rückkehr erschien als gehaltener
              Sprung in Gegenrichtung (+16 HT gesungen, −16 HT über 580 ms gemeldet). */
-          if (run.dauerFrames >= 2) {
+          if (zaehlt(run)) {
             events.push(run);
             if (run.bis - run.von + track.hopS >= holdS) { ruhe = []; seitRuhe = 0; }
           }
@@ -1316,7 +1391,7 @@
       } else if (drueber) {
         /* Ein Sprung muss schnell einsetzen. Ein Portamento erreicht dieselbe Weite, aber über
            Hunderte Millisekunden — das ist Tonbewegung, kein Wechsel. */
-        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], iVon: i, iBis: i, ref: ref, dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
+        if (seitRuhe <= maxOnset) run = { von: track.t[i], bis: track.t[i], iVon: i, iBis: i, ref: ref, refMittel: mittelLage(ruhe, ref), dauerFrames: 1, sts: [st], fs: [track.f0[i]], zurueck: 0 };
       }
       if (!run) {
         /* seitRuhe zählt nur Rahmen mit sicherer Periode (ap unter der YIN-Schwelle 0,15). Unsichere
@@ -1332,7 +1407,7 @@
         if (ruhe.length > back) ruhe.shift();
       }
     }
-    if (run && run.dauerFrames >= 2) events.push(run);
+    if (run && zaehlt(run)) events.push(run);
 
     return events.map(function (e) {
       var dauer = e.bis - e.von + track.hopS, kern = kernGruppe(e.sts), hs = [], fz = [], k;

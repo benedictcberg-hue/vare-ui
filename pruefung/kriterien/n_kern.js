@@ -1,6 +1,6 @@
 /* Kriterien der Nachprüfung, Rechenkern.
    A1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps) —
-     A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0).
+     A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0), A1b Mischrahmen, 1,5·F0 und Schwelle am legato Tonwechsel.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -117,5 +117,68 @@ module.exports = async function (H) {
     }
     r = sammle(geh);
     check('A1a', 'gehaltener Bruch +11/+14/+16 HT, 300 ms, aus 98–220 Hz auf /e/ und /o/: ein gehaltenes Ereignis, Weite ±1 HT', r.ok === r.n, r.detail);
+  }
+
+  /* ---------- A1b: legato Tonwechsel ohne Restkante ----------
+     Am Übergang enthält das 35-ms-Fenster beide Töne; YIN liefert dort oft die Oktave darüber oder
+     darunter oder den gemeinsamen Unterton. Ohne Gegenmaßnahme blieb an fast jedem Tonwechsel eine
+     Kante von ±11–13 HT über 10–30 ms. Dazu ragt ein Schritt knapp unter 5 HT mit Vibrato in jedem
+     Zyklus über die Schwelle. Legato-Melodien mit Schritten bis 4 HT, um F1/2 und tiefer (dort liegt
+     F1 bei /ø/ nahe 3·F0), mit und ohne Vibrato 6 Hz ±50 Cent: kein Ereignis. Schritte genau an der
+     Schwelle (4,98 HT) prüft kein Kriterium: Dort entscheidet die Messgenauigkeit. */
+  {
+    const schritte = [0, 2, 4, 2, 0, -3, -1, 1, -2, 0, 3, -1, 0];
+    const faelle = [];
+    for (const v of ['a', 'e', 'o', 'u', 'oe', 'i']) for (const art of ['impuls', 'rosenberg']) for (const vib of [0, 50]) {
+      for (const c of [VOK[v][0][0] / 2, 150]) {
+        const fz0 = stufen(schritte.map(s => HT(c, s)), 0.35, 0.02);
+        faelle.push({ name: NAME[v] + ' um ' + Math.round(c) + ' Hz ' + art + (vib ? ' Vibrato' : ''), sig: real(vib ? vibrato(fz0, 6, vib, 0.2) : fz0, 0.35 * schritte.length, v, art, saat++), soll: keins });
+      }
+    }
+    for (const v of ['a', 'e', 'o']) for (const art of ['impuls', 'rosenberg'])
+      faelle.push({ name: 'Ganzton 150→168 ' + NAME[v] + ' ' + art, sig: real(stufen([150, 168, 150, 168], 0.35, 0.02), 1.4, v, art, saat++), soll: keins });
+    // Melodie der Mittellage ohne Gleiten, Schritte bis 3 HT (bei /ø/ liegt F1 um 165 Hz nahe 3·F0)
+    const mittel = [131, 147, 165, 196, 165, 147, 131, 147, 165];
+    for (const v of ['a', 'e', 'o', 'u', 'oe', 'i']) for (const art of ['impuls', 'rosenberg']) for (const vib of [0, 50]) {
+      const fz0 = stufen(mittel, 0.4, 0);
+      faelle.push({ name: 'Mittellage ' + NAME[v] + ' ' + art + (vib ? ' Vibrato' : ''), sig: real(vib ? vibrato(fz0, 6, vib, 0.3) : fz0, 0.4 * mittel.length, v, art, saat++), soll: keins });
+    }
+    const r = sammle(faelle);
+    check('A1b', 'legato Melodien, Schritte 2–4 HT, sechs Vokale um F1/2, um 150 Hz und in der Mittellage, Impuls und Rosenberg, mit und ohne Vibrato: kein Ereignis', r.ok === r.n, r.detail);
+    // F1 ≈ 3·F0: YIN nimmt dort auch 2/3 der Periode (Rahmen auf 1,5·F0)
+    let schlecht = 1, schlechtName = '';
+    for (const d of [-1, -0.5, 0, 0.5, 1]) for (const vib of [0, 50]) {
+      const f = HT(VOK.oe[0][0] / 3, d), fz = vib ? vibrato(() => f, 6, vib, 0.4) : () => f, tr = spur(real(fz, 0.5, 'oe', 'impuls', saat++));
+      let z = 0, m = 0;
+      for (let k = 0; k < tr.t.length; k++) { if (tr.t[k] < 0.05 || tr.t[k] > 0.45) continue; m++; if (isFinite(tr.f0[k]) && Math.abs(12 * Math.log2(tr.f0[k] / fz(tr.t[k]))) < 1) z++; }
+      if (z / m <= schlecht) { schlecht = z / m; schlechtName = Math.round(f) + ' Hz' + (vib ? ' Vibrato' : ''); }
+    }
+    check('A1b', 'Feinspur bei F1 ≈ 3·F0 (/ø/ 155–175 Hz, Impulsquelle, mit und ohne Vibrato): mindestens 95 % der Rahmen auf dem Grundton (±1 HT)',
+      schlecht >= 0.95, 'schlechtester ' + schlechtName + ' ' + (100 * schlecht).toFixed(0) + ' %');
+    // Gegenprobe: Ein Kiekser in die Oktave des neuen Tons genau beim Ankommen ist kein Mischwert
+    const wechsel = [];
+    for (const [a, st] of [[196, 2], [165, 3], [220, -4], [131, 2]]) for (const v of ['a', 'i']) for (const art of ['impuls', 'rosenberg']) for (const vib of [0, 50]) {
+      const b = HT(a, st), fz0 = t => t < 0.6 ? a : (t < 0.65 ? 2 * b : b);
+      wechsel.push({ name: a + '→' + Math.round(2 * b) + '→' + Math.round(b) + ' ' + NAME[v] + ' ' + art + (vib ? ' Vibrato' : ''), sig: real(vib ? vibrato(fz0, 6, vib, 0.2) : fz0, 1.2, v, art, saat++),
+        soll: e => e.length === 1 && e[0].art === 'kante' && Math.abs(e[0].halbtoene - (12 + st)) <= 1.5 });
+    }
+    let rw = sammle(wechsel);
+    check('A1b', 'Kiekser 50 ms in die Oktave des neuen Tons genau am legato Tonwechsel (±2–4 HT): genau eine Kante, Weite ±1,5 HT', rw.ok === rw.n, rw.detail);
+    // Gegenprobe: kurze Ausflüge (+7/+12/+16 HT, 50 ms) mitten in einem Ton mit Vibrato bleiben Kanten
+    const ausflug = [];
+    for (const a of [110, 196]) for (const ht of [7, 12, 16]) for (const v of ['a', 'i']) for (const ph of [0, 2]) {
+      const fz = vibrato(t => (t >= 0.6 && t < 0.65) ? HT(a, ht) : a, 6, 50, ph);
+      ausflug.push({ name: a + '+' + ht + ' ' + NAME[v] + ' Phase ' + ph, sig: real(fz, 1.2, v, 'rosenberg', saat++), soll: e => e.length === 1 && e[0].art === 'kante' && Math.abs(e[0].halbtoene - ht) <= 1.5 });
+    }
+    rw = sammle(ausflug);
+    check('A1b', 'Ausflug 50 ms (+7/+12/+16 HT) mitten in einem Ton mit Vibrato 6 Hz ±50 Cent: genau eine Kante, Weite ±1,5 HT', rw.ok === rw.n, rw.detail);
+    // Schritte 4,7 und 4,8 HT mit Vibrato ±50 Cent: Der Ton bleibt unter 5 HT, nur die Spitzen des Vibratos nicht
+    const nah = [];
+    for (const ht of [4.7, 4.8]) for (const v of ['a', 'o', 'i']) for (const a of [110, 147, 196]) {
+      const fz = vibrato(stufen([a, HT(a, ht), a, HT(a, -ht), a], 0.5, 0.03), 6, 50, 0.5);
+      nah.push({ name: ht + ' HT ab ' + a + ' ' + NAME[v], sig: real(fz, 2.5, v, 'rosenberg', saat++), soll: keins });
+    }
+    const r2 = sammle(nah);
+    check('A1b', 'legato Schritte 4,7 und 4,8 HT mit Vibrato ±50 Cent: kein Ereignis (gemessen wird die Lage des Tons, nicht die Vibratospitzen)', r2.ok === r2.n, r2.detail);
   }
 };
