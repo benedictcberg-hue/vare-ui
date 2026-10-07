@@ -102,8 +102,9 @@
   /* Fassung der Zusammenfassung. Erhöhen, sobald bei gleichen Rahmenwerten andere Rahmen stabil,
      gewertet, Segment oder Bestwert werden (hier oder im Offline-Gatter von vowel.js) — ältere Takes
      sind dann nicht mehr gleich zusammengefasst. Takes ohne Angabe stammen aus Fassung 1, vor der
-     Prüfung auf zweideutige Vokalzuordnung. */
-  var SUMMARY_VERSION = 2;
+     Prüfung auf zweideutige Vokalzuordnung. Fassung 3: stabil zählt nur noch stimmhafte Rahmen. */
+  var SUMMARY_VERSION = 3;
+  var FASSUNG_FEHLT = { 1: 'ohne Prüfung auf zweideutige Vokalzuordnung', 2: 'stimmlose Rahmen zählten als stabil' };
 
   /* Segmente: maximale Läufe mit gate = stabil und gleicher Klasse, Mindestlänge, Mindestanteil Score.
      ambiguousShare = Anteil der Rahmen mit zweideutiger Vokalzuordnung (FLAG.VOWELAMBIG). */
@@ -129,7 +130,11 @@
 
   function summarise(series, meta) {
     var n = series.t.length, i, voicedIdx = [], stabilIdx = [];
-    for (i = 0; i < n; i++) { if (series.flags[i] & FLAG.VOICED) voicedIdx.push(i); if (series.gate[i] === 2) stabilIdx.push(i); }
+    /* „Stabil“ heißt in der Zusammenfassung stabil UND stimmhaft. Das Gatter lässt einen stimmlosen
+       Rahmen in einem stabilen Fenster als 'stabil' stehen (nur ohne Wertung, bis 10 % je Fenster).
+       Mitgezählt, aber durch die stimmhaften Rahmen geteilt, stand der stabil-Anteil bis 103 %, und
+       nStable und die Vokalanteile zählten Rahmen ohne Vokal (Bericht 2, Befund 6). */
+    for (i = 0; i < n; i++) if (series.flags[i] & FLAG.VOICED) { voicedIdx.push(i); if (series.gate[i] === 2) stabilIdx.push(i); }
     function pick(col, idx, cond) { var out = []; for (var k = 0; k < idx.length; k++) { var j = idx[k]; if (!cond || cond(j)) out.push(series[col][j]); } return out; }
     var s = {};
     s.nFrames = n; s.hopS = meta.hopS; s.durationS = meta.durationS;
@@ -327,7 +332,7 @@
     var kern = aktuell.kernelVersion != null ? aktuell.kernelVersion : D.VERSION;
     if (an.kernelVersion !== kern) d.push(an.kernelVersion ? 'Kern ' + an.kernelVersion + ' statt ' + kern : 'Kernversion nicht gespeichert');
     var sv = su && su.summaryVersion != null ? su.summaryVersion : 1;
-    if (sv !== SUMMARY_VERSION) d.push('Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (sv === 1 ? ' (ohne Prüfung auf zweideutige Vokalzuordnung)' : ''));
+    if (sv !== SUMMARY_VERSION) d.push('Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (Object.prototype.hasOwnProperty.call(FASSUNG_FEHLT, sv) ? ' (' + FASSUNG_FEHLT[sv] + ')' : ''));
     var hop = aktuell.hopS != null ? aktuell.hopS : DEFAULTS.hopS, spr = aktuell.spreadMaxHz != null ? aktuell.spreadMaxHz : DEFAULTS.spreadMaxHz;
     if (!zahlGleich(an.hopS, hop)) d.push(abweichung('Rahmenabstand', an.hopS, hop, ' s'));
     if (!zahlGleich(an.spreadMaxHz, spr)) d.push(abweichung('Gültigkeitsgrenze Streuung', an.spreadMaxHz, spr, ' Hz'));

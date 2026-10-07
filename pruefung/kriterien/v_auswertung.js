@@ -341,4 +341,48 @@ module.exports = async function (H) {
     check('V3', 'Zusammenfassung eines Takes mit 400 000 Rahmen (67 min bei 10 ms, 33 min bei 5 ms) im frischen Prozess: läuft durch, Pegel-Minimum und -Maximum stimmen',
       !r2.fehler && r2.min === Math.fround(-88.5) && r2.max === -40 && r2.n === 400000, r2.fehler || 'rms min ' + r2.min + ', max ' + r2.max);
   }
+
+  /* V3b: stabil-Anteil (Bericht 2, Befund 6). Das Gatter lässt einen stimmlosen Rahmen in einem stabilen
+     Fenster als 'stabil' stehen (ohne Wertung). summarise zählte ihn mit und teilte durch die stimmhaften
+     Rahmen: bis 103 % „stabil“ in Anzeige und CSV; nStable und die Vokalanteile zählten Rahmen ohne
+     Vokal. Definition jetzt: #(stabil ∧ stimmhaft) / #stimmhaft, dieselbe Menge für nStable, Anteile
+     und vowelAmbiguousShare. */
+  {
+    // Konstruierte Serie: /a/ 100 stimmhaft + 40 stimmlos im stabilen Fenster (zweideutig markiert, wie
+    // applyGate es aus der Fensterklasse setzt), /o/ 50 stimmhaft, davon 10 zweideutig.
+    const ia = V.CLASS_INDEX.a, io = V.CLASS_INDEX.o, n = 190, ser = A.makeSeries(n);
+    for (let i = 0; i < n; i++) {
+      ser.t[i] = 0.01 * i; ser.rms[i] = -30; ser.score[i] = NaN; ser.gate[i] = 2;
+      if (i < 140) { ser.cls[i] = ia; ser.flags[i] = (i % 7 < 2) ? A.FLAG.VOWELAMBIG : A.FLAG.VOICED | A.FLAG.SCORE | A.FLAG.D34VALID; if (ser.flags[i] & A.FLAG.VOICED) { ser.score[i] = 700; ser.d34[i] = 700; } }
+      else { ser.cls[i] = io; ser.flags[i] = A.FLAG.VOICED | A.FLAG.SCORE | A.FLAG.D34VALID | (i < 150 ? A.FLAG.VOWELAMBIG : 0); ser.score[i] = 650; ser.d34[i] = 650; }
+    }
+    const s = A.summarise(ser, { hopS: 0.01, durationS: n * 0.01, floorDb: -90, floorSource: 'calibration', floorKnown: true });
+    const nSt = Object.keys(s.perVowel).map(k => k + ':' + s.perVowel[k].nStable).join(' ');
+    check('V3', 'stabil-Anteil = stabile UND stimmhafte Rahmen / stimmhafte Rahmen, nie über 1 (konstruierte Serie: 150 stimmhaft stabil, 40 stimmlos im stabilen Fenster)',
+      s.stableShare === 1 && s.voicedShare === 150 / 190, 'stableShare ' + s.stableShare + ', voicedShare ' + s.voicedShare.toFixed(3));
+    check('V3', 'nStable, Vokalanteile und vowelAmbiguousShare zählen nur stabile stimmhafte Rahmen',
+      s.perVowel.a.nStable === 100 && s.perVowel.o.nStable === 50 && Math.abs(s.vowel.shares.a - 100 / 150) < 1e-12 && Math.abs(s.vowel.shares.o - 50 / 150) < 1e-12 &&
+      Math.abs(s.vowel.dominantShare - 100 / 150) < 1e-12 && Math.abs(s.vowelAmbiguousShare - 10 / 150) < 1e-12,
+      'nStable ' + nSt + ', Anteile ' + JSON.stringify(s.vowel.shares) + ', zweideutig ' + s.vowelAmbiguousShare.toFixed(3));
+  }
+  {
+    // Echter Take: /a/ 98 Hz (tiefe Baritonlage), Vibrato 5,5 Hz ±40 Cent, drei kurze aperiodische
+    // Aussetzer von 30 ms (Knarrlaut), Boden kalibriert, 50 dB Abstand. Einzelne stimmlose Rahmen
+    // liegen dann in stabilen Fenstern.
+    const sig = synth(vib(98, 5.5, 40), () => VOK.a, 2.5, BW5, 50, 21);
+    let e = 0; for (let i = 0; i < sig.y.length; i++) e += sig.y[i] * sig.y[i];
+    const eff = Math.sqrt(e / sig.y.length), m = Math.round(0.03 * SR);
+    for (let k = 0; k < 3; k++) { const nz = noise(m, eff * Math.sqrt(3), 50 + k), i0 = Math.round((0.7 + 0.6 * k) * SR); for (let i = 0; i < m; i++) sig.y[i0 + i] = nz[i]; }
+    const r = await A.analyseTake(sig.y, SR, { floorDb: sig.floorDb });
+    const ser = r.series, s = r.summary; let st = 0, stv = 0, vo = 0, stvKl = 0;
+    for (let i = 0; i < ser.t.length; i++) { const v = ser.flags[i] & A.FLAG.VOICED; if (v) vo++; if (ser.gate[i] === 2) { st++; if (v) { stv++; if (ser.cls[i] >= 0) stvKl++; } } }
+    const sumN = Object.keys(s.perVowel).reduce((a, k) => a + s.perVowel[k].nStable, 0);
+    check('V3', 'Take /a/ 98 Hz mit drei 30-ms-Aussetzern: stabil-Anteil = #(stabil ∧ stimmhaft) / #stimmhaft, Summe nStable = stabile stimmhafte Rahmen mit Klasse',
+      st > stv && vo > 0 && s.stableShare === stv / vo && sumN === stvKl, 'stimmhaft ' + vo + ', stabil ' + st + ' (davon stimmlos ' + (st - stv) + '), stableShare ' + s.stableShare.toFixed(3) + ' (richtig ' + (stv / vo).toFixed(3) + '), Σ nStable ' + sumN);
+    // Gleiche Rahmen, andere Zusammenfassung: ein Take aus Fassung 2 ist nicht gleich zusammengefasst.
+    const alt = JSON.parse(JSON.stringify(T_EIN)); alt.summary.summaryVersion = 2;
+    const g = uv(alt, AKTUELL);
+    check('V3', 'Fassung der Zusammenfassung erhöht: ein Take aus Fassung 2 (stimmlose Rahmen als stabil gezählt) ist nicht vergleichbar, Grund benannt',
+      A.SUMMARY_VERSION >= 3 && /Fassung 2 statt \d+ \(stimmlose Rahmen zählten als stabil\)/.test(g) && !A.computeRefs([alt], {}, AKTUELL).a, 'Fassung ' + A.SUMMARY_VERSION + ' — „' + g + '“');
+  }
 };
