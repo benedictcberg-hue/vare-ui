@@ -1,9 +1,12 @@
 /* Kriterien U — Oberfläche (app.js) ohne Browser.
-   app.js läuft hier unverändert in einer vm-Umgebung. DOM, IndexedDB und Mikrofon sind knapp
-   nachgebildet; Rechenkern, Analyse, CSV, Chronik und Kalibrierung sind die echten Dateien. So
-   lassen sich Abläufe prüfen, die nur in der Verdrahtung stecken: Neuladen, Löschen, Eingaben
-   während der Analyse, eine Uhr, die weiterläuft. Geprüft wird, was gespeichert und angezeigt
-   wird. Dieselben Abläufe spielt pruefung/browser-test.js im echten Chromium. */
+   app.js läuft hier unverändert in einer vm-Umgebung. DOM, IndexedDB, Mikrofon, Token-Ablage
+   (localStorage, sessionStorage) und der Abruf von korpus.json sind knapp nachgebildet; Rechenkern,
+   Analyse, CSV, Chronik, Kalibrierung und korpus.js sind die echten Dateien. So lassen sich Abläufe
+   prüfen, die nur in der Verdrahtung stecken: Neuladen, Löschen, Eingaben während der Analyse, eine
+   Uhr, die weiterläuft, Gerätewechsel, An- und Abmelden. Geprüft wird, was gespeichert und angezeigt
+   wird. Dieselben Abläufe spielt pruefung/browser-test.js im echten Chromium.
+   U1: Schritt 0 (Position, Pause, Einsing-Angaben), Angaben beim Stopp. U2: Kalibrierung und Kette,
+   „Alles löschen“ und Code-Zähler, Token. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto'), v8 = require('v8');
 // Blob aus dem buffer-Modul: global erst ab Node 18, so läuft es auch mit älterem Node unter Windows.
