@@ -9,7 +9,9 @@
    - Fensterlängensweep 0,06/0,08/0,10/0,14 s; gültig nur, wenn beide Sweeps unter 130 Hz streuen.
    - F0 über YIN (Schwelle 0,15, 60–500 Hz), Oktavkontrolle über das Spektrum.
    - SFR = 2400–3200 Hz minus 0–2000 Hz. SHR halbzahlige gegen ganzzahlige Teiltöne, k = 1..8,
-     auf dem Raster F0 oder 2·F0; ist das Raster zweifelhaft, stehen beide Werte da (shrUnsure). */
+     auf dem Raster F0 oder 2·F0; ist das Raster zweifelhaft, stehen beide Werte da (shrUnsure).
+     Unsicher ist SHR auch, wenn die halbzahligen Linien sich nicht vom Pegel zwischen den Linien abheben
+     (Hauch, Rauschen). */
 (function (root) {
   'use strict';
 
@@ -757,19 +759,46 @@
     return best;
   }
 
+  /* Zwischenpegel: Spektrum und Hauch legen Energie auch auf die halbzahligen Positionen, ohne dass dort
+     eine Linie steht. Die Spezifikation definiert SHR als Energie auf halbzahligen Teiltönen; Rauschen
+     ist kein Teilton. Gemessen wird deshalb derselbe Linienpegel (lineLevelDb, gleicher Schätzer wie für
+     SHR) an den Viertelpositionen (k−¾)·g und (k−¼)·g, k = 1..8, als Leistungsmittel je k, summiert und
+     auf die ganzzahligen Linien bezogen — in denselben Einheiten wie SHR. SHR − Boden ist dann, wie weit
+     die halbzahligen Positionen über dem Pegel zwischen den Linien stehen. */
+  var SHR_UNAUFFAELLIG_DB = -25;  // Spezifikation: unter −25 dB unauffällig
+  /* Mindestabstand der halbzahligen Linien über dem Zwischenpegel, damit ein SHR über −25 dB als Befund
+     gilt: wie die Teiltonreihe der Spezifikation (8 dB über der Rauschreferenz zwischen den Linien).
+     Gemessen (Rosenberg, Jitter 0,8 %, Shimmer 2 %, flussmodulierter Hauch, rosa Raumrauschen 40 dB):
+     behauchte Stimme ohne Subharmonische HNR 5/8/12/20 dB höchstens 6,2/6,5/6,9/4,2 dB; echte
+     Verdopplung ohne Hauch (Amplitude oder Periode 8–30 %) im Median 12–21 dB. Im Hauch sinkt auch
+     echte Verdopplung unter die Grenze (Amplitude 14 %, HNR 12 dB: Median 2,6 dB) — sie ist dort vom
+     Rauschen nicht zu trennen und wird unsicher, nicht unsichtbar. */
+  var SHR_RAUSCH_ABSTAND_DB = 8;
+  function shrBoden(spec, g) {
+    var pn = 0, ph = 0;
+    for (var k = 1; k <= 8; k++) { pn += (linePow(spec, (k - 0.75) * g) + linePow(spec, (k - 0.25) * g)) / 2; ph += linePow(spec, k * g); }
+    return 10 * Math.log10((pn + 1e-20) / (ph + 1e-20));
+  }
+
   // seg: Zeitausschnitt bei sr (Hauptfenster) für die zweite Anregung; fmax: obere Grenze der Impulsrate
   function shr(spec, f0, seg, sr, fmax) {
-    var sF = shrAgainst(spec, f0), out = { shr: sF, grid: f0, other: NaN, zweifel: false, grund: '', kamm: NaN, zweitpuls: NaN };
-    if (!(2 * f0 <= (fmax || 500))) return out;
-    out.kamm = kammKontrast(spec, 2 * f0);
-    out.zweitpuls = seg ? zweitpuls(seg, sr, f0) : NaN;
-    var kamm = out.kamm <= SHR_KAMM_ZWEIFEL_DB, zweit = out.zweitpuls >= SHR_ZWEITPULS_MIN;
-    if (!kamm && !zweit) return out;
-    var s2 = shrAgainst(spec, 2 * f0);
-    out.zweifel = true;
-    out.grund = kamm && zweit ? 'kamm+zweitpuls' : (kamm ? 'kamm' : 'zweitpuls');
-    if (out.kamm <= SHR_KAMM_RASTER_DB || (kamm && zweit)) { out.shr = s2; out.grid = 2 * f0; out.other = sF; }
-    else out.other = s2;
+    var sF = shrAgainst(spec, f0), out = { shr: sF, grid: f0, other: NaN, zweifel: false, grund: '', kamm: NaN, zweitpuls: NaN, boden: NaN, rauschen: false };
+    if (2 * f0 <= (fmax || 500)) {
+      out.kamm = kammKontrast(spec, 2 * f0);
+      out.zweitpuls = seg ? zweitpuls(seg, sr, f0) : NaN;
+      var kamm = out.kamm <= SHR_KAMM_ZWEIFEL_DB, zweit = out.zweitpuls >= SHR_ZWEITPULS_MIN;
+      if (kamm || zweit) {
+        var s2 = shrAgainst(spec, 2 * f0);
+        out.zweifel = true;
+        out.grund = kamm && zweit ? 'kamm+zweitpuls' : (kamm ? 'kamm' : 'zweitpuls');
+        if (out.kamm <= SHR_KAMM_RASTER_DB || (kamm && zweit)) { out.shr = s2; out.grid = 2 * f0; out.other = sF; }
+        else out.other = s2;
+      }
+    }
+    // Zwischenpegel auf dem Raster des Hauptwerts. Unter −25 dB bleibt der Wert eine Obergrenze und damit
+    // „unauffällig“ richtig; darüber ist er nur ein Befund, wenn die halbzahligen Linien sich abheben.
+    out.boden = shrBoden(spec, out.grid);
+    out.rauschen = out.shr > SHR_UNAUFFAELLIG_DB && !(out.shr - out.boden >= SHR_RAUSCH_ABSTAND_DB);
     return out;
   }
 
@@ -983,7 +1012,7 @@
       slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
-      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, shrBoden: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
       f0Unsure: false, f0Grund: '', f0Cep: NaN, f0Yin: NaN, f0Korrektur: '',
       harmonicPullHz: NaN, sparseHarmonics: false,
@@ -1093,9 +1122,13 @@
     out.sparseHarmonics = f0 > 250;
     // SHR-Raster F0 oder 2·F0 aus eigenen Belegen (shr); ein unsicherer Grundton macht auch SHR unsicher
     var sh = shr(spec, f0, main.seg, sr, opts.fmax || 500);
-    out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm; out.shrZweitpuls = sh.zweitpuls;
-    out.shrUnsure = sh.zweifel || out.f0Unsure;
-    out.shrGrund = out.f0Unsure ? (sh.grund ? sh.grund + '+' : '') + 'grundton' : sh.grund;
+    out.shr = sh.shr; out.shrGrid = sh.grid; out.shrOther = sh.other; out.shrKamm = sh.kamm; out.shrZweitpuls = sh.zweitpuls; out.shrBoden = sh.boden;
+    // Gründe in fester Reihenfolge: Raster (kamm, zweitpuls), Grundton, Zwischenpegel (rauschen)
+    var gr = sh.grund ? [sh.grund] : [];
+    if (out.f0Unsure) gr.push('grundton');
+    if (sh.rauschen) gr.push('rauschen');
+    out.shrGrund = gr.join('+');
+    out.shrUnsure = gr.length > 0;
     out.sfr = sfr(spec);
     out.cpp = cp.cpp;
     out.h1h2 = h1h2(spec, f0);
@@ -1572,7 +1605,8 @@
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
     F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
-    SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG,
+    shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,

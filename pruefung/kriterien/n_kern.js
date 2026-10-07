@@ -2,6 +2,8 @@
    A1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps) —
      A1a Oktavkontrolle der Feinspur (F1 ≈ 2·F0), A1b Mischrahmen, 1,5·F0 und Schwelle am legato Tonwechsel,
      A1c Atempause im Raum und mit Brumm, A1d Naht im Signal (digitale Stille, harter Schnitt).
+   A2: SHR und Grundton an Rändern, Tonwechseln und bei Hauch (analyseAt: Zwischenpegel) —
+     A2d Hauch, A2e Verdopplung bleibt sichtbar, A2f stehende Töne ohne Fehlmarke, A2g Vertrag der Felder.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -298,5 +300,202 @@ module.exports = async function (H) {
       zwischen.push({ name: a + (ht > 0 ? '+' : '') + ht + ' ' + NAME[v] + ' Nullen ' + d * 1000 + ' ms', sig: H.concat([real(() => a, 1.5, v, 'rosenberg', saat++), new Float64Array(Math.round(d * SR)), real(() => HT(a, ht), 1.5, v, 'rosenberg', saat++)]), soll: keins });
     r = sammle(zwischen);
     check('A1d', 'digitale Stille 90–150 ms zwischen zwei Tönen (±5…12 HT): kein Ereignis, die Nullen trennen wie eine Atempause', r.ok === r.n, r.detail);
+  }
+
+  /* ---------- A2: SHR und Grundton an Rändern, Tonwechseln und bei Hauch ----------
+     SHR und die Gegenprobe des Grundtons rechnen auf dem Spektrum des längsten Fensters (0,14 s). Eine
+     Pegelkante (Einsatz, Aussatz, Pause) oder ein zweiter Ton im Fenster legt Energie auf die halbzahligen
+     Linien, ohne dass eine Subharmonische im Signal ist; bei Quarte und Quinte nimmt der Grundton den
+     gemeinsamen Unterton an. Hauch (Rauschen in der Anregung) tut dasselbe mitten im Ton. Vorher galten
+     alle diese Werte als sicher: SHR bis −8 dB an Kanten, bis −4 dB an Tonwechseln, bis −9 dB bei Hauch,
+     Gold „über der Warnschwelle“ in der Zusammenfassung. Jetzt trägt der Rahmen shrUnsure mit eigenem
+     Grund ('rand', 'wechsel', 'rauschen'), ein Mischwert des Grundtons f0Unsure ('wechsel').
+     A2d Hauch, A2e echte Verdopplung bleibt sichtbar, A2f stehende Töne ohne Fehlmarke, A2g Vertrag der
+     Felder. */
+  {
+    const { TSR: T12, A } = H;
+    let s2 = 20000;   // eigene Saat je Abschnitt: unabhängig davon, wie viele Signale A1 und die Abschnitte davor erzeugen
+    const r1_ = v => isFinite(v) ? v.toFixed(1) : '--';
+    const lcg2 = seed => { let z = seed >>> 0 || 1; return () => { z = (z * 1664525 + 1013904223) >>> 0; return z / 4294967296; }; };
+    const gauss = rnd => { let u = 0; while (u === 0) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
+    const effW = (x, a, b) => { a = a || 0; b = b == null ? x.length : b; let p = 0; for (let i = a; i < b; i++) p += x[i] * x[i]; return Math.sqrt(p / Math.max(1, b - a)); };
+    /* Rosenberg-Quelle mit F0-Verlauf, Jitter/Shimmer, wahlweise Wechsel der Zyklen (altAmp: jeder zweite
+       schwächer, altPer: Perioden T(1 ± a/2)) und Hauch mit exaktem HNR: periodischer Teil und
+       flussmoduliertes Rauschen laufen getrennt durch denselben Trakt und werden gegeneinander skaliert. */
+    function quelle(o, v) {
+      const n = Math.round(o.dur * SR), rnd = lcg2(o.seed || 7), fz = typeof o.f0 === 'function' ? o.f0 : () => o.f0;
+      const flow = new Float64Array(n + 1), src = new Float64Array(n);
+      let t0 = 0, k = 0;
+      while (t0 < o.dur) {
+        let T = 1 / fz(t0);
+        if (o.altPer) T *= (k % 2 ? 1 - o.altPer / 2 : 1 + o.altPer / 2);
+        T *= 1 + (o.jit || 0) * (2 * rnd() - 1);
+        let amp = 1 + (o.shim || 0) * (2 * rnd() - 1);
+        if (o.altAmp && k % 2) amp *= 1 - o.altAmp;
+        const To = 0.4 * T, Tc = 0.16 * T, i0 = Math.ceil(t0 * SR), i1 = Math.min(n + 1, Math.ceil((t0 + T) * SR));
+        for (let i = i0; i < i1; i++) { const tt = i / SR - t0; flow[i] = amp * (tt < To ? 0.5 * (1 - Math.cos(Math.PI * tt / To)) : (tt < To + Tc ? Math.cos(Math.PI / 2 * (tt - To) / Tc) : 0)); }
+        t0 += T; k++;
+      }
+      for (let i = 0; i < n; i++) src[i] = flow[i + 1] - flow[i];
+      const [F, B] = VOK[v];
+      const trakt = x => { let y = x; for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR); return y; };
+      const y = trakt(src);
+      if (o.hnr != null) {
+        let fm = 0; for (let i = 0; i < n; i++) fm = Math.max(fm, flow[i]);
+        const r2 = lcg2((o.seed || 7) * 31 + 5), nz = new Float64Array(n);
+        for (let i = 0; i < n; i++) nz[i] = gauss(r2) * (0.3 + 0.7 * flow[i] / fm);
+        const yn = trakt(nz), g = effW(y) / effW(yn) * Math.pow(10, -o.hnr / 20);
+        for (let i = 0; i < n; i++) y[i] += g * yn[i];
+      }
+      let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+      for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+      return y;
+    }
+    // Kosinusrampen ein/aus (s), 0 = harte Kante
+    function rampen(x, ein, aus) {
+      const y = Float64Array.from(x), a = Math.round(ein * SR), b = Math.round(aus * SR);
+      for (let i = 0; i < a; i++) y[i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / a);
+      for (let i = 0; i < b; i++) y[y.length - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / b);
+      return y;
+    }
+    // rosa Raumrauschen (Voss-McCartney-Näherung), snr dB unter dem Effektivwert der lauten 10-ms-Blöcke
+    function raum(x, snr, seed) {
+      const n = x.length, rnd = lcg2(seed), nz = new Float64Array(n); let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < n; i++) { const w = gauss(rnd); b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852; b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898; nz[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362; b6 = w * 0.115926; }
+      const blk = 480, lv = []; for (let i = 0; i + blk <= n; i += blk) lv.push(effW(x, i, i + blk));
+      const mxl = Math.max(...lv), sel = lv.filter(v => v > mxl * 0.0316), sR = Math.sqrt(sel.reduce((a, v) => a + v * v, 0) / sel.length);
+      const g = sR * Math.pow(10, -snr / 20) / effW(nz), y = new Float64Array(n);
+      for (let i = 0; i < n; i++) y[i] = x[i] + g * nz[i];
+      return y;
+    }
+    const pause = s => new Float64Array(Math.round(s * SR));
+    // Rahmen wie analysis.js (align centre) an den Zeitpunkten ts (s); Boden fest −70 dBFS
+    function rahmenBei(x, ts, extra) {
+      const ds = D.resample(x, SR, T12), out = [];
+      for (const t of ts) { const c = Math.round(t * T12); if (c - 840 < 0 || c + 840 > ds.length) continue; const r = D.analyseAt(ds, T12, c, Object.assign({ align: 'centre', floorDb: -70, orders: [14] }, extra || {})); r.t = t; out.push(r); }
+      return out;
+    }
+    const zeiten = (a, b) => { const t = []; for (let x = a; x <= b + 1e-9; x += 0.01) t.push(+x.toFixed(3)); return t; };
+    const hat = (r, g) => String(r.shrGrund).split('+').indexOf(g) >= 0;
+    const unmarkiert25 = r => r.voiced && !r.shrUnsure && r.shr > -25;
+    const zeig = r => 't ' + r.t.toFixed(2) + ' SHR ' + r1_(r.shr) + (r.shrUnsure ? ' [' + r.shrGrund + ']' : '') + ' F0 ' + r1_(r.f0) + (r.f0Unsure ? ' [' + r.f0Grund + ']' : '');
+
+    /* A2d Hauch: Rauschen in der Anregung legt Energie auf die halbzahligen Positionen wie überall
+       zwischen den Linien. Vorher bei HNR 8 dB SHR bis −12 dB als sichere Warnung. Gezählt werden Rahmen
+       mit richtigem Grundton (±3 %, ohne f0Unsure): ein falscher Grundton verschiebt das Raster, das prüft
+       die Gegenprobe (K3), nicht SHR. Rahmen mit falschem, unmarkiertem Grundton stehen im Bericht. */
+    {
+      s2 = 24000;
+      const L = [], fremd = [];
+      for (const hnr of [5, 8, 12, 20]) for (const [v, f0] of [['a', 110], ['u', 85], ['o', 130], ['e', 220], ['a', 165], ['i', 98], ['o', 78], ['a', 247]]) {
+        const x = raum(rampen(quelle({ f0, dur: 0.9, jit: 0.008, shim: 0.02, hnr, seed: s2++ }, v), 0.03, 0.03), 40, s2++);
+        for (const r of rahmenBei(x, zeiten(0.2, 0.7))) {
+          if (!r.voiced) continue;
+          const recht = Math.abs(r.f0 / f0 - 1) < 0.03 && !r.f0Unsure, nm = NAME[v] + ' ' + f0 + ' HNR ' + hnr;
+          if (recht) L.push({ nm, r }); else if (unmarkiert25(r)) fremd.push({ nm, r });
+        }
+      }
+      const bad = L.filter(x => unmarkiert25(x.r)), rau = L.filter(x => hat(x.r, 'rauschen'));
+      check('A2d', 'behauchte Stimme ohne Subharmonische (HNR 5/8/12/20 dB, /a/ /u/ /o/ /e/ /i/ 78–247 Hz, Rosenberg, Raumrauschen 40 dB), Rahmen mit richtigem Grundton: kein SHR über −25 dB ohne shrUnsure',
+        L.length >= 800 && bad.length === 0,
+        'Rahmen ' + L.length + ', unmarkiert über −25 dB ' + bad.length + ', \'rauschen\' ' + rau.length + (bad.length ? ' — ' + bad.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r) + ' Boden ' + r1_(x.r.shrBoden)).join(' | ') : '') +
+        '; Bericht: Rahmen mit falschem Grundton ohne f0Unsure und SHR über −25 dB ' + fremd.length + (fremd.length ? ' (' + fremd.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') + ')' : ''));
+      // Gegenprüfer-Fall durch analyseTake: 1,5 s, Rampen 30 ms, 0,3 s Raumrauschen davor und danach
+      const zeilen = []; let gut = true;
+      for (const [v, f0, hnr] of [['a', 110, 8], ['u', 85, 10]]) {
+        const x = raum(H.concat([pause(0.3), rampen(quelle({ f0, dur: 1.5, jit: 0.008, shim: 0.02, hnr, seed: s2++ }, v), 0.03, 0.03), pause(0.3)]), 40, s2++);
+        const res = await A.analyseTake(x, SR, {}), s = res.series, F = A.FLAG;
+        let n = 0, ueber15 = 0;
+        for (let i = 0; i < s.t.length; i++) if (s.flags[i] & F.VOICED) { n++; if (!(s.flags[i] & F.SHRUNSURE) && s.shr[i] > -15) ueber15++; }
+        const smax = res.summary.shr.max;
+        gut = gut && n > 100 && ueber15 === 0 && !(smax > -15);
+        zeilen.push(NAME[v] + ' ' + f0 + ' Hz HNR ' + hnr + ': stimmhaft ' + n + ', unmarkiert über −15 dB ' + ueber15 + ', summary.shr.max ' + r1_(smax) + ', shrUnsureShare ' + r1_(100 * res.summary.shrUnsureShare) + ' %');
+      }
+      check('A2d', 'Take /a/ 110 Hz HNR 8 dB und /u/ 85 Hz HNR 10 dB durch analyseTake: kein Rahmen über −15 dB ohne SHRUNSURE, summary.shr.max höchstens −15 dB oder leer', gut, zeilen.join(' | '));
+    }
+
+    /* A2e Gegenprobe: echte Verdopplung (Testprofil: Amplitude oder Periode 8–14 %, dazu 30 %) bleibt
+       sichtbar. Die neuen Gründe dürfen sie nicht zudecken: mitten im Ton nie 'rand' oder 'wechsel';
+       'rauschen' trifft nur Rahmen, deren halbzahlige Linien sich keine 8 dB vom Zwischenpegel abheben. */
+    {
+      s2 = 25000;
+      const L = [];
+      for (const [art, a] of [['altAmp', 0.08], ['altAmp', 0.14], ['altAmp', 0.3], ['altPer', 0.08], ['altPer', 0.14]]) for (const [v, f0] of [['a', 110], ['o', 130], ['e', 165], ['a', 196], ['u', 147], ['i', 220]]) {
+        const o = { f0, dur: 0.9, jit: 0.008, shim: 0.02, seed: s2++ }; o[art] = a;
+        const x = raum(rampen(quelle(o, v), 0.03, 0.03), 40, s2++);
+        for (const r of rahmenBei(x, zeiten(0.2, 0.7))) if (r.voiced) L.push({ nm: NAME[v] + ' ' + f0 + ' ' + art + ' ' + a, r });
+      }
+      const neu = r => hat(r, 'rand') || hat(r, 'wechsel') || hat(r, 'rauschen');
+      const fenster = L.filter(x => hat(x.r, 'rand') || hat(x.r, 'wechsel'));
+      const warn = L.filter(x => x.r.shr > -15), warnNeu = warn.filter(x => neu(x.r));
+      const sicht = L.filter(x => x.r.shr > -25), sichtNeu = sicht.filter(x => neu(x.r));
+      check('A2e', 'echte Verdopplung (Amplitude/Periode 8, 14, 30 %, sechs Vokale 110–220 Hz, Rosenberg, Raumrauschen 40 dB) mitten im Ton: nie \'rand\'/\'wechsel\'; von den Warnungen (SHR über −15 dB) tragen höchstens 10 %, von allen Werten über −25 dB höchstens 25 % einen neuen Grund',
+        L.length >= 800 && fenster.length === 0 && warn.length >= 50 && warnNeu.length <= 0.1 * warn.length && sichtNeu.length <= 0.25 * sicht.length,
+        'Rahmen ' + L.length + ', Fenstergrund ' + fenster.length + ', Warnungen ' + warn.length + ' davon mit neuem Grund ' + warnNeu.length + ', über −25 dB ' + sicht.length + ' davon mit neuem Grund ' + sichtNeu.length +
+        (fenster.length ? ' — ' + fenster.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : '') + (warnNeu.length ? ' — z. B. ' + warnNeu.slice(0, 2).map(x => x.nm + ' ' + zeig(x.r) + ' Boden ' + r1_(x.r.shrBoden)).join(' | ') : ''));
+    }
+
+    /* A2f Gegenprobe gegen Fehlalarme: stehende saubere Töne 75–450 Hz (sechs Vokale, Impuls und Rosenberg,
+       Rauschen 30/40 dB, Jitter 1/2 %, Vibrato 6 Hz ±50 Cent, Wobble 3,5 Hz ±40 Cent), Fenster ganz im Ton. */
+    {
+      s2 = 26000;
+      const L = [];
+      const add = (nm, x, f0) => { for (const r of rahmenBei(x, [0.2])) if (r.voiced) L.push({ nm, r, f0 }); };
+      for (const v of ['a', 'e', 'o', 'u', 'oe', 'i']) for (let f0 = 75; f0 <= 450; f0 += 25) {
+        const nm = NAME[v] + ' ' + f0;
+        add(nm, stimme(() => f0, 0.4, v, { art: 'impuls', seed: s2++ }), f0);
+        add(nm + ' Rosenberg Jitter 1 %', quelle({ f0, dur: 0.4, jit: 0.01, shim: 0.02, seed: s2++ }, v), f0);
+        add(nm + ' Impuls Jitter 2 %', stimme(() => f0, 0.4, v, { art: 'impuls', jit: 0.02, shim: 0.02, seed: s2++ }), f0);
+        add(nm + ' Rauschen 30 dB', mitRauschen(stimme(() => f0, 0.4, v, { art: 'rosenberg', seed: s2++ }), 30, s2++), f0);
+        add(nm + ' Vibrato 6 Hz ±50 c', quelle({ f0: vibrato(() => f0, 6, 50, f0), dur: 0.4, jit: 0.005, seed: s2++ }, v), f0);
+        add(nm + ' Wobble 3,5 Hz ±40 c', raum(stimme(vibrato(() => f0, 3.5, 40, f0), 0.4, v, { art: 'impuls', jit: 0.005, seed: s2++ }), 40, s2++), f0);
+      }
+      const fenster = L.filter(x => hat(x.r, 'rand') || hat(x.r, 'wechsel') || x.r.f0Grund === 'wechsel');
+      const rau = L.filter(x => hat(x.r, 'rauschen')), rauFalsch = rau.filter(x => !(x.r.shr > -25));
+      const recht = L.filter(x => Math.abs(x.r.f0 / x.f0 - 1) < 0.03 && !x.r.f0Unsure), neu = recht.filter(x => hat(x.r, 'rauschen'));
+      check('A2f', 'stehende saubere Töne 75–450 Hz (sechs Vokale, Impuls/Rosenberg, Rauschen, Jitter 1/2 %, Vibrato ±50 c, Wobble): nie \'rand\', \'wechsel\' oder f0Grund \'wechsel\'; \'rauschen\' nur über −25 dB und bei höchstens 5 % der Rahmen mit richtigem Grundton',
+        L.length >= 500 && fenster.length === 0 && rauFalsch.length === 0 && neu.length <= 0.05 * recht.length,
+        'Rahmen ' + L.length + ', Fenstergrund ' + fenster.length + ', \'rauschen\' ' + rau.length + ' (bei richtigem Grundton ' + neu.length + '/' + recht.length + ')' +
+        (fenster.length ? ' — ' + fenster.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r) + ' Pegelspanne ' + r1_(x.r.fensterPegelDb) + ' Teile ' + r1_(x.r.fensterF0Lo) + '–' + r1_(x.r.fensterF0Hi)).join(' | ') : '') +
+        (neu.length ? ' — \'rauschen\' z. B. ' + neu.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : ''));
+    }
+
+    /* A2g Vertrag der neuen Felder und Gründe (dsp.js analyseAt), nachgerechnet aus Spektrum und Signal:
+       Zwischenpegel (shrBoden, 'rauschen'). */
+    {
+      s2 = 27000;
+      const ORD = ['kamm', 'zweitpuls', 'grundton', 'rand', 'wechsel', 'rauschen'];
+      const proben = [];
+      proben.push(raum(H.concat([pause(0.3), quelle({ f0: stufen([220, 330], 0.4, 0.02), dur: 0.8, jit: 0.008, shim: 0.02, seed: s2++ }, 'o'), pause(0.3)]), 40, s2++));
+      proben.push(raum(H.concat([pause(0.3), quelle({ f0: 110, dur: 0.6, hnr: 8, jit: 0.008, shim: 0.02, seed: s2++ }, 'a'), pause(0.3)]), 40, s2++));
+      proben.push(raum(H.concat([pause(0.3), quelle({ f0: 150, dur: 0.6, altAmp: 0.5, seed: s2++ }, 'a'), pause(0.3)]), 40, s2++));
+      const R = [];
+      for (const x of proben) {
+        const ds = D.resample(x, SR, T12);
+        for (let c = 900; c + 900 < ds.length; c += 60) R.push({ c, ds, r: D.analyseAt(ds, T12, c, { align: 'centre', floorDb: -70, orders: [14], wantSpectrum: true }) });
+      }
+      {
+        const fehler = [], z = { rauschen: 0, stimmlos: 0, sicher: 0 };
+        if (typeof D.shrBoden !== 'function') fehler.push('fehlt: shrBoden');
+        else for (const { c, r } of R) {
+          const e = [];
+          if (!r.voiced) { z.stimmlos++; if (!(Number.isNaN(r.shrBoden) && r.shrGrund === '' && r.shrUnsure === false)) e.push('stimmlos nicht leer'); }
+          else {
+            const db = r.spectrumDb, sp = { db, sr: T12, df: T12 / (2 * (db.length - 1)), N: 2 * (db.length - 1) }, boden = D.shrBoden(sp, r.shrGrid);
+            if (!(Math.abs(r.shrBoden - boden) < 1e-9)) e.push('shrBoden ' + r.shrBoden + ' statt ' + boden);
+            const rau = r.shr > D.SHR_UNAUFFAELLIG_DB && !(r.shr - r.shrBoden >= D.SHR_RAUSCH_ABSTAND_DB);
+            if (hat(r, 'rauschen') !== rau) e.push('rauschen ' + hat(r, 'rauschen') + ' statt ' + rau);
+            if (r.shrUnsure !== (r.shrGrund !== '')) e.push('shrUnsure ' + r.shrUnsure + ' bei Grund „' + r.shrGrund + '“');
+            const teile = r.shrGrund ? r.shrGrund.split('+') : [];
+            if (!teile.every((t, i) => ORD.indexOf(t) >= 0 && (i === 0 || ORD.indexOf(t) > ORD.indexOf(teile[i - 1])))) e.push('Reihenfolge ' + r.shrGrund);
+            if (hat(r, 'grundton') !== r.f0Unsure) e.push('grundton');
+            if (rau) z.rauschen++; if (!r.shrUnsure) z.sicher++;
+          }
+          if (e.length) fehler.push('c ' + c + ': ' + e.join(', '));
+        }
+        check('A2g', 'Vertrag Zwischenpegel: shrBoden = Pegel an den Viertelpositionen des Rasters shrGrid gegen die ganzzahligen Linien; \'rauschen\' ⇔ SHR über −25 dB und weniger als 8 dB über shrBoden; Gründe in fester Reihenfolge, shrUnsure ⇔ Grund; stimmlos leer',
+          !fehler.length && z.rauschen > 0 && z.stimmlos > 0 && z.sicher > 0, R.length + ' Rahmen, ' + JSON.stringify(z) + (fehler.length ? ' — ' + fehler.length + ' Fehler: ' + fehler.slice(0, 4).join(' | ') : ''));
+      }
+    }
   }
 };
