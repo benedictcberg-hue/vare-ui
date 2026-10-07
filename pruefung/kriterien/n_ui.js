@@ -6,7 +6,9 @@
    B1a: Take und Rahmenverlauf in einer Transaktion (Take, Neu-Analyse).
    B1b: Bearbeiten im Detail überschreibt keine laufende oder abgeschlossene Neu-Analyse.
    B1c: Export und Import sind während „Alle neu analysieren“ gesperrt, mit Hinweis.
-   B1d: Meldungen stimmen mit dem Speicherzustand: Speicher reicht für Take und Verlauf, nicht für das WAV. */
+   B1d: Meldungen stimmen mit dem Speicherzustand: Speicher reicht für Take und Verlauf, nicht für das WAV.
+   B1e: Die Aufnahme liegt vor der Analyse in IndexedDB; nach dem Neuladen wird sie angeboten (fortsetzen, WAV
+        sichern, verwerfen); während Aufnahme und Analyse fragt die Seite vor dem Verlassen nach. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto');
 const { Blob } = require('buffer');
@@ -404,6 +406,81 @@ module.exports = async function (H) {
       + ' | Take scheitert: „' + meldung2.slice(0, 80) + '“');
     p.schliessen();
   } catch (e) { check('B1d', 'Ablauf Speicher knapp läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1e · Neuladen während der Analyse ---------- */
+  try {
+    const br = idbNeu();
+    let p = await seiteNeu(br, normal, SR);
+    p.st().settings.hopS = 0.01;   // Analyse lang genug, um mitten in ihr neu zu laden
+    p.kalibriert('cal-1'); await p.mikrofon();
+    // Rückfrage beim Verlassen, wie der Browser sie auslöst: ein Hörer ruft preventDefault oder setzt returnValue.
+    const verlassen = q => { let verhindert = false; const ev = { type: 'beforeunload', returnValue: undefined, preventDefault() { verhindert = true; } };
+      (q.hoerer.beforeunload || []).forEach(f => { const r = f(ev); if (typeof r === 'string') verhindert = true; }); return verhindert || typeof ev.returnValue === 'string'; };
+    const leerlauf = verlassen(p);
+    p.el('take-label').value = 'Lied'; p.el('take-comment').value = 'ganzer Durchgang';
+    p.klick('btn-take');
+    const beimSingen = verlassen(p);
+    p.klick('btn-take');
+    const inAnalyse = await p.warte(() => /Analyse \d+ \/ \d+ Rahmen/.test(p.el('take-progress-text').textContent), 10000);
+    p.halt();
+    const inDerAnalyse = verlassen(p);
+    const vor = { pending: br.laden('vare', 'pending').size, audio: br.laden('vare', 'audio').size, takes: br.laden('vare', 'takes').size };
+    p.schliessen();
+    // Neu geladen: angeboten mit Datum, Dauer und Bezeichnung; die Stelle in der Sitzung ist vergeben.
+    p = await seiteNeu(br, normal, SR);
+    const id = [...br.laden('vare', 'pending').keys()][0] || '';
+    const box = () => p.el('offene-analysen');
+    const angeboten = await p.warte(() => !box().hidden && ['weiter', 'wav', 'weg'].every(a => box().innerHTML.indexOf('data-offen="' + a + '" data-id="' + id + '"') >= 0) && /„Lied“/.test(box().innerHTML), 5000);
+    const naechste = p.el('ctx-position').textContent;
+    const knopf = (act, kid) => ({ getAttribute: k => (k === 'data-offen' ? act : k === 'data-id' ? kid : null) });
+    const klickOffen = (act, kid) => (box()._on.click || []).forEach(f => f({ target: knopf(act, kid) }));
+    // Sicherung, solange die Aufnahme offen ist: ohne ihr WAV, und die Seite sagt es.
+    let n0 = p.downloads.length;
+    p.klick('btn-export-json');
+    await p.warte(() => p.downloads.length > n0, 5000);
+    const sicherung = p.downloads.length > n0 ? await p.downloads[p.downloads.length - 1].text() : '';
+    const sicherungOhne = !!sicherung && sicherung.indexOf(id) < 0 && /unvollendete Aufnahme/.test(p.status());
+    // WAV sichern
+    n0 = p.downloads.length;
+    klickOffen('wav', id);
+    await p.warte(() => p.downloads.length > n0, 3000);
+    const wavDl = p.downloads.length > n0 ? p.downloads[p.downloads.length - 1].size : 0;
+    // Fortsetzen
+    p.st().settings.hopS = 0.05;
+    klickOffen('weiter', id);
+    await p.warte(() => br.laden('vare', 'takes').size === 1 && !p.st().busy, 30000);
+    await p.warte(() => box().hidden, 3000);
+    const t = await p.S.getTake(id), hatAudio = await p.S.hasAudio(id), serie = await p.S.getSeries(id);
+    const fortgesetzt = !!t && t.code === 'A' && t.label === 'Lied' && t.comment === 'ganzer Durchgang' && t.sitzung && t.sitzung.position === 1 && t.hasAudio === true && hatAudio && !!serie
+      && br.laden('vare', 'pending').size === 0 && box().hidden;
+    // Verwerfen: ein zweiter Take, wieder mitten in der Analyse neu geladen.
+    p.kalibriert('cal-2'); await p.mikrofon();
+    p.st().settings.hopS = 0.01;
+    p.el('take-progress-text').textContent = '';   // im echten DOM entsteht die Zeile mit jedem Take neu
+    p.klick('btn-take'); p.klick('btn-take');
+    await p.warte(() => /Analyse \d+ \/ \d+ Rahmen/.test(p.el('take-progress-text').textContent), 10000);
+    p.halt(); p.schliessen();
+    p = await seiteNeu(br, normal, SR);
+    const id2 = [...br.laden('vare', 'pending').keys()][0] || '';
+    await p.warte(() => !box().hidden, 5000);
+    klickOffen('weg', id2);
+    await p.warte(() => box().hidden, 3000);
+    const verworfen = !!id2 && br.laden('vare', 'pending').size === 0 && !br.laden('vare', 'audio').has(id2) && br.laden('vare', 'takes').size === 1;
+    p.schliessen();
+    // Eine Chronik der Datenbankversion 1 (vor dem Laden pending) wird übernommen, nichts geht verloren.
+    const alt = idbNeu(), m = (kp, eintraege) => ({ keyPath: kp, data: new Map(eintraege || []) });
+    const altTake = { id: 'v1-take', code: 'C', label: 'aus Version 1', createdAt: '2026-01-01T10:00:00.000Z', analysis: { kernelVersion: D.VERSION }, summary: {}, history: [] };
+    alt.dbs.set('vare', { version: 1, stores: new Map([['takes', m('id', [['v1-take', altTake]])], ['series', m('takeId')], ['audio', m('takeId')], ['calibrations', m('id')], ['meta', m('key')]]) });
+    const pa = await seiteNeu(alt, normal, SR);
+    const v1 = alt.dbs.get('vare'), umgestellt = v1.version === 2 && v1.stores.has('pending') && pa.st().takes.some(x => x.id === 'v1-take');
+    pa.schliessen();
+    check('B1e', 'Aufnahme vor der Analyse in IndexedDB; nach dem Neuladen angeboten (fortsetzen = derselbe Take mit Angaben und Stelle, WAV sichern, verwerfen); Rückfrage beim Verlassen nur während Aufnahme und Analyse; Sicherung nennt die offene Aufnahme; Chronik der Version 1 bleibt',
+      !leerlauf && beimSingen && inAnalyse && inDerAnalyse && vor.pending === 1 && vor.audio === 1 && vor.takes === 0 && angeboten && naechste === '2' && sicherungOhne && wavDl === 44 + 2 * SIG.length && fortgesetzt && verworfen && umgestellt,
+      'Rückfrage Leerlauf/Aufnahme/Analyse ' + leerlauf + '/' + beimSingen + '/' + inDerAnalyse + ' | vor dem Neuladen pending ' + vor.pending + ', Audio ' + vor.audio + ', Takes ' + vor.takes
+      + ' | angeboten=' + angeboten + ', nächste Nummer ' + naechste + ' | Sicherung ohne die offene Aufnahme, mit Hinweis=' + sicherungOhne + ' | WAV ' + wavDl + ' B'
+      + ' | fortgesetzt: ' + (t ? t.code + ' „' + t.label + '“ „' + t.comment + '“ Stelle ' + (t.sitzung && t.sitzung.position) + ' Audio ' + hatAudio + ' Verlauf ' + !!serie : 'kein Take') + ', Anzeige weg=' + box().hidden
+      + ' | verworfen=' + verworfen + ' | Version 1 → 2: ' + umgestellt);
+  } catch (e) { check('B1e', 'Ablauf Neuladen während der Analyse läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

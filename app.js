@@ -27,7 +27,7 @@
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
   ];
 
-  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null };
+  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {} };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -532,12 +532,12 @@
      Nummer. Gehört der Take zu einer Sitzung, die während seiner Analyse beendet wurde, bleibt der
      Zähler der neuen Sitzung unberührt. */
   function zaehlerFortschreiben(ctx, ende) {
-    if (!st.sitzung || !ctx || ctx.id !== st.sitzung.id) return;
+    if (!st.sitzung || !ctx || ctx.id !== st.sitzung.id) return Promise.resolve();
     var p = Number(ctx.position);
-    if (!isFinite(p)) return;
+    if (!isFinite(p)) return Promise.resolve();
     st.sitzung.letztePos = Math.max(Number(st.sitzung.letztePos) || 0, p);
     st.sitzung.letztesEnde = ende;
-    speichereSitzung().catch(function () { });
+    return speichereSitzung().catch(function () { });
   }
   function letzterTake() {
     var best = null;
@@ -675,19 +675,45 @@
     b.addEventListener('click', function () { download(name, blob()); });
     box.appendChild(b);
   }
-  function finishTake(samples, sr, feld) {
+  /* Angaben eines Takes, wie sie vor der Analyse mit dem WAV gesichert werden (storage.js putPending): alles, was
+     finishTake braucht, um die Analyse nach einem Neuladen genau so fortzusetzen, wie sie begonnen hätte. */
+  function offenSatz(id, feld, sr, n) {
+    var a = {}; for (var k in feld) a[k] = feld[k];
+    a.ende = feld.ende.toISOString();
+    return { id: id, createdAt: a.ende, durationS: n / sr, sampleRate: sr, angaben: a };
+  }
+  function angabenAus(o) { var f = {}, a = o.angaben || {}; for (var k in a) f[k] = a[k]; f.ende = new Date(a.ende || o.createdAt); return f; }
+  /* offen = { id }: Die Aufnahme liegt schon gesichert in IndexedDB (Fortsetzen nach dem Neuladen). */
+  function finishTake(samples, sr, feld, offen) {
     feld = feld || takeAngaben(new Date());
     st.busy = true; updateTakeButton();
-    var prog = $('take-progress'); prog.hidden = false; prog.innerHTML = '<div class="skeleton"></div><div class="small muted" id="take-progress-text">Analyse …</div>';
-    var now = feld.ende, info = feld.info, wav = null, audioFehler = null, take = null;
-    // Das WAV wird einmal erzeugt und für Ablage und Rettung verwendet.
+    var prog = $('take-progress'); prog.hidden = false; prog.innerHTML = '<div class="skeleton"></div><div class="small muted" id="take-progress-text">' + (offen ? 'Analyse …' : 'Aufnahme wird gesichert …') + '</div>';
+    var now = feld.ende, info = feld.info, wav = null, audioFehler = null, take = null, id = offen ? offen.id : uuid();
+    var gesichert = !!offen, vorabText = null;
+    st.inArbeit[id] = true;
+    // Das WAV wird einmal erzeugt und für Sicherung, Ablage und Rettung verwendet.
     function wavBlob() { if (!wav) wav = new Blob([W.encode(samples, sr, feld.audioFormat)], { type: 'audio/wav' }); return wav; }
-    A.analyseTake(samples, sr, feld.opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; }).then(function (res) {
+    /* Erst sichern, dann rechnen. Die Analyse dauert bei einem ganzen Lied Minuten; bis dahin lag die Aufnahme
+       nur im Arbeitsspeicher, und Neuladen oder Schließen verwarf sie still. Jetzt liegt sie vorher mit allen
+       Angaben in IndexedDB und wird nach dem Neuladen angeboten (offeneAnzeigen). Scheitert die Sicherung,
+       wird trotzdem gerechnet — und gesagt, dass die Seite bis dahin offen bleiben muss. Die Stelle in der
+       Sitzung gilt ab hier als vergeben: Die Aufnahme ist gesungen und gesichert. */
+    var vorab = offen ? Promise.resolve() : S.putPending(offenSatz(id, feld, sr, samples.length), { sampleRate: sr, format: feld.audioFormat, blob: wavBlob() }).then(function () {
+      // Erst wenn auch der Zähler gespeichert ist, beginnt die Analyse: nach einem Neuladen mitten in ihr ist
+      // die Stelle dieser Aufnahme sonst wieder frei und ginge an den nächsten Take.
+      gesichert = true; return zaehlerFortschreiben(feld.sitzung, now.toISOString());
+    }, function (e) {
+      vorabText = 'Aufnahme nicht vorab gesichert (' + fehlerText(e) + ') — bis die Analyse fertig ist, liegt sie nur im Speicher dieser Seite. Seite nicht schließen.';
+      status(vorabText, true);
+    });
+    vorab.then(function () {
+      return A.analyseTake(samples, sr, feld.opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; });
+    }).then(function (res) {
       return Promise.all([S.getMeta('nextCode', 0), S.allTakes()]).then(function (rr) {
         var n = A.nextCodeIndex(rr[1], rr[0]);
         var code = codeFromIndex(n), label = feld.label || defaultLabel(code, now);
         take = {
-          id: uuid(), schemaVersion: 1, code: code, label: label, comment: feld.comment, createdAt: now.toISOString(),
+          id: id, schemaVersion: 1, code: code, label: label, comment: feld.comment, createdAt: now.toISOString(),
           durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate,
           deviceLabel: info.deviceLabel, deviceId: info.deviceId, channelCount: 1,
           captureFlags: { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
@@ -696,15 +722,18 @@
           vowelIntent: feld.vowelIntent, calibrationId: feld.calibrationId,
           analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio
         };
-        /* Take, Rahmenverlauf und WAV in einer Transaktion (storage.js putTakeSeries). Scheitert sie mit dem
-           WAV — bei knappem Speicher zuerst, es ist der größte Brocken —, werden Take und Verlauf ohne WAV
-           gespeichert, und die Meldung sagt genau das. Früher hieß es dann „NICHT gespeichert“, obwohl Take
-           und Verlauf in der Chronik standen; wer der Meldung glaubte, sang den Take ein zweites Mal. */
-        var extra = feld.storeAudio ? { audio: { sampleRate: sr, format: feld.audioFormat, blob: wavBlob() } } : null;
+        /* Take, Rahmenverlauf und WAV in einer Transaktion (storage.js putTakeSeries); die vorab gesicherte
+           Aufnahme verlässt pending im selben Zug, ihr WAV bleibt (oder geht, wenn kein Audio gespeichert werden
+           soll). Liegt kein WAV vorab, kommt es jetzt dazu. Scheitert die Transaktion mit dem WAV — bei knappem
+           Speicher zuerst, es ist der größte Brocken —, werden Take und Verlauf ohne WAV gespeichert, und die
+           Meldung sagt genau das. Früher hieß es dann „NICHT gespeichert“, obwohl Take und Verlauf in der
+           Chronik standen; wer der Meldung glaubte, sang den Take ein zweites Mal. */
+        var extra = { offenErledigt: gesichert, audioLoeschen: gesichert && !feld.storeAudio };
+        if (feld.storeAudio && !gesichert) extra.audio = { sampleRate: sr, format: feld.audioFormat, blob: wavBlob() };
         return S.putTakeSeries(take, res.series, extra).catch(function (e) {
-          if (!extra) throw e;
-          audioFehler = e; take.hasAudio = false;
-          return S.putTakeSeries(take, res.series, null);
+          if (!extra.audio) throw e;
+          audioFehler = e; take.hasAudio = false; extra.audio = null;
+          return S.putTakeSeries(take, res.series, extra);
         }).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); })
           .then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
             S.persist().catch(function () { });
@@ -712,19 +741,62 @@
             if (audioFehler) {
               status('Take ' + take.code + ' gespeichert, das WAV nicht (' + fehlerText(audioFehler) + ') — eine Neu-Analyse dieses Takes ist nicht möglich. Das WAV jetzt sichern: Knopf unter dem Ergebnis.', true);
               wavRettenKnopf($('take-result'), 'WAV dieses Takes sichern', 'vare-' + take.code + '-' + stamp(now) + '.wav', wavBlob);
-            }
+            } else if (vorabText && st.statusEl && st.statusEl.textContent === vorabText) status('');
           });
       });
     }).catch(function (e) {
-      /* Ist die Analyse fertig und nur das Speichern scheitert (Speicherplatz, privater Modus),
-         liegt die Aufnahme nur noch im Arbeitsspeicher dieser Seite. Dann wenigstens einen Weg
-         anbieten, sie zu retten, statt sie mit einer Fehlermeldung verschwinden zu lassen. */
-      status('NICHT gespeichert (' + fehlerText(e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
-      // Bezeichnung und Kommentar wurden beim Stopp geleert; stehen dort noch keine neuen, kommen sie zurück.
-      if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
+      /* Ist die Analyse fertig und nur das Speichern scheitert (Speicherplatz, privater Modus), liegt die
+         Aufnahme gesichert in pending (dann wird sie oben zum Fortsetzen angeboten) oder nur noch im
+         Arbeitsspeicher dieser Seite. In beiden Fällen ein Weg, sie zu retten, statt sie mit einer
+         Fehlermeldung verschwinden zu lassen. */
+      if (gesichert) status('NICHT gespeichert (' + fehlerText(e) + ') — die Aufnahme ist im Browser gesichert und steht oben unter „Unvollendete Analyse“.', true);
+      else {
+        status('NICHT gespeichert (' + fehlerText(e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
+        // Bezeichnung und Kommentar wurden beim Stopp geleert; stehen dort noch keine neuen, kommen sie zurück.
+        if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
+      }
       var box = $('take-result'); box.innerHTML = '';
       wavRettenKnopf(box, 'Aufnahme als WAV retten', 'vare-ungespeichert-' + stamp(now) + '.wav', wavBlob);
-    }).then(function () { prog.hidden = true; st.busy = false; updateTakeButton(); });
+    }).then(function () { delete st.inArbeit[id]; prog.hidden = true; st.busy = false; updateTakeButton(); return offeneAnzeigen(); });
+  }
+  /* Aufnahmen, deren Analyse nicht gespeichert ist — die Seite wurde während der Analyse neu geladen oder
+     geschlossen, oder das Speichern scheiterte. Sie werden angeboten: fortsetzen (rechnen und speichern wie
+     ein Take), das WAV sichern oder verwerfen. Was diese Seite gerade selbst rechnet, steht nicht dabei. */
+  function offeneAnzeigen() {
+    return S.allPending().then(function (liste) {
+      st.offen = liste.filter(function (o) { return !st.inArbeit[o.id]; });
+      var box = $('offene-analysen');
+      if (!st.offen.length) { box.hidden = true; box.innerHTML = ''; return; }
+      box.hidden = false;
+      box.innerHTML = '<strong>Unvollendete Analyse' + (st.offen.length > 1 ? 'n' : '') + ':</strong> Diese Aufnahmen sind im Browser gesichert, aber noch nicht ausgewertet; in der Chronik stehen sie noch nicht.'
+        + st.offen.map(function (o) {
+          var a = o.angaben || {};
+          return '<div class="row"><span>' + CH.esc(CH.dateShort(o.createdAt)) + ' · ' + fmt(o.durationS, 1) + ' s' + (a.label ? ' · „' + CH.esc(a.label) + '“' : '') + '</span>'
+            + '<button data-offen="weiter" data-id="' + CH.esc(o.id) + '">Analyse fortsetzen</button>'
+            + '<button data-offen="wav" data-id="' + CH.esc(o.id) + '">WAV sichern</button>'
+            + '<button data-offen="weg" data-id="' + CH.esc(o.id) + '" class="danger">Verwerfen</button></div>';
+        }).join('');
+    }).catch(function (e) { status('Unvollendete Analysen nicht lesbar: ' + fehlerText(e), true); });
+  }
+  function offenAktion(act, id) {
+    var o = (st.offen || []).filter(function (x) { return x.id === id; })[0];
+    if (!o) return;
+    if (act === 'wav') { S.getAudio(id).then(function (a) { if (a) download('vare-unvollendet-' + stamp(new Date(o.createdAt)) + '.wav', a.blob); else status('Zu dieser Aufnahme ist kein WAV gespeichert.', true); }); return; }
+    if (act === 'weg') {
+      if (!window.confirm('Aufnahme vom ' + CH.dateShort(o.createdAt) + ' endgültig verwerfen? Sie ist nicht ausgewertet und steht nicht in der Chronik.')) return;
+      S.deletePending(id).then(offeneAnzeigen).catch(function (e) { status('Verwerfen fehlgeschlagen: ' + fehlerText(e), true); });
+      return;
+    }
+    if (act !== 'weiter') return;
+    if (st.busy || st.taking) { status('Erst Take, Analyse oder Neu-Analyse abwarten.', true); return; }
+    S.getAudio(id).then(function (a) {
+      if (!a) throw new Error('kein WAV zu dieser Aufnahme gespeichert');
+      return a.blob.arrayBuffer().then(function (buf) {
+        var dec = W.decode(buf);
+        if (location.hash !== '#/aufnahme') location.hash = '#/aufnahme';
+        finishTake(dec.samples, dec.sampleRate, angabenAus(o), { id: id });
+      });
+    }).catch(function (e) { status('Fortsetzen fehlgeschlagen: ' + fehlerText(e), true); });
   }
   function analysisMeta(meta, now) {
     return { kernelVersion: D.VERSION, hopS: meta.hopS, windowsS: meta.windowsS, orders: meta.orders, yinThresh: meta.yinThresh, spreadMaxHz: meta.spreadMaxHz, gate: meta.gate, floorSource: meta.floorSource, analysedAt: now.toISOString() };
@@ -934,8 +1006,14 @@
   function exportCsv() { if (gesperrtImLauf()) return; S.allTakes().then(function (takes) { download('vare-chronik-' + stamp(new Date()) + '.csv', new Blob([C.takesToCsv(takes, st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); }); }
   function exportJson() {
     if (gesperrtImLauf()) return;
-    Promise.all([S.allTakes(), S.allCalibrations(), S.getMeta('refs', {}), S.audioIds()]).then(function (r) {
-      var takes = r[0], withAudio = false, ids = r[3] || [];
+    var offenZahl = 0;
+    Promise.all([S.allTakes(), S.allCalibrations(), S.getMeta('refs', {}), S.audioIds(), S.allPending()]).then(function (r) {
+      /* Nur das WAV von Takes: Unvollendete Aufnahmen (pending) liegen mit ihrem WAV im selben Laden, gehören
+         aber nicht in die Sicherung der Chronik. Dass sie fehlen, wird nach dem Sichern gesagt. */
+      var takes = r[0], withAudio = false, takeIds = {};
+      takes.forEach(function (t) { takeIds[t.id] = true; });
+      var ids = (r[3] || []).filter(function (id) { return takeIds[id]; });
+      offenZahl = (r[4] || []).length;
       var seriesP = Promise.all(takes.map(function (t) { return S.getSeries(t.id); }));
       var audioP = Promise.resolve({});
       if (ids.length) {
@@ -960,6 +1038,7 @@
         var series = {}; x[0].forEach(function (t, i) { if (sa[0][i]) series[t.id] = sa[0][i]; });
         var text = C.serializeBackup({ takes: x[0], series: series, refs: x[2], calibrations: x[1], settings: st.settings, kernelVersion: D.VERSION, exportedAt: new Date().toISOString(), audio: sa[1] });
         download('vare-sicherung-' + stamp(new Date()) + '.json', new Blob([text], { type: 'application/json' }));
+        if (offenZahl) status('Sicherung ohne ' + offenZahl + (offenZahl === 1 ? ' unvollendete Aufnahme' : ' unvollendete Aufnahmen') + ' (oben unter „Unvollendete Analyse“): erst fortsetzen oder das WAV einzeln sichern.', true);
       });
     }).catch(function (e) { status('Sicherung fehlgeschlagen: ' + (e && e.message || e), true); });
   }
@@ -1034,7 +1113,7 @@
       // Die Kalibrierung ist mitgelöscht. Ohne diesen Aufruf bliebe der Take-Knopf frei, während
       // daneben „Ohne Kalibrierung ist kein Take möglich“ steht.
       updateTakeButton();
-      refreshChronik(); status('Chronik gelöscht. Codes und Stelle in der Sitzung zählen weiter.');
+      refreshChronik(); offeneAnzeigen(); status('Chronik gelöscht. Codes und Stelle in der Sitzung zählen weiter.');
     }).catch(function (e) { status('Löschen fehlgeschlagen: ' + (e && e.message || e), true); });
   }
 
@@ -1159,6 +1238,7 @@
         /* Gespeicherte Referenzen können von einer früheren Fassung oder anderen Einstellungen stammen.
            Live gilt erst, was mit der jetzigen Rechenweise bestimmt ist. */
         recomputeRefs().catch(function () { });
+        offeneAnzeigen();
         /* Die Pause läuft weiter, während die Seite offen steht. Sie wird deshalb jede halbe
            Minute neu angezeigt — festgehalten wird sie erst beim Take-Start. */
         st.ctxTimer = setInterval(renderKontext, 30000);
@@ -1181,6 +1261,17 @@
     $('btn-clear-all').addEventListener('click', clearAll);
     $('btn-reanalyse-all').addEventListener('click', alleNeuAnalysieren);
     $('btn-reanalyse-abbruch').addEventListener('click', alleAbbrechen);
+    $('offene-analysen').addEventListener('click', function (e) {
+      var b = e.target, act = b && b.getAttribute ? b.getAttribute('data-offen') : null;
+      if (act) offenAktion(act, b.getAttribute('data-id'));
+    });
+    /* Während Aufnahme, Analyse oder Neu-Analyse fragt der Browser vor dem Verlassen nach. Eine laufende
+       Aufnahme ginge sonst ganz verloren, eine laufende Analyse müsste nach dem Neuladen von vorn beginnen. */
+    window.addEventListener('beforeunload', function (e) {
+      if (!st.taking && !st.busy) return undefined;
+      e.preventDefault(); e.returnValue = '';
+      return '';
+    });
     window.addEventListener('hashchange', route);
     window.addEventListener('resize', function () { if (st.rec && st.rec.active) return; drawHist(); });
     fillDevices();

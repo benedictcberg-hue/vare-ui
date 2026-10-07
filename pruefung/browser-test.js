@@ -437,6 +437,64 @@ const WAV = path.join(SP, 'fake.wav');
       neu.lokal === null && neu.knopf === 'Mikrofon starten' && !neu.mic && neu.kalibrieren, JSON.stringify(neu));
     await ctx2.close();
 
+    // ---------- Aufnahme vor der Analyse gesichert, Neuladen mitten in der Analyse, Datenbank Version 1 → 2 ----------
+    {
+      const ctx4 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
+      await ctx4.route('https://api.github.com/**', korpusRoute);
+      const p4 = await ctx4.newPage();
+      p4.on('pageerror', e => errors.push(String(e && e.stack || e)));
+      // Rückfragen beim Verlassen werden mitgeschrieben und abgelehnt, außer der Ablauf erlaubt das Verlassen ausdrücklich.
+      const dialoge = []; let verlassenErlaubt = false;
+      p4.on('dialog', d => { dialoge.push(d.type()); if (d.type() === 'beforeunload' && verlassenErlaubt) d.accept(); else d.dismiss(); });
+      // Eine Chronik der Datenbankversion 1 (vor dem Laden pending) unter derselben Adresse anlegen.
+      await p4.goto(BASE + '/README.md');
+      await p4.evaluate(() => new Promise((ok, fehler) => {
+        const r = indexedDB.open('vare', 1);
+        r.onupgradeneeded = () => { const db = r.result, t = db.createObjectStore('takes', { keyPath: 'id' }); t.createIndex('createdAt', 'createdAt'); t.createIndex('code', 'code'); db.createObjectStore('series', { keyPath: 'takeId' }); db.createObjectStore('audio', { keyPath: 'takeId' }); db.createObjectStore('calibrations', { keyPath: 'id' }).createIndex('createdAt', 'createdAt'); db.createObjectStore('meta', { keyPath: 'key' }); };
+        r.onsuccess = () => { const db = r.result, tx = db.transaction('takes', 'readwrite'); tx.objectStore('takes').put({ id: 'v1-take', code: 'C', label: 'aus Version 1', createdAt: '2026-01-01T10:00:00.000Z', analysis: { kernelVersion: '4.0.0' }, summary: {}, history: [] }); tx.oncomplete = () => { db.close(); ok(); }; tx.onerror = () => fehler(tx.error); };
+        r.onerror = () => fehler(r.error);
+      }));
+      await p4.goto(BASE + '/index.html#/aufnahme');
+      await p4.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+      await p4.fill('#token', TOKEN); await p4.uncheck('#token-merken'); await p4.click('#btn-verbinden');
+      await p4.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 10000 });
+      const v1 = await p4.evaluate(() => Promise.all([VARESTORE.allTakes(), VARESTORE.allPending()]).then(r => ({ takes: r[0].map(t => t.id), pending: r[1].length })));
+      check('Datenbank Version 1 → 2: die vorhandene Chronik bleibt, der Laden für unvollendete Analysen ist da', v1.takes.includes('v1-take') && v1.pending === 0, JSON.stringify(v1));
+      // Ohne Kalibrierpflicht (Schalter in den Einstellungen); ein Take von 7 s, damit die Analyse lange genug läuft.
+      await p4.$eval('#s-requireCal', el => { el.checked = false; el.dispatchEvent(new Event('change')); });
+      await p4.click('#btn-mic');
+      await p4.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
+      await p4.waitForTimeout(500);
+      await p4.fill('#take-label', 'Neuladen-Probe');
+      await p4.click('#btn-take'); await p4.waitForTimeout(7000); await p4.click('#btn-take');
+      await p4.waitForFunction(() => /Analyse \d+ \/ \d+ Rahmen/.test((document.getElementById('take-progress-text') || {}).textContent || ''), null, { timeout: 30000 });
+      const vor = await p4.evaluate(() => Promise.all([VARESTORE.allPending(), VARESTORE.audioIds(), VARESTORE.allTakes()]).then(r => ({ pending: r[0].map(o => o.id), audio: r[1], takes: r[2].length, busy: VAREAPP.state.busy })));
+      // Neuladen mitten in der Analyse: Der Browser fragt nach; abgelehnt, läuft die Analyse weiter.
+      await p4.evaluate(() => { location.reload(); });
+      await p4.waitForTimeout(800);
+      const nachAbgelehnt = await p4.evaluate(() => ({ busy: VAREAPP.state.busy, gespeichert: /Gespeichert als/.test(document.getElementById('take-result').textContent) }));
+      const abgelehntGeblieben = dialoge.includes('beforeunload') && (nachAbgelehnt.busy || nachAbgelehnt.gespeichert);
+      // Dann bestätigt neu laden, solange die Analyse noch läuft.
+      const nochInAnalyse = await p4.evaluate(() => VAREAPP.state.busy);
+      verlassenErlaubt = true;
+      await p4.reload();
+      verlassenErlaubt = false;
+      await p4.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 15000 });
+      await p4.waitForFunction(() => !document.getElementById('offene-analysen').hidden, null, { timeout: 10000 }).catch(() => { });
+      const angebot = await p4.evaluate(() => { const b = document.getElementById('offene-analysen'); return { sichtbar: !b.hidden, text: b.textContent, knoepfe: Array.from(b.querySelectorAll('button')).map(x => x.textContent) }; });
+      check('Neuladen während der Analyse: Aufnahme vor der Analyse in IndexedDB, Rückfrage beim Verlassen, danach als unvollendete Analyse angeboten',
+        vor.busy && vor.pending.length === 1 && vor.audio.includes(vor.pending[0]) && vor.takes === 1 && abgelehntGeblieben && nochInAnalyse
+        && angebot.sichtbar && /Neuladen-Probe/.test(angebot.text) && angebot.knoepfe.join('|') === 'Analyse fortsetzen|WAV sichern|Verwerfen',
+        JSON.stringify({ vor, dialoge, nachAbgelehnt, nochInAnalyse, angebot: angebot.text.slice(0, 90), knoepfe: angebot.knoepfe }));
+      await p4.click('#offene-analysen button[data-offen="weiter"]').catch(() => { });
+      await p4.waitForFunction(() => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Neuladen-Probe')), null, { timeout: 60000, polling: 300 }).catch(() => { });
+      await p4.waitForFunction(() => !VAREAPP.state.busy, null, { timeout: 30000 }).catch(() => { });
+      const nach = await p4.evaluate(id => Promise.all([VARESTORE.getTake(id), VARESTORE.allPending(), VARESTORE.hasAudio(id), VARESTORE.getSeries(id)]).then(r => ({ code: r[0] && r[0].code, label: r[0] && r[0].label, pos: r[0] && r[0].sitzung && r[0].sitzung.position, pending: r[1].length, audio: r[2], serie: !!r[3], angebotWeg: document.getElementById('offene-analysen').hidden, ergebnis: document.getElementById('take-result').textContent.slice(0, 40) })), vor.pending[0] || '');
+      check('Fortsetzen nach dem Neuladen: derselbe Take mit Bezeichnung, Stelle in der Sitzung, WAV und Rahmenverlauf; nichts mehr offen',
+        nach.label === 'Neuladen-Probe' && nach.code === 'D' && nach.pos === 1 && nach.pending === 0 && nach.audio && nach.serie && nach.angebotWeg && /Gespeichert als D/.test(nach.ergebnis), JSON.stringify(nach));
+      await ctx4.close();
+    }
+
     // ---------- Sicherung mit nie Gemessenem, Befund statt Rost, Sprünge, verwaiste Referenz ----------
     const C = require(path.join(ROOT, 'csv.js'));
     const stat = (med, extra) => Object.assign({ med, q1: med - 10, q3: med + 10, n: 400, share: 0.95 }, extra);
