@@ -98,24 +98,25 @@
     }
     return t.length ? t.join(', ') : 'Grund unbekannt';
   }
-  // Anteil in Prozent; ein kleiner, aber vorhandener Anteil heißt „< 1“, nicht „0“.
+  // Anteil in Prozent; ein kleiner, aber vorhandener Anteil heißt „< 1“, nicht „0“. Ins HTML nur maskiert.
   function prozent(x) { return (x > 0 && x < 0.01) ? '< 1' : fmt(x * 100); }
+  function prozentHtml(x) { return esc(prozent(x)); }
   /* Zusammenfassung: F0 und SHR stammen nur aus sicheren Rahmen (analysis.js summarise). Wie viele
      ausgelassen wurden, steht daneben in Rost; ältere Auswertungen haben diese Trennung nicht. */
   var AELTER = ' <span class="small muted">(ältere Auswertung: unsichere Rahmen nicht getrennt)</span>';
   function f0Zusatz(s) {
     if (!zahl(s.f0UnsureShare)) return AELTER;
-    return s.f0UnsureShare > 0 ? ' <span class="rust">· Grundton unsicher in ' + prozent(s.f0UnsureShare) + ' % der Rahmen, nicht im Median</span>' : '';
+    return s.f0UnsureShare > 0 ? ' <span class="rust">· Grundton unsicher in ' + prozentHtml(s.f0UnsureShare) + ' % der Rahmen, nicht im Median</span>' : '';
   }
   function f0Unsicher(s) { return zahl(s.f0UnsureShare) && (s.f0UnsureShare > 0.5 || (s.voicedShare > 0 && !(s.f0 && s.f0.n > 0))); }
   function shrZusatz(s) {
     if (!zahl(s.shrUnsureShare)) return AELTER;
     if (!(s.shrUnsureShare > 0)) return '';
-    return ' <span class="rust">· unsicher in ' + prozent(s.shrUnsureShare) + ' %: bis ' + fmt(s.shrUnsureMax, 1) + ' dB' + (zahl(s.shrOtherMax) ? ', anderes Raster bis ' + fmt(s.shrOtherMax, 1) + ' dB' : '') + '</span>';
+    return ' <span class="rust">· unsicher in ' + prozentHtml(s.shrUnsureShare) + ' %: bis ' + fmt(s.shrUnsureMax, 1) + ' dB' + (zahl(s.shrOtherMax) ? ', anderes Raster bis ' + fmt(s.shrOtherMax, 1) + ' dB' : '') + '</span>';
   }
   function shrUnsicher(s) { return zahl(s.shrUnsureShare) && s.shrUnsureShare > 0.5; }
   function listeUnsicher(x, was) {
-    return (zahl(x) && x > 0) ? ' <span class="rust small" title="' + was + ' in ' + prozent(x) + ' % der stimmhaften Rahmen, nicht im Wert">' + prozent(x) + ' % unsicher</span>' : '';
+    return (zahl(x) && x > 0) ? ' <span class="rust small" title="' + was + ' in ' + prozentHtml(x) + ' % der stimmhaften Rahmen, nicht im Wert">' + prozentHtml(x) + ' % unsicher</span>' : '';
   }
 
   /* Anteil zweideutig zugeordneter Rahmen (Vokal nahe der Grenze zum Nachbarn) neben einem
@@ -327,12 +328,12 @@
       // SHR: Median und Maximum aus Rahmen ohne Rasterzweifel; Warnung (Gold) nur daraus, nie aus einem unsicheren Wert.
       cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–') + shrZusatz(s), shrUnsicher(s), shrBefund(s)) +
       cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben'
-        + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozent(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')', s.h1h2 && s.h1h2.unsureShare > 0.5) +
+        + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozentHtml(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')', s.h1h2 && s.h1h2.unsureShare > 0.5) +
       cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
       /* Korrigiert ist kein Zweifel: Teilerkontrolle und Gegenprobe liefern einen geprüften Wert. Rost nur,
          wenn die Oktave in vielen Rahmen offen ist. Früher machten schon 5 % Korrekturen die Kachel rostig. */
-      cell('Grundton korrigiert · Oktave unsicher', prozent(s.octaveCorrectedShare || 0) + (zahl(s.f0KorrekturShare) && s.f0KorrekturShare > 0 ? ' (Gegenprobe ' + prozent(s.f0KorrekturShare) + ')' : '') + ' · ' + prozent(s.octaveAmbiguousShare || 0) + ' %', s.octaveAmbiguousShare > 0.2) +
+      cell('Grundton korrigiert · Oktave unsicher', prozentHtml(s.octaveCorrectedShare || 0) + (zahl(s.f0KorrekturShare) && s.f0KorrekturShare > 0 ? ' (Gegenprobe ' + prozentHtml(s.f0KorrekturShare) + ')' : '') + ' · ' + prozentHtml(s.octaveAmbiguousShare || 0) + ' %', s.octaveAmbiguousShare > 0.2) +
       cell('Slot-Zuordnung unsicher', fmt((s.slotUnsureShare || 0) * 100) + ' % der Rahmen', s.slotUnsureShare > 0.2) +
       /* Gezählt wird nur Weite und Dauer. Ein legato gesungener Melodiesprung erfüllt dieselbe
          Bedingung wie ein Registerbruch; ob es einer ist, zeigt erst ein Qualitätseinbruch am
@@ -429,5 +430,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, prozent: prozent, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

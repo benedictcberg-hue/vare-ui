@@ -338,6 +338,12 @@ module.exports = async function (H) {
       if (k(viel, /^F0 Median/).klasse !== 'unsure' || k(viel, /^SHR/).klasse !== 'unsure') bad.push('70 % unsicher: F0 „' + k(viel, /^F0 Median/).klasse + '“, SHR „' + k(viel, /^SHR/).klasse + '“ statt unsure');
       const keineWarnung = k(detail(mit({ shr: Object.assign({}, su.shr, { max: -30 }), shrUnsureMax: -8, shrOtherMax: -12 })), /^SHR/);
       if (keineWarnung.klasse === 'befund') bad.push('Warnung aus unsicheren Rahmen (sicher max −30, unsicher bis −8)');
+      // Kleiner Anteil: „< 1 %“, im HTML maskiert (ein rohes „<“ im Markup verschluckt das Auslesen nach Tags).
+      const klein = mit({ f0UnsureShare: 0.004, shrUnsureShare: 0.003, octaveCorrectedShare: 0.002, f0KorrekturShare: 0.002 }), kk = detail(klein);
+      for (const [name, re, soll] of [['F0', /^F0 Median/, /&lt; 1 % der Rahmen/], ['SHR', /^SHR/, /unsicher in &lt; 1 %/], ['Korrektur', /korrigiert/, /^&lt; 1 \(Gegenprobe &lt; 1\) · /], ['H1−H2', /^H1−H2/, /ohne &lt; 1 %/]]) {
+        const h = k(kk, re).vHtml;
+        if (!soll.test(h) || /< 1/.test(h)) bad.push(name + ' bei kleinem Anteil: „' + h.slice(0, 120) + '“');
+      }
       const alt = mit({}); for (const f of ['f0UnsureShare', 'f0KorrekturShare', 'shrUnsureShare', 'shrUnsureMax', 'shrOtherMax']) delete alt[f];
       const ka = detail(alt);
       if (!/ältere Auswertung/.test(k(ka, /^F0 Median/).v) || /rust/.test(k(ka, /^F0 Median/).vHtml)) bad.push('ältere Auswertung: „' + k(ka, /^F0 Median/).v + '“');
@@ -345,8 +351,12 @@ module.exports = async function (H) {
       const div = new El(); let zellen = [];
       try { CHR.renderList(div, [{ id: 'i2', code: 'I', label: 'Prüftake', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }], {}, {}); zellen = ((/<tr data-id="[^"]*">([\s\S]*?)<\/tr>/.exec(div.innerHTML) || [])[1] || '').split(/<\/td>/); } catch (e) { bad.push('Liste: ' + e.message); }
       if (!/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[2] || '') || !/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[7] || '')) bad.push('Liste F0 „' + (zellen[2] || '').replace(/<[^>]+>/g, '') + '“ SHR „' + (zellen[7] || '').replace(/<[^>]+>/g, '') + '“');
+      const divK = new El();
+      CHR.renderList(divK, [{ id: 'i2k', code: 'K', label: 'klein', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION }, summary: klein }], {}, {});
+      const zk = ((/<tr data-id="[^"]*">([\s\S]*?)<\/tr>/.exec(divK.innerHTML) || [])[1] || '').split(/<\/td>/);
+      if (!/>&lt; 1 % unsicher</.test(zk[2] || '') || /< 1/.test(zk[2] || '')) bad.push('Liste bei kleinem Anteil: „' + (zk[2] || '').slice(0, 160) + '“');
     } catch (e) { bad.push('Ausnahme ' + e.message); }
-    check('I2d', 'Detail und Liste: F0 und SHR aus sicheren Rahmen, der unsichere Anteil in Rost daneben (SHR mit Höchstwerten beider Raster), Rost erst ab der Hälfte; Korrektur nicht rostig; keine SHR-Warnung aus unsicheren Rahmen; ältere Auswertung benannt',
+    check('I2d', 'Detail und Liste: F0 und SHR aus sicheren Rahmen, der unsichere Anteil in Rost daneben (SHR mit Höchstwerten beider Raster), Rost erst ab der Hälfte; Korrektur nicht rostig; keine SHR-Warnung aus unsicheren Rahmen; „< 1 %“ maskiert; ältere Auswertung benannt',
       !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : 'F0 „' + f0.v + '“ | SHR „' + shr.v + '“ | „' + okt.k + '“ ' + okt.v);
   }
   {
