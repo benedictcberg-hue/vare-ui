@@ -282,8 +282,11 @@
           applyGate(series, V.gateOffline(inputs, opts.gate || {}));
           var sfrByNote = normaliseSfr(series);
           /* Zweite Tonhöhenspur mit kurzem Fenster: die Hauptspur misst auf mindestens 60 ms und
-             verliert dadurch Kiekser unter etwa 90 ms vollständig. Unterschieden wird nach Dauer —
-             Kante (Silbengrenze, Staccato) gegen gehaltenen Wechsel (Register). */
+             verliert dadurch Kiekser unter etwa 90 ms vollständig. Unterschieden wird nur nach Dauer —
+             Kante (unter 90 ms: Silbengrenze, Staccato) gegen gehaltenen Wechsel (ab 90 ms). Ein
+             gehaltener Sprung (ab 5 Halbtönen) ist nicht automatisch ein Registerwechsel: Ein legato
+             gesungener Melodiesprung (Quarte bis Oktave) zählt genauso. Einen Registerbruch zeigt
+             erst ein Qualitätseinbruch am Übergang, und den prüft diese Zählung nicht. */
           var fein = D.pitchTrackFine(ds, TSR, opts.fine || {});
           var spruenge = D.detectJumps(fein, opts.jumps || {});
           var meta = { hopS: opts.hopS, durationS: samples.length / sr, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
