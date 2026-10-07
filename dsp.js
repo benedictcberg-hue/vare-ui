@@ -608,12 +608,19 @@
          am Rauschboden: bei sauberem Signal ist die Referenz nur der Leckageboden des Hann-Fensters,
          und schon eine Subharmonische 38 dB unter den Teiltönen (Amplitudenwechsel 0,97, hörbar
          nichts) würde die angezeigte Note halbieren — dasselbe Signal mit Mikrofonrauschen nicht.
-     Dazwischen wird nicht stillschweigend geteilt, sondern ambiguous gemeldet. */
+     Dazwischen wird nicht stillschweigend geteilt, sondern ambiguous gemeldet.
+
+     Untergrenze: geteilt wird nie unter F0_MIN_HZ (Spezifikation: YIN-Bereich 60–500 Hz). Ohne
+     sie wurde ein 151-Hz-Fehlwert (Periode 4/5 T bei 121 Hz) mit m = 5 auf 30,2 Hz geteilt.
+     Erfüllt eine Reihe unter der Grenze die Teilungsbedingungen, ist die Periode wirklich länger,
+     aber nicht im Messbereich: dann ambiguous mit unterGrenze, nicht still der höhere Wert.
+     Unter 30 Hz Linienabstand trennt das 0,14-s-Hann-Fenster (Hauptkeule ±14 Hz) die Linien nicht. */
   var OCTAVE_ODD_EVEN_DB = -20;
   var SUB_MULTIPLE_MAX = 5;
+  var F0_MIN_HZ = 60;
 
   function subMultipleTest(spec, f, m, marginDb, oddEvenDb) {
-    var out = { m: m, pass: false, ambiguous: false, newMinusNoise: NaN, newMinusOld: NaN };
+    var out = { m: m, pass: false, ambiguous: false, unterGrenze: false, newMinusNoise: NaN, newMinusOld: NaN };
     var g = f / m;
     if (!(g >= 30)) return out;
     var ref = noiseRefDb(spec, g);
@@ -635,7 +642,8 @@
        nennenswert hält (SHR über −25 dB), sie aber noch nicht zum Teilen reicht. Darunter ist das
        Signal sauber — ein Dauerhinweis „Oktave unsicher“ bei jedem gesunden Ton wäre kein ehrlicher
        Messwert, sondern Lärm. */
-    if (out.newMinusOld <= oddEvenDb) { out.ambiguous = out.newMinusOld > oddEvenDb - 5; return out; }
+    if (out.newMinusOld <= oddEvenDb) { out.ambiguous = out.newMinusOld > oddEvenDb - 5; out.unterGrenze = out.ambiguous && g < F0_MIN_HZ; return out; }
+    if (g < F0_MIN_HZ) { out.ambiguous = true; out.unterGrenze = true; return out; }
     out.pass = true;
     return out;
   }
@@ -645,11 +653,11 @@
     marginDb = (marginDb == null) ? 8 : marginDb;
     oddEvenDb = (oddEvenDb == null) ? OCTAVE_ODD_EVEN_DB : oddEvenDb;
     maxM = maxM || SUB_MULTIPLE_MAX;
-    var best = { m: 1, halve: false, ambiguous: false, newMinusNoise: NaN, newMinusOld: NaN };
+    var best = { m: 1, halve: false, ambiguous: false, unterGrenze: false, newMinusNoise: NaN, newMinusOld: NaN };
     for (var m = maxM; m >= 2; m--) {
       var t = subMultipleTest(spec, f, m, marginDb, oddEvenDb);
-      if (t.pass) return { m: m, halve: true, ambiguous: false, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
-      if (t.ambiguous && !best.ambiguous) best = { m: 1, halve: false, ambiguous: true, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
+      if (t.pass) return { m: m, halve: true, ambiguous: false, unterGrenze: false, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
+      if (t.ambiguous && !best.ambiguous) best = { m: 1, halve: false, ambiguous: true, unterGrenze: t.unterGrenze, newMinusNoise: t.newMinusNoise, newMinusOld: t.newMinusOld };
     }
     return best;
   }
@@ -774,7 +782,7 @@
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
-      octaveCorrected: false, octaveAmbiguous: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
+      octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
       harmonicPullHz: NaN, sparseHarmonics: false,
       dips: [], fminEff: NaN, nWindows: 0, spectrumDb: null
     };
@@ -862,7 +870,7 @@
 
     var f0 = p.f0;
     var sub = subMultipleInfo(spec, f0);
-    out.octaveCorrected = sub.halve; out.octaveAmbiguous = sub.ambiguous; out.octaveOddEvenDb = sub.newMinusOld;
+    out.octaveCorrected = sub.halve; out.octaveAmbiguous = sub.ambiguous; out.octaveUnterGrenze = sub.unterGrenze; out.octaveOddEvenDb = sub.newMinusOld;
     out.subFactor = sub.halve ? sub.m : 1;
     if (sub.halve) f0 = f0 / sub.m;
     out.f0 = f0; out.note = hzToNote(f0);
@@ -1147,7 +1155,7 @@
 
   var api = {
     VERSION: VERSION, TARGET_SR: TARGET_SR, ORDERS: ORDERS, WINDOWS: WINDOWS, MAIN_WINDOW: MAIN_WINDOW,
-    SPREAD_MAX_HZ: SPREAD_MAX_HZ, SLOT_TOL_HZ: SLOT_TOL_HZ, MERGED_BW_HZ: MERGED_BW_HZ, BW_ARTIFACT_HZ: BW_ARTIFACT_HZ, SENTINEL: SENTINEL, OCTAVE_ODD_EVEN_DB: OCTAVE_ODD_EVEN_DB,
+    SPREAD_MAX_HZ: SPREAD_MAX_HZ, SLOT_TOL_HZ: SLOT_TOL_HZ, MERGED_BW_HZ: MERGED_BW_HZ, BW_ARTIFACT_HZ: BW_ARTIFACT_HZ, SENTINEL: SENTINEL, OCTAVE_ODD_EVEN_DB: OCTAVE_ODD_EVEN_DB, F0_MIN_HZ: F0_MIN_HZ,
     analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,

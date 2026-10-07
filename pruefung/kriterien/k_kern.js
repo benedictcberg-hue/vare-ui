@@ -1,5 +1,6 @@
 /* Kriterien K1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps).
    Kriterien K2: Formant-Nummerierung und Gültigkeit im Fenstersweep (analyseAt).
+   Kriterien K3: Grundton im Fenstersweep (analyseAt): Untergrenze der Teilerkontrolle.
    Testsignale: allgemeine Baritonlage 75–470 Hz, synthetische Vokale mit bekannter Wahrheit.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
 'use strict';
@@ -445,5 +446,47 @@ module.exports = async function (H) {
     const fOU = (E.rauschen.f2V.o || 0) + (E.rauschen.f2V.u || 0), nOU = (E.rauschen.nV.o || 0) + (E.rauschen.nV.u || 0);
     check('K2d', 'Verschmelzungsverdacht nur in Reichweite der fehlenden Resonanz: /o/ 433/772/2594/2923 → F2 sicher; Rauschteil /o/ /u/ (Impulsquelle): F2 in mindestens 70 % der Rahmen gültig',
       n3 === '00100' && fOU >= 0.7 * nOU, n3 + ', F2 gültig ' + fOU + '/' + nOU);
+  }
+
+  /* ---------- K3: Grundton im Fenstersweep (analyseAt) ---------- */
+  {
+    const roh = (f0, F, B, s, o) => D.resample(D.synthVowel(f0, F, B, s, SR, o || {}), SR, TSR);
+    const VOK6 = [['a', [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200]], ['i', [300, 2200, 2900, 3500, 4300], [60, 100, 130, 160, 200]],
+      ['u', [320, 800, 2400, 3300, 4200], [60, 90, 120, 150, 200]], ['o', [450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200]],
+      ['e', [400, 1900, 2600, 3400, 4300], [60, 100, 130, 160, 200]], ['eng', [500, 1500, 2450, 2800, 3150], [70, 90, 90, 90, 100]]];
+    const effW = x => { let p = 0; for (let i = 0; i < x.length; i++) p += x[i] * x[i]; return Math.sqrt(p / x.length); };
+    // Netzbrumm 50 Hz mit ungeraden Oberwellen, Pegel db relativ zum Effektivwert des Tons
+    function mitBrumm(x, db) {
+      const b = new Float64Array(x.length);
+      for (let i = 0; i < x.length; i++) { const t = i / SR; b[i] = Math.sin(2 * Math.PI * 50 * t) + 0.5 * Math.sin(2 * Math.PI * 150 * t + 1) + 0.3 * Math.sin(2 * Math.PI * 250 * t + 2); }
+      const g = effW(x) * Math.pow(10, db / 20) / effW(b), y = new Float64Array(x.length);
+      for (let i = 0; i < x.length; i++) y[i] = x[i] + g * b[i];
+      return y;
+    }
+
+    /* K3a: Die Teilerkontrolle teilt nie unter 60 Hz (Spezifikation: YIN-Bereich 60–500 Hz). Eine
+       Reihe darunter, die zum Teilen reichen würde, macht die Oktave unsicher statt still zu teilen. */
+    {
+      const ds = roh(121, [605, 1250, 2500, 3300, 4200], [45, 90, 120, 150, 200], 1.2);
+      let n = 0, unter = 0; const vals = {};
+      for (let c = 1200; c + 1200 < ds.length; c += 120) { const r = D.analyseAt(ds, TSR, c, {}); if (!r.voiced) continue; n++; if (!(r.f0 >= 60)) unter++; vals[r1(r.f0)] = (vals[r1(r.f0)] || 0) + 1; }
+      check('K3a', '121 Hz mit engem F1 = 5·F0: kein Rahmen unter 60 Hz (vorher 30,2 Hz in 82 von 100 Rahmen)', n > 0 && unter === 0,
+        unter + '/' + n + ' unter 60 Hz; Werte ' + Object.keys(vals).map(k => k + '×' + vals[k]).join(' '));
+      let okPd = 0; const badPd = [];
+      for (const f0 of [80, 110]) for (const [v, F, B] of VOK6) {
+        const r = D.analyseAt(roh(f0, F, B, 0.5, { altRatio: 0.5 }), TSR, 3000, {});
+        if (r.voiced && r.f0 >= 60 && Math.abs(r.f0 / f0 - 1) < 0.03 && r.octaveAmbiguous && r.octaveUnterGrenze) okPd++; else badPd.push('/' + v + '/ ' + f0 + ': ' + r1(r.f0) + (r.octaveAmbiguous ? ' unsicher' : '') + (r.octaveUnterGrenze ? ' unterGrenze' : ''));
+      }
+      check('K3a', 'starke Periodenverdopplung bei 80/110 Hz (Reihe bei 40/55 Hz): Grundton bleibt im Messbereich, Oktave als unsicher gemeldet (octaveUnterGrenze)', okPd === 12,
+        okPd + '/12' + (badPd.length ? ' — ' + badPd.slice(0, 4).join(' | ') : ''));
+      let nB = 0, unterB = 0; const badB = [];
+      for (const [v, F, B] of VOK6.slice(0, 4)) for (let f0 = 90; f0 <= 130; f0 += 1.7) for (const db of [-25, -20]) {
+        const r = D.analyseAt(D.resample(mitBrumm(D.synthVowel(f0, F, B, 0.35, SR), db), SR, TSR), TSR, 2100, {});
+        if (!r.voiced) continue; nB++;
+        if (!(r.f0 >= 60)) { unterB++; badB.push('/' + v + '/ ' + f0.toFixed(1) + ' Brumm ' + db + ' dB: ' + r1(r.f0)); }
+      }
+      check('K3a', 'Netzbrumm 50 Hz (−25/−20 dB, mit 150/250 Hz) bei Tönen 90–130 Hz, a/i/u/o: kein Grundton unter 60 Hz', nB > 0 && unterB === 0,
+        unterB + '/' + nB + (badB.length ? ' — ' + badB.slice(0, 3).join(' | ') : ''));
+    }
   }
 };
