@@ -342,7 +342,7 @@
     var refIdx = -1, best = -1;
     for (var pi = 0; pi < prefer.length; pi++) { var c = prefer[pi]; if (c >= 0 && per[c].length > best) { best = per[c].length; refIdx = c; } }
     for (o = 0; o < orders.length; o++) if (per[o].length > best) { best = per[o].length; refIdx = o; }
-    var slots = [[], [], [], [], []], drops = [[], [], [], [], []], bwSlot = [NaN, NaN, NaN, NaN, NaN], bwArt = [false, false, false, false, false];
+    var fremd = [], bwMax = [NaN, NaN, NaN, NaN, NaN], slots = [[], [], [], [], []], drops = [[], [], [], [], []], bwSlot = [NaN, NaN, NaN, NaN, NaN], bwArt = [false, false, false, false, false];
     var bwOrder = orders.indexOf(14) >= 0 ? orders.indexOf(14) : refIdx;
     if (refIdx >= 0) {
       var ref = per[refIdx], nSlots = Math.min(5, ref.length);
@@ -363,10 +363,12 @@
             if (assign[pr.s] || usedP[pr.p]) continue;
             assign[pr.s] = per[o][pr.p]; usedP[pr.p] = true;
           }
+          for (var pu = 0; pu < per[o].length; pu++) if (!usedP[pu]) fremd.push(per[o][pu].f);
         }
         for (var s1 = 0; s1 < nSlots; s1++) {
           if (!assign[s1]) continue;
           slots[s1].push(assign[s1].f); drops[s1].push(assign[s1].drop);
+          if (!(assign[s1].bw <= bwMax[s1])) bwMax[s1] = assign[s1].bw;
           if (o === bwOrder) { bwSlot[s1] = assign[s1].bw; bwArt[s1] = !!assign[s1].bwArtifact; }
         }
       }
@@ -379,7 +381,7 @@
     if (refIdx >= 0) for (var r = 0; r < per[refIdx].length; r++) refF.push(per[refIdx][r].f);
     return { F: F, sdOrder: sdOrder, nOrders: nOrders, BW: bwSlot, bwArtifact: bwArt, merged: merged,
       nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN,
-      slotUnsure: slotNumberUnsure(refF, nOrders), drops: drops };
+      slotUnsure: slotNumberUnsure(refF, nOrders), slotMerged: slotMergeUnsure(refF, nOrders, bwMax, fremd), drops: drops };
   }
 
   /* Zuordnung Gipfel → Slot ist eine Annahme, keine Messung: der k-te gefundene Gipfel gilt als Fk.
@@ -441,6 +443,41 @@
     }
     return deut;
   }
+  /* Verschmolzen oder umstritten: der k-te Gipfel ist richtig nummeriert, kann aber zwei Resonanzen in
+     einem sein. Gemessen bei /u/ 196 Hz mit Rauschen: F1 300 und F2 700 Hz verschmelzen zu einem Gipfel
+     bei 440–460 Hz, F1 gilt als gültig und liegt 150 Hz daneben. Bei F5 4100 / F6 4400 Hz (Rosenberg-
+     Quelle, 247 Hz) steht der gemeinsame Gipfel 140 Hz über F5. Drei Anzeichen, je Fenster:
+     - Eine zulässige Lesart lässt neben dem Gipfel eine Resonanz fehlen (auch über dem obersten), und
+       der Gipfel ist in irgendeiner Ordnung breiter als MERGED_BW_HZ. Gesungene Bandbreiten liegen bei
+       F1 40–80, F2 60–120, F3 100–200 Hz (physik.md 2.4).
+     - Eine andere Ordnung findet einen zusätzlichen Gipfel innerhalb SLOT_TOL_HZ: sie trennt, was die
+       Referenz zusammenfasst. Liegt er weiter weg, fehlt der Referenz eine Resonanz: alles darüber ist
+       unsicher.
+     - Ein Nachbargipfel innerhalb SLOT_TOL_HZ wird nur von einer Ordnung gesehen: die anderen Ordnungen
+       haben ihn in diesen Gipfel gezogen.
+     bwMax: größte Bandbreite je Slot über alle Ordnungen; fremd: Frequenzen der Gipfel anderer
+     Ordnungen, die keinem Slot zugeordnet wurden. */
+  function slotMergeUnsure(P, nOrd, bwMax, fremd) {
+    var n = Math.min(5, P.length), uns = [false, false, false, false, false], deut = deutungen(P, nOrd), i, k;
+    for (i = 0; i < deut.length; i++) {
+      var d = deut[i], nb = [];
+      if (d.fehlt < 0) continue;
+      if (d.fehlt > 0) nb.push(d.use[d.fehlt - 1]);
+      if (d.fehlt < d.use.length) nb.push(d.use[d.fehlt]);
+      for (k = 0; k < nb.length; k++) if (bwMax[nb[k]] > MERGED_BW_HZ) uns[nb[k]] = true;
+    }
+    for (i = 0; i < (fremd || []).length; i++) {
+      var g = fremd[i], nah = -1, dmin = Infinity;
+      for (k = 0; k < n; k++) if (Math.abs(P[k] - g) < dmin) { dmin = Math.abs(P[k] - g); nah = k; }
+      if (nah >= 0 && dmin <= SLOT_TOL_HZ) uns[nah] = true;
+      else for (k = 0; k < n; k++) if (P[k] > g) uns[k] = true;
+    }
+    for (i = 0; i < n; i++) if (!(nOrd[i] >= 2)) {
+      for (k = i - 1; k <= i + 1; k += 2) if (k >= 0 && k < n && Math.abs(P[k] - P[i]) <= SLOT_TOL_HZ) uns[k] = true;
+    }
+    return uns;
+  }
+
   // Slot k ist sicher, wenn jede zulässige Lesart den k-ten Gipfel als F(k+1) liest. Ist keine Lesart
   // zulässig, ist alles unsicher.
   function slotNumberUnsure(P, nOrd) {
@@ -792,6 +829,7 @@
     // prüft seine eigene Referenzordnung; ist es in einem Fenster mehrdeutig, ist es der Median auch.
     for (i = 0; i < perWin.length; i++) for (k = 0; k < 5; k++) {
       if (perWin[i].slotUnsure[k]) { out.slotUnsure[k] = true; out.slotGrund[k] = 'nummer'; }
+      else if (perWin[i].slotMerged[k]) { out.slotUnsure[k] = true; if (!out.slotGrund[k]) out.slotGrund[k] = 'verschmolzen'; }
     }
     // Formant im Rauschboden: Median des Hüllkurvenabfalls über alle Fenster und Ordnungen
     for (k = 0; k < 5; k++) {
@@ -1096,7 +1134,7 @@
     analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
-    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,

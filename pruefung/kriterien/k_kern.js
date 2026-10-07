@@ -398,5 +398,21 @@ module.exports = async function (H) {
       }
       check('K2b', 'Gegenprobe: saubere Vokale mit Vibrato (6 Hz ±50 Cent, 4 Hz ±30 Cent): alle fünf Formanten in mindestens 95 % der Rahmen gültig', n > 0 && alle >= 0.95 * n, alle + '/' + n);
     }
+
+    // K2c: verschmolzene oder umstrittene Gipfel. Richtig nummeriert, aber zwei Resonanzen in einem Gipfel:
+    // /u/ 196 Hz mit Rauschen (F1 300 + F2 700 Hz bei 440–460 Hz), F5 4100 + F6 4400 Hz (Rosenberg, 247 Hz).
+    check('K2c', 'Impulsquelle mit weißem/rosa Rauschen 30/40/50 dB, auch F1/F2 verschmolzen: kein gültiger Slot über 130 Hz falsch',
+      E.rauschen.falsch === 0 && E.rauschen.d34falsch === 0, 'Slots ' + E.rauschen.falsch + ', ΔF3–4 ' + E.rauschen.d34falsch + ' falsch; ' + det(E.rauschen));
+    check('K2c', 'Rosenberg-Quelle mit F6 4400/4800 Hz: kein gültiger Slot über 130 Hz falsch, kein gültiges ΔF3–4 über 120 Hz falsch',
+      E.f6ros.falsch === 0 && E.f6ros.d34falsch === 0, 'Slots ' + E.f6ros.falsch + ', ΔF3–4 ' + E.f6ros.d34falsch + ' falsch; ' + det(E.f6ros));
+    const lm = (P, n, bw, fr) => typeof D.slotMergeUnsure === 'function' ? D.slotMergeUnsure(P, n, bw, fr).map(v => v ? 1 : 0).join('') : 'fehlt';
+    const m1 = lm([455, 2311, 3466, 4557], [3, 3, 3, 3], [300, 200, 150, 180], []), m2 = lm([282, 690, 2249, 3281, 4237], [3, 3, 3, 3, 3], [80, 140, 160, 250, 80], [3960]),
+      m3 = lm([406, 732, 2320, 3265], [3, 1, 3, 3], [140, 180, 120, 200], []), m4 = lm([680, 1250, 2450, 3400, 4200], [3, 3, 3, 3, 3], [90, 100, 130, 160, 210], []);
+    check('K2c', 'Verschmelzung direkt: breiter F1 ohne F2 → F1 unsicher; andere Ordnung trennt F5/F6 → F5 unsicher; F2 nur in einer Ordnung → F1 unsicher; /a/ vollständig → nichts',
+      m1 === '10000' && m2 === '00001' && m3 === '10000' && m4 === '00000', [m1, m2, m3, m4].join(' '));
+    // Ziel der Aufgabe K2 als ein Kriterium über den ganzen Prüfsatz
+    const teile = ['sauber', 'f6', 'f6ros', 'rauschen', 'rauschenRos'], fs = teile.reduce((a, k) => a + E[k].falsch, 0), fd = teile.reduce((a, k) => a + E[k].d34falsch, 0);
+    check('K2c', 'Prüfsatz K2 ganz (rauschfrei mit F6 4400–4800 Hz; weißes/rosa Rauschen 30/40/50 dB; Rosenberg-Quelle): kein gültiger Slot über 130 Hz, kein gültiges ΔF3–4 über 120 Hz falsch',
+      fs === 0 && fd === 0, 'Slots ' + fs + ', ΔF3–4 ' + fd + ' falsch in ' + teile.reduce((a, k) => a + E[k].n, 0) + ' Rahmen; gültige ΔF3–4 ' + teile.map(k => k + ' ' + E[k].d34 + '/' + E[k].n).join(', '));
   }
 };
