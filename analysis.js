@@ -49,12 +49,13 @@
        die leisesten 5 % jedes Takes galten als Pause (gehaltener Vokal 22 von 395 Rahmen, im
        Decrescendo die letzten 0,22 s), obwohl sie weit über dem echten Boden lagen (dort rund 45 dB;
        Bericht 2, Befund 3). Jetzt leisester Rahmen − 24: die Schwelle liegt 12 dB unter allem
-       Gemessenen. Mit − 12 fielen 1–3 Rahmen je Take heraus: der leiseste selbst (Pegel gleich
+       Gemessenen. Mit − 12 fielen bis zu 3 Rahmen je Take heraus: der leiseste selbst (Pegel gleich
        Schwelle) und Randrahmen, die analyseAt mit kürzerem Fenster leiser misst; mit q05 − 24 ein
-       schneller Ausklang am Ende (30 dB in 0,3 s: 10 Rahmen). Über stimmhaft entscheidet dann
-       die Periodizität (ap < 0,45); Rauschen ohne Stimme bleibt stimmlos. Periodischen Brumm (100 Hz)
-       trennt auch die alte Regel nicht, nur eine Kalibrierung. Die Zahl ist eine Arbeitsannahme, kein
-       gemessener Boden: summarise gibt sie nur als voicingFloorDb aus, floorDb bleibt NaN. */
+       schneller Ausklang (30 dB in 0,3 s am Ende eines 4-s-Takes: 10 Rahmen). Über stimmhaft
+       entscheidet dann die Periodizität (ap < 0,45); Rauschen ohne Stimme bleibt stimmlos.
+       Periodischen Brumm (100 Hz) trennt auch die alte Regel nicht, nur eine Kalibrierung. Die Zahl
+       ist eine Arbeitsannahme, kein gemessener Boden: summarise gibt sie nur als voicingFloorDb aus,
+       floorDb bleibt NaN. */
     return { db: Math.max(-95, levels[0] - 24), known: false, gapDb: gap };
   }
 
