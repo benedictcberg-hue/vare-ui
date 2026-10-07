@@ -193,7 +193,7 @@ function fmtExt(sub, ch, sr, bits, cbSize) {
 }
 
 module.exports = async function (H) {
-  const { check, r2, concat, noise, SR, BW5, CASES, D, V, A, C, W } = H;
+  const { check, r1, r2, concat, noise, SR, BW5, CASES, D, V, A, C, W } = H;
 
   /* ---------- Take-CSV ---------- */
   const T = buildTakes();
@@ -298,17 +298,25 @@ module.exports = async function (H) {
     const sil = noise(Math.round(0.4 * SR), 1e-3, 11);
     const sig = concat([sil, D.synthVowel(196, CASES[0].F, BW5, 1.5, SR), D.synthVowel(294, CASES[0].F, BW5, 1.5, SR), sil]);
     takeZwei = await A.analyseTake(sig, SR, {});
-    const s = takeZwei.series, raw = {}, nrm = {};
+    /* Der Halbton kommt aus F0. Seit der Gegenprobe des Grundtons (K3) kann ein Rahmen einen Grundton
+       tragen, der als unsicher markiert ist (F0UNSURE, z. B. 98 Hz am Übergang statt 196 Hz). Dessen
+       Halbton ist nicht bekannt: Er bildet keine Gruppe und geht in keinen Median ein, sonst stünde er
+       allein in seiner Gruppe mit „normiert 0“. Geprüft wird darum je Halbton über die sicheren Rahmen,
+       und jeder unsichere Rahmen einzeln: gegen den Median der sicheren Rahmen seines Halbtons, ohne
+       solche NaN. */
+    const s = takeZwei.series, raw = {}, nrm = {}, UNS = A.FLAG.F0UNSURE || 0, unsicher = [];
     for (let i = 0; i < s.t.length; i++) {
       if (!(s.flags[i] & A.FLAG.VOICED) || !isFinite(s.sfr[i])) continue;
+      if (s.flags[i] & UNS) { unsicher.push(i); continue; }
       const m = semitone(s.f0[i]);
       (raw[m] = raw[m] || []).push(s.sfr[i]); (nrm[m] = nrm[m] || []).push(s.sfrn[i]);
     }
     const gross = Object.keys(raw).filter(m => raw[m].length >= 50).sort((a, b) => a - b);
     const spanne = gross.length >= 2 ? Math.max(...gross.map(m => med(raw[m]))) - Math.min(...gross.map(m => med(raw[m]))) : 0;
     const bad = Object.keys(nrm).filter(m => !(Math.abs(med(nrm[m])) < 0.01));
-    check('P2i', 'SFR normiert, Take mit zwei Tönen: Median je Halbton 0 (|x| < 0,01 dB)', !bad.length && gross.length >= 2 && spanne >= 1,
-      gross.map(m => 'MIDI ' + m + ' n=' + raw[m].length + ' roh ' + r2(med(raw[m])) + ' norm ' + r2(med(nrm[m]))).join(' | ') + ', Spanne roh ' + r2(spanne) + ' dB' + (bad.length ? '; ungleich 0: ' + bad.map(m => m + ':' + r2(med(nrm[m]))).join(' ') : ''));
+    const badU = unsicher.filter(i => { const g = raw[semitone(s.f0[i])], want = g ? s.sfr[i] - med(g) : NaN; return isNaN(want) ? !isNaN(s.sfrn[i]) : !(Math.abs(s.sfrn[i] - want) < 1e-3); });
+    check('P2i', 'SFR normiert, Take mit zwei Tönen: Median je Halbton 0 (|x| < 0,01 dB) über die Rahmen mit sicherem Grundton; Rahmen mit unsicherem Grundton gegen deren Median, ohne ihn NaN', !bad.length && !badU.length && gross.length >= 2 && spanne >= 1,
+      gross.map(m => 'MIDI ' + m + ' n=' + raw[m].length + ' roh ' + r2(med(raw[m])) + ' norm ' + r2(med(nrm[m]))).join(' | ') + ', Spanne roh ' + r2(spanne) + ' dB, Grundton unsicher ' + unsicher.length + (bad.length ? '; ungleich 0: ' + bad.map(m => m + ':' + r2(med(nrm[m]))).join(' ') : '') + (badU.length ? '; unsicher falsch: ' + badU.map(i => r1(s.f0[i]) + ' Hz ' + r2(s.sfrn[i])).join(' ') : ''));
   }
   {
     // Sollpfade gegen eine echte Auswertung: ein Pfad, den analyseTake nicht liefert, ergäbe in

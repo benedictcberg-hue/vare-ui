@@ -8,7 +8,43 @@
 
   var DEFAULTS = { hopS: 0.010, floorDb: null, gate: null, spreadMaxHz: D.SPREAD_MAX_HZ, chunk: 40, yieldMs: 0 };
   var GATE_CODE = { pause: 0, uebergang: 1, stabil: 2 };
-  var FLAG = { VOICED: 1, OCTAVE: 2, SUBGRID: 4, H1H2UNSURE: 8, D34VALID: 16, D45VALID: 32, SCORE: 64, OCTAMBIG: 128, VOWELAMBIG: 256 };
+  /* Grundton und SHR (dsp.js analyseAt): F0UNSURE = Gegenprobe gerissen, gilt für alles aus F0
+     Abgeleitete; F0KORR = YIN-Wert durch die Gegenprobe ersetzt (sichtbar, nicht unsicher);
+     SHRUNSURE = Raster zweifelhaft oder Grundton unsicher; OCTUNTER = Reihe unter 60 Hz, nicht geteilt
+     (dann auch OCTAMBIG). SUBGRID heißt seit dem SHR-Raster aus dem Kamm „Hauptwert auf 2·F0“.
+     Frei in Uint16: 8192, 16384, 32768. */
+  var FLAG = { VOICED: 1, OCTAVE: 2, SUBGRID: 4, H1H2UNSURE: 8, D34VALID: 16, D45VALID: 32, SCORE: 64, OCTAMBIG: 128, VOWELAMBIG: 256,
+    F0UNSURE: 512, F0KORR: 1024, SHRUNSURE: 2048, OCTUNTER: 4096 };
+
+  /* Gründe je Rahmen als kleine Codes (Uint8), nicht als Text: Texte in einem gewöhnlichen Array
+     kosteten bei einer Stunde (360 000 Rahmen) ein Vielfaches und überstünden keine Sicherung als
+     typisiertes Feld. Gespeicherte Serien tragen die Nummern, deshalb werden die Listen nur
+     verlängert, nie umgestellt. f0Grund und f0Korrektur: Index in der Liste. shrGrund: Bitmaske über
+     die Teile, in dieser Reihenfolge mit '+' verbunden (dsp.js: 'kamm+zweitpuls', 'zweitpuls+grundton').
+     Ein Text, den diese Fassung nicht kennt, wird CODE_UNBEKANNT und als '?' gelesen — nie still ''. */
+  var GRUND = {
+    f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum'],
+    f0Korrektur: ['', 'teiltonreihe', 'cepstrum'],
+    shrGrund: ['kamm', 'zweitpuls', 'grundton']
+  };
+  var CODE_UNBEKANNT = 255;
+  function codeAus(feld, text) {
+    if (!text) return 0;
+    var liste = GRUND[feld], i;
+    if (feld !== 'shrGrund') { i = liste.indexOf(String(text)); return i > 0 ? i : CODE_UNBEKANNT; }
+    var teile = String(text).split('+'), m = 0;
+    for (i = 0; i < teile.length; i++) { var b = liste.indexOf(teile[i]); if (b < 0) return CODE_UNBEKANNT; m |= (1 << b); }
+    return m;
+  }
+  function textAus(feld, code) {
+    if (!code) return '';
+    if (code === CODE_UNBEKANNT) return '?';
+    var liste = GRUND[feld];
+    if (feld !== 'shrGrund') return code < liste.length ? liste[code] : '?';
+    var t = [];
+    for (var b = 0; b < liste.length; b++) if (code & (1 << b)) t.push(liste[b]);
+    return (code >> liste.length) ? '?' : t.join('+');
+  }
 
   function stats(arr, extra) {
     var vals = [];
@@ -59,9 +95,15 @@
     return { db: Math.max(-95, levels[0] - 24), known: false, gapDb: gap };
   }
 
+  /* Speicher je Rahmen: 39 Float32, 8 Byte-Felder und die Flags (Uint16), 166 Byte (vorher 139). Eine Stunde bei 10 ms
+     sind 360 000 Rahmen, also 60 MB statt 50 MB im Speicher; die Gründe kosten als Codes 3 Byte. Ältere
+     gespeicherte Serien haben die Felder f0Cep … shrGrund nicht: Wer sie liest, muss das Fehlen als
+     „nicht gemessen“ behandeln, nicht als 0 (csv.js, chronik.js). */
   function makeSeries(n) {
     var f = function () { return new Float32Array(n); };
     var s = { t: f(), f0: f(), ap: f(), rms: f(), d34: f(), d45: f(), score: f(), sfr: f(), sfrn: f(), shr: f(), cpp: f(), h1h2: f(), h1h2c: f(),
+      f0Cep: f(), f0Yin: f(), shrGrid: f(), shrOther: f(), shrKamm: f(), shrZweitpuls: f(),
+      f0Grund: new Uint8Array(n), f0Korrektur: new Uint8Array(n), shrGrund: new Uint8Array(n),
       valid: new Uint8Array(n), slotUnsure: new Uint8Array(n), nPeaks: new Uint8Array(n),
       gate: new Uint8Array(n), flags: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
@@ -92,6 +134,10 @@
     series.slotUnsure[i] = umask;
     series.nPeaks[i] = r.nPeaksRef;
     series.d34[i] = r.d34; series.d45[i] = r.d45; series.sfr[i] = r.sfr; series.shr[i] = r.shr; series.cpp[i] = r.cpp; series.h1h2[i] = r.h1h2; series.h1h2c[i] = r.h1h2c;
+    // Gegenprobe und SHR-Raster: was den Wert unsicher macht oder ändert, gehört zum Rahmen.
+    series.f0Cep[i] = r.f0Cep; series.f0Yin[i] = r.f0Yin;
+    series.shrGrid[i] = r.shrGrid; series.shrOther[i] = r.shrOther; series.shrKamm[i] = r.shrKamm; series.shrZweitpuls[i] = r.shrZweitpuls;
+    series.f0Grund[i] = codeAus('f0Grund', r.f0Grund); series.f0Korrektur[i] = codeAus('f0Korrektur', r.f0Korrektur); series.shrGrund[i] = codeAus('shrGrund', r.shrGrund);
     var fl = 0;
     if (r.voiced) fl |= FLAG.VOICED;
     if (r.octaveCorrected) fl |= FLAG.OCTAVE;
@@ -100,6 +146,10 @@
     if (r.octaveAmbiguous) fl |= FLAG.OCTAMBIG;
     if (r.d34valid) fl |= FLAG.D34VALID;
     if (r.d45valid) fl |= FLAG.D45VALID;
+    if (r.f0Unsure) fl |= FLAG.F0UNSURE;
+    if (r.f0Korrektur) fl |= FLAG.F0KORR;
+    if (r.shrUnsure) fl |= FLAG.SHRUNSURE;
+    if (r.octaveUnterGrenze) fl |= FLAG.OCTUNTER;
     series.gate[i] = 0; series.cls[i] = -1; series.score[i] = NaN;
     series.flags[i] = fl;
   }
@@ -155,8 +205,19 @@
        Stimmhaftigkeit geprüft wurde (Pegel > voicingFloorDb + 12), gemessen oder angenommen. */
     s.floorKnown = meta.floorKnown !== false;
     s.floorDb = s.floorKnown ? meta.floorDb : NaN; s.voicingFloorDb = meta.floorDb; s.floorSource = meta.floorSource;
-    var f0s = pick('f0', voicedIdx);
-    s.f0 = stats(f0s); s.f0.note = D.hzToNote(s.f0.med);
+    /* Grundton: Statistik und Note nur aus Rahmen, deren Grundton die Gegenprobe besteht (dsp.js
+       f0Unsure). Ein unsicherer Wert ist oft eine Oktave oder Quinte daneben; im Median gemischt
+       verschöbe er die Note, ohne dass es jemand sieht. Dieselbe Regel gilt für alles, was aus F0
+       abgeleitet ist (SHR, H1−H2, H1*−H2*, SFR je Halbton): Der Rahmen behält seine Werte und seine
+       Marke, die Zusammenfassung lässt ihn aus und nennt den Anteil — wie bei ungültigen Formanten.
+       Korrigierte Werte (f0Korrektur) gelten als sicher und zählen mit. octaveAmbiguous bleibt drin:
+       Dort sind Ton und halber Ton zwei vertretbare Lesarten, kein gerissener Wert; der Anteil steht
+       in octaveAmbiguousShare. */
+    var f0sicher = function (j) { return !(series.flags[j] & FLAG.F0UNSURE); };
+    var anteil = function (maske) { var c = 0; for (var q = 0; q < voicedIdx.length; q++) if (series.flags[voicedIdx[q]] & maske) c++; return voicedIdx.length ? c / voicedIdx.length : 0; };
+    s.f0 = stats(pick('f0', voicedIdx, f0sicher)); s.f0.note = D.hzToNote(s.f0.med);
+    s.f0UnsureShare = anteil(FLAG.F0UNSURE);
+    s.f0KorrekturShare = anteil(FLAG.F0KORR);
     s.F = [];
     var validAll = 0;
     for (var k = 0; k < 5; k++) {
@@ -177,17 +238,29 @@
     // liegen, und ein Take mit F3 durchgehend bei 2370 Hz zeigte „–“ statt der Zahl.
     s.f3stable = stats(pick('f3', stabilIdx, function (j) { return series.valid[j] & 4; }));
     s.f3scored = stats(pick('f3', stabilIdx, function (j) { return series.flags[j] & FLAG.SCORE; }));
-    s.sfr = stats(pick('sfr', voicedIdx)); s.shr = stats(pick('shr', voicedIdx), true); s.cpp = stats(pick('cpp', voicedIdx));
-    s.h1h2 = stats(pick('h1h2', voicedIdx, function (j) { return !(series.flags[j] & FLAG.H1H2UNSURE); }));
-    var unsure = 0; for (i = 0; i < voicedIdx.length; i++) if (series.flags[voicedIdx[i]] & FLAG.H1H2UNSURE) unsure++;
-    s.h1h2.unsureShare = voicedIdx.length ? unsure / voicedIdx.length : 0;
-    s.h1h2c = stats(pick('h1h2c', voicedIdx));
+    s.sfr = stats(pick('sfr', voicedIdx)); s.cpp = stats(pick('cpp', voicedIdx));
+    /* SHR: Median und Maximum nur aus Rahmen ohne shrUnsure (Raster zweifelhaft oder Grundton
+       unsicher). Vorher zählten sie mit, und ein Wert, dessen Raster offen ist, konnte als „Warnung“
+       im Maximum stehen (Bericht 1, Befunde 3 und 4). Die unsicheren Rahmen verschwinden nicht:
+       shrUnsureShare ist ihr Anteil, shrUnsureMax der höchste Hauptwert unter ihnen, shrOtherMax der
+       höchste Wert auf dem anderen Raster (nur bei Rasterzweifel eine Zahl). */
+    var shrSicher = function (j) { return !(series.flags[j] & FLAG.SHRUNSURE); };
+    s.shr = stats(pick('shr', voicedIdx, shrSicher), true);
+    s.shrUnsureShare = anteil(FLAG.SHRUNSURE);
+    s.shrUnsureMax = stats(pick('shr', voicedIdx, function (j) { return !shrSicher(j); }), true).max;
+    s.shrOtherMax = series.shrOther ? stats(pick('shrOther', voicedIdx), true).max : NaN;
+    s.h1h2 = stats(pick('h1h2', voicedIdx, function (j) { return !(series.flags[j] & FLAG.H1H2UNSURE) && f0sicher(j); }));
+    s.h1h2.unsureShare = anteil(FLAG.H1H2UNSURE);   // filtergetrieben (F1 nahe H1/H2), nicht Grundton
+    s.h1h2c = stats(pick('h1h2c', voicedIdx, f0sicher));
     var rmsAll = []; for (i = 0; i < n; i++) rmsAll.push(series.rms[i]);
     s.rms = stats(rmsAll, true);
     var lvl = D.median(pick('rms', voicedIdx));
     // SNR nur, wenn der Boden gemessen ist. Sonst wäre es die Differenz zu einer erfundenen Zahl.
     s.snrDb = (s.floorKnown && isFinite(lvl) && isFinite(meta.floorDb)) ? lvl - meta.floorDb : NaN;
-    s.octaveCorrectedShare = voicedIdx.length ? pick('flags', voicedIdx, function (j) { return series.flags[j] & FLAG.OCTAVE; }).length / voicedIdx.length : 0;
+    /* Korrigiert heißt: der gemeldete Grundton ist nicht der YIN-Wert — durch die Teilerkontrolle
+       (OCTAVE) oder durch die Gegenprobe (F0KORR, davon f0KorrekturShare). Vorher zählte nur die
+       Teilerkontrolle, und ein Take mit lauter korrigierten Rahmen stand bei 0 %. */
+    s.octaveCorrectedShare = anteil(FLAG.OCTAVE | FLAG.F0KORR);
     s.octaveAmbiguousShare = voicedIdx.length ? pick('flags', voicedIdx, function (j) { return series.flags[j] & FLAG.OCTAMBIG; }).length / voicedIdx.length : 0;
     s.vowelAmbiguousShare = stabilIdx.length ? pick('flags', stabilIdx, function (j) { return series.flags[j] & FLAG.VOWELAMBIG; }).length / stabilIdx.length : 0;
     var slotBad = 0;
@@ -238,17 +311,26 @@
     return s;
   }
 
-  /* SFR normiert: je Halbton (gerundeter MIDI-Wert) Median über den Take, Rahmen relativ dazu. */
+  /* SFR normiert: je Halbton (gerundeter MIDI-Wert) Median über den Take, Rahmen relativ dazu.
+     Der Halbton kommt aus F0. Ein Rahmen mit unsicherem Grundton (F0UNSURE) steht womöglich in der
+     falschen Gruppe und geht deshalb in keinen Median ein (wie in summarise). Seinen eigenen Wert
+     bekommt er gegen den Median der Gruppe seines gemeldeten Tons, mit der Marke im Rahmen; gibt es
+     dort keinen sicheren Rahmen, bleibt er NaN statt gegen einen erfundenen Bezug gerechnet. */
   function normaliseSfr(series) {
     var n = series.t.length, groups = {}, i;
     for (i = 0; i < n; i++) {
       if (!(series.flags[i] & FLAG.VOICED) || !isFinite(series.sfr[i])) { series.sfrn[i] = NaN; continue; }
+      if (series.flags[i] & FLAG.F0UNSURE) continue;
       var m = Math.round(D.hzToMidi(series.f0[i]));
       (groups[m] || (groups[m] = [])).push(series.sfr[i]);
     }
     var med = {};
     for (var g in groups) med[g] = D.median(groups[g]);
-    for (i = 0; i < n; i++) if (series.flags[i] & FLAG.VOICED && isFinite(series.sfr[i])) series.sfrn[i] = series.sfr[i] - med[Math.round(D.hzToMidi(series.f0[i]))];
+    for (i = 0; i < n; i++) {
+      if (!(series.flags[i] & FLAG.VOICED && isFinite(series.sfr[i]))) continue;
+      var mg = med[Math.round(D.hzToMidi(series.f0[i]))];
+      series.sfrn[i] = mg === undefined ? NaN : series.sfr[i] - mg;
+    }
     return med;
   }
 
@@ -437,7 +519,7 @@
     return m;
   }
 
-  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
+  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
     indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
