@@ -1,7 +1,8 @@
 /* VARE — Browser-Pruefung. Oeffnet die Seite in Chromium, stellt die GitHub-API nach (nur
    erfundene Daten, kein Netz, kein echtes Token) und spielt einen ganzen Durchgang durch:
    Token-Tor, Mikrofon, Kalibrierung, Take, Chronik, CSV, Sicherung, Import, Detail, Neu-Analyse,
-   danach Schritt 0 über Neuladen, Löschen und neue Sitzung sowie die Einsing-Angaben.
+   danach Schritt 0 über Neuladen, Löschen und neue Sitzung sowie die Einsing-Angaben, „Alles
+   löschen“ mit Code-Zähler, Gerätewechsel nach der Kalibrierung und „merken“/„Token entfernen“.
 
      npm install -g playwright && npx playwright install chromium
      node pruefung/browser-test.js            (Windows: node pruefung\browser-test.js)
@@ -45,14 +46,16 @@ const WAV = path.join(SP, 'fake.wav');
   // Rückfragen werden abgelehnt (z. B. „Audio mitsichern?“), außer der Ablauf will ausdrücklich bestätigen.
   let dialogAntwort = false;
   page.on('dialog', d => (dialogAntwort ? d.accept() : d.dismiss()));
+  const TOKEN = 'github_pat_TESTTESTTESTTESTTEST';
   const KORPUS = JSON.stringify({ format: 'vare-korpus', version: 1, stand: '2026-10-03', notiz: 'Testkorpus',
     marken: { d34: [{ hz: 404, text: 'erfundener Prueftwert' }, { hz: 707 }, { hz: 1111 }] },
     gatter: { f3MinHz: 2500, spreadMaxHz: 130 } });
-  await ctx.route('https://api.github.com/**', route => {
+  const korpusRoute = route => {
     const auth = route.request().headers()['authorization'] || '';
-    if (auth !== 'Bearer github_pat_TESTTESTTESTTESTTEST') { route.fulfill({ status: 401, contentType: 'application/json', body: '{"message":"Bad credentials"}' }); return; }
+    if (auth !== 'Bearer ' + TOKEN) { route.fulfill({ status: 401, contentType: 'application/json', body: '{"message":"Bad credentials"}' }); return; }
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ content: Buffer.from(KORPUS, 'utf8').toString('base64'), encoding: 'base64' }) });
-  });
+  };
+  await ctx.route('https://api.github.com/**', korpusRoute);
   try {
     await page.goto(BASE + '/index.html#/aufnahme');
     await page.waitForFunction(() => document.getElementById('anmeldung') && !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
@@ -63,7 +66,7 @@ const WAV = path.join(SP, 'fake.wav');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => (document.getElementById('anmeldung-fehler').textContent || '').length > 0, null, { timeout: 10000 });
     check('Falsches Token: Meldung, Oberflaeche bleibt zu', await page.isHidden('#app'), (await page.textContent('#anmeldung-fehler')).slice(0, 80));
-    await page.fill('#token', 'github_pat_TESTTESTTESTTESTTEST');
+    await page.fill('#token', TOKEN);
     await page.check('#token-merken');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 10000 });
@@ -187,6 +190,9 @@ const WAV = path.join(SP, 'fake.wav');
       await page.click('#btn-mic');
       await page.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
       await page.waitForTimeout(800);
+      return kalibrieren();
+    }
+    async function kalibrieren() {
       // Die Prüfdatei läuft in Schleife; trifft die Kalibrierung den Vokal nicht, nochmals.
       for (let v = 0; v < 4; v++) {
         await page.click('#btn-cal');
@@ -258,6 +264,72 @@ const WAV = path.join(SP, 'fake.wav');
     const ein = { status: await page.inputValue('#ctx-warmup'), min: await page.inputValue('#ctx-warmup-min'), hinweis: (await page.isVisible('#ctx-hinweis')) ? await page.textContent('#ctx-hinweis') : '' };
     check('Über 3 h ohne Take und Eingabe: Einsing-Angaben nach dem Neuladen leer, Hinweis auf neue Sitzung', ein.status === '' && ein.min === '' && /neue Sitzung/.test(ein.hinweis), JSON.stringify(ein));
     await page.screenshot({ path: path.join(SP, 'shot-schritt0.png'), fullPage: true });
+
+    // ---------- „Alles löschen“: Kalibrierung mitgelöscht, Code-Zähler bleibt ----------
+    const statusText = () => page.evaluate(() => (document.querySelector('[role=status]') || {}).textContent || '');
+    check('Vor dem Löschen: Mikrofon und Kalibrierung', await mikrofonUndKalibrieren(), (await page.textContent('#cal-status')).slice(0, 80));
+    await page.evaluate(() => { location.hash = '#/chronik'; });
+    await page.waitForSelector('#btn-clear-all', { state: 'visible' });
+    const codesVorher = (await page.evaluate(() => VARESTORE.allTakes())).map(t => t.code).sort();
+    dialogAntwort = true;
+    await page.click('#btn-clear-all');
+    await page.waitForFunction(() => /Chronik gelöscht/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 10000 });
+    dialogAntwort = false;
+    await page.evaluate(() => { location.hash = '#/aufnahme'; });
+    await page.waitForTimeout(300);
+    check('Nach „Alles löschen“: Take-Knopf gesperrt, bis neu kalibriert ist', await page.isDisabled('#btn-take'), await page.textContent('#take-hint'));
+    check('Nach „Alles löschen“ neu kalibriert', await kalibrieren(), (await page.textContent('#cal-status')).slice(0, 80));
+    const tD = await takeAufnehmen(2500);
+    // backup.json stammt vom Anfang und enthält Take A.
+    await page.evaluate(() => { location.hash = '#/chronik'; });
+    await page.waitForSelector('#btn-import-json', { state: 'visible' });
+    const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#btn-import-json')]);
+    await fc2.setFiles(path.join(SP, 'backup.json'));
+    await page.waitForFunction(() => /Import: 1 Takes übernommen/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 10000 });
+    const codesNachher = (await page.evaluate(() => VARESTORE.allTakes())).map(t => t.code).sort();
+    check('„Alles löschen“, neuer Take, alte Sicherung eingespielt: Codes laufen weiter, keiner doppelt',
+      !!tD && tD.code === 'D' && new Set(codesNachher).size === codesNachher.length,
+      'vor dem Löschen ' + codesVorher.join(',') + ' | neuer Take ' + (tD && tD.code) + ' | nach dem Import ' + codesNachher.join(',') + ' | ' + await statusText());
+
+    // ---------- Gerätewechsel nach der Kalibrierung ----------
+    await page.evaluate(() => { location.hash = '#/aufnahme'; });
+    await page.waitForSelector('#btn-mic', { state: 'visible' });
+    await page.click('#btn-mic');
+    await page.waitForFunction(() => document.getElementById('btn-mic').textContent === 'Mikrofon starten', null, { timeout: 10000 });
+    const geraete = await page.$$eval('#mic-device option', os => os.map(o => ({ v: o.value, t: o.textContent })));
+    const anderes = geraete.find(o => o.v && o.v !== 'default' && !/Default/.test(o.t));
+    await page.selectOption('#mic-device', anderes.v);
+    await page.click('#btn-mic');
+    await page.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
+    await page.waitForTimeout(800);
+    const g = { gesperrt: await page.isDisabled('#btn-take'), boden: await page.textContent('#v-floor'), klasse: await page.getAttribute('#st-floor', 'class'), warnung: await page.textContent('#cal-warnings'), id: await page.evaluate(() => VAREAPP.state.cal) };
+    check('Anderes Gerät nach der Kalibrierung: Take gesperrt, Rauschboden nicht „kalibriert“ und in Rost, Wechsel benannt',
+      g.gesperrt && g.id === null && !/kalibriert/.test(g.boden) && /unsure/.test(g.klasse) && /anderes Gerät/.test(g.warnung), JSON.stringify(g));
+
+    // ---------- Token: „merken“ und „Token entfernen“ in einem frischen Browserprofil ----------
+    const ctx2 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
+    await ctx2.route('https://api.github.com/**', korpusRoute);
+    const p2 = await ctx2.newPage();
+    p2.on('pageerror', e => errors.push(String(e && e.stack || e)));
+    await p2.goto(BASE + '/index.html#/aufnahme');
+    await p2.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+    await p2.fill('#token', TOKEN); await p2.uncheck('#token-merken'); await p2.click('#btn-verbinden');
+    await p2.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 10000 });
+    await p2.reload();
+    await p2.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 15000 });
+    const ablage = await p2.evaluate(() => ({ lokal: localStorage.getItem('vare-token'), tab: !!sessionStorage.getItem('vare-token'), haken: document.getElementById('token-merken').checked }));
+    check('Token nur für diesen Tab: nach dem Neuladen verbunden, „merken“ nicht angehakt', ablage.lokal === null && ablage.tab && ablage.haken === false, JSON.stringify(ablage));
+    await p2.click('#btn-mic');
+    await p2.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
+    await p2.click('#btn-abmelden');
+    await p2.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+    check('„Token entfernen“: Korpus-Kopfzeile leer', (await p2.textContent('#korpus-stand')) === '', await p2.textContent('#korpus-stand'));
+    await p2.fill('#token', TOKEN); await p2.click('#btn-verbinden');
+    await p2.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 10000 });
+    const neu = await p2.evaluate(() => ({ lokal: localStorage.getItem('vare-token'), knopf: document.getElementById('btn-mic').textContent, mic: VAREAPP.state.rec.active, kalibrieren: document.getElementById('btn-cal').disabled }));
+    check('Erneut verbunden, Haken nicht angefasst: Token nicht im localStorage; Mikrofon aus, Knopf sagt „Mikrofon starten“',
+      neu.lokal === null && neu.knopf === 'Mikrofon starten' && !neu.mic && neu.kalibrieren, JSON.stringify(neu));
+    await ctx2.close();
   } catch (e) { fails.push('AUSNAHME ' + (e && e.stack || e)); console.log('AUSNAHME', e); }
   check('Keine JavaScript-Fehler auf der Seite', errors.length === 0, errors.join(' | '));
   if (logs.length) console.log('Konsole:', logs.slice(0, 10).join('\n'));
