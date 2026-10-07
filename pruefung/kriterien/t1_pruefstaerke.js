@@ -25,24 +25,35 @@ module.exports = async function (H) {
 
   /* ---------- Gültigkeit: beide Sweeps unter 130 Hz, Slot-Lücke über alle Fenster ---------- */
   {
-    // Fenster wie in analyseAt (zentriert), damit die Lückenregel unabhängig nachgerechnet werden kann.
-    function minPeaksOverWindows(ds, c) {
-      let m = Infinity;
+    // Fenster wie in analyseAt (zentriert), damit das Urteil jedes einzelnen Fensters über die
+    // Nummerierung unabhängig zusammengeführt werden kann: veto[k] = irgendein Fenster hält Slot k für
+    // unsicher (Lesarten oder Verschmelzung), haupt[k] = das Hauptfenster allein.
+    function fensterUrteil(ds, c) {
+      const veto = [false, false, false, false, false], haupt = [false, false, false, false, false];
       for (const L of D.WINDOWS) {
         const n = Math.round(L * TSR), st = c - (n >> 1);
         if (st < 0 || st + n > ds.length) continue;
-        m = Math.min(m, D.analyseWindow(ds.subarray(st, st + n), TSR, {}).nPeaksRef);
+        const w = D.analyseWindow(ds.subarray(st, st + n), TSR, {});
+        for (let k = 0; k < 5; k++) {
+          const u = !!(w.slotUnsure[k] || (w.slotMerged && w.slotMerged[k]));
+          if (u) veto[k] = true;
+          if (u && Math.abs(L - D.MAIN_WINDOW) < 1e-9) haupt[k] = true;
+        }
       }
-      return m;
+      return { veto, haupt };
     }
     function frame(ds, c) {
       const r = D.analyseAt(ds, TSR, c, { floorDb: -70 });
-      return r.voiced ? { r, uMin: D.slotGapUnsure(r.F, minPeaksOverWindows(ds, c)) } : null;
+      return r.voiced ? { r, uMin: fensterUrteil(ds, c) } : null;
     }
     // Korpus W: Vokalwechsel ohne Pause. Rahmen um die Grenze sehen in den vier Fensterlängen
     // verschieden viel vom zweiten Vokal — der Fenstersweep streut dort, der Ordnungssweep kaum.
+    // Seit der Rechenkern die Nummerierung jedes Fensters nach Lesarten prüft und mehrdeutige Slots über
+    // alle Fenster sperrt, sind die meisten dieser Rahmen schon dadurch unsicher; bei 4 Paaren und 3
+    // Grundtönen blieben 5 Slots, an denen die Fensterstreuung allein entscheidet. Daher 6 Paare und
+    // 5 Grundtöne (98–262 Hz); die Eigenschaft und die Mindestzahlen sind unverändert.
     const W = [];
-    for (const [x, y] of [['a', 'i'], ['u', 'e'], ['o', 'a'], ['i', 'u']]) for (const f0 of [110, 196, 262]) {
+    for (const [x, y] of [['a', 'i'], ['u', 'e'], ['o', 'a'], ['i', 'u'], ['weit', 'i'], ['e', 'o']]) for (const f0 of [98, 110, 147, 196, 262]) {
       const ds = D.resample(concat([synth(f0, x, 0.5), synth(f0, y, 0.5)]), SR, TSR);
       for (let j = 0; j <= 20; j++) { const f = frame(ds, Math.round((0.40 + 0.01 * j) * TSR)); if (f) W.push(f); }
     }
@@ -79,12 +90,17 @@ module.exports = async function (H) {
     check('P1c', 'Streuung zwischen 130 und 400 Hz: Slot ungueltig, die Grenze liegt bei 130 Hz (mind. 10 entscheidende Slots)',
       g.dec >= 10 && g.bad === 0, 'entscheidend ' + g.dec + ', trotzdem gueltig ' + g.bad + (g.ex.length ? ': ' + g.ex.join('; ') : ''));
 
-    // Lückenregel: findet irgendein Fenster des Sweeps weniger als fünf Resonanzen, ist die
-    // Nummerierung oberhalb der Lücke unsicher — auch wenn das Hauptfenster fünf Gipfel hat.
-    const s = tally(W.concat(O), (r, k, uMin) => isFinite(r.F[k]) && r.nWin[k] >= 3 && r.nOrders[k] >= 2 && big(r, k) < SPREAD_MAX && uMin[k] && !D.slotGapUnsure(r.F, r.nPeaksRef)[k],
-      (r, k, uMin) => uMin[k]);
-    check('P1d', 'Slot-Luecke in irgendeinem Fenster des Sweeps: kein Slot oberhalb der Luecke gueltig (mind. 10 entscheidende Slots)',
-      s.dec >= 10 && s.bad === 0, 'nur ueber das Fenster-Minimum entscheidbar ' + s.dec + ', trotzdem gueltig ' + s.bad + (s.ex.length ? ': ' + s.ex.join('; ') : ''));
+    // Nummerierung über alle Fenster: hält irgendein Fenster des Sweeps die Nummer eines Slots für
+    // unsicher, ist der Slot nicht gültig — auch wenn das Hauptfenster eindeutig ist.
+    // Früher: Lückenregel mit dem Minimum der Gipfelzahl über die Fenster („größte Lücke, alles darüber
+    // unsicher“). Der Rechenkern prüft seit der Zusammenführung Lesarten statt der größten Lücke; die
+    // Lückenregel riet dort falsch: /weit/→/i/ bei 98 Hz, Fenster 0,06 s mit vier Gipfeln, größte Lücke
+    // über F1 — dabei kann 520 Hz nur F1 und 1484 Hz nur F2 sein (gültig, wahr 1500). Gemessen 6 solche
+    // Slots, alle richtig (Fehler 16–82 Hz). Geprüft wird weiter die Zusammenführung über die Fenster.
+    const s = tally(W.concat(O), (r, k, u) => isFinite(r.F[k]) && r.nWin[k] >= 3 && r.nOrders[k] >= 2 && big(r, k) < SPREAD_MAX && !(r.rauschBoden && r.rauschBoden[k]) && u.veto[k] && !u.haupt[k],
+      (r, k, u) => u.veto[k]);
+    check('P1d', 'Nummerierung in irgendeinem Fenster des Sweeps unsicher: Slot nicht gueltig, auch wenn das Hauptfenster eindeutig ist (mind. 10 entscheidende Slots)',
+      s.dec >= 10 && s.bad === 0, 'nur ueber die uebrigen Fenster entscheidbar ' + s.dec + ', trotzdem gueltig ' + s.bad + (s.ex.length ? ': ' + s.ex.join('; ') : ''));
   }
 
   /* ---------- Stimmhaftigkeit: Pegel > Boden + 12 dB und Aperiodizität < 0,45 ---------- */
