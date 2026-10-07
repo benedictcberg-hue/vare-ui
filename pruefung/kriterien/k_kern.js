@@ -382,5 +382,21 @@ module.exports = async function (H) {
     // Gegenproben: saubere Vokale verlieren nichts
     check('K2a', 'Gegenprobe: saubere Vokale a/e/i/o/u, 98–247 Hz: alle fünf Formanten in jedem Rahmen gültig', E.sauber.alle === E.sauber.n && E.sauber.n > 0, E.sauber.alle + '/' + E.sauber.n);
     check('K2a', 'Gegenprobe: mit F6 4400–4800 Hz bleibt ΔF3–4 in mindestens 90 % der Rahmen gültig', E.f6.d34 >= 0.9 * E.f6.n, E.f6.d34 + '/' + E.f6.n);
+
+    // K2b: Formant im Rauschboden. Läuft die Hüllkurve über einem Gipfel in den Rauschboden, bestimmt das
+    // Rauschen seine Lage; alle Fenster sehen dasselbe Rauschen und wiederholen den Fehler.
+    check('K2b', 'Rosenberg-Quelle mit weißem/rosa Rauschen 30/40/50 dB: kein gültiger Slot über 130 Hz falsch, kein gültiges ΔF3–4 über 120 Hz falsch',
+      E.rauschenRos.falsch === 0 && E.rauschenRos.d34falsch === 0, 'Slots ' + E.rauschenRos.falsch + ', ΔF3–4 ' + E.rauschenRos.d34falsch + ' falsch; ' + det(E.rauschenRos));
+    check('K2b', 'Impulsquelle mit weißem/rosa Rauschen 30/40/50 dB: kein gültiges F3–F5 über 130 Hz falsch, kein gültiges ΔF3–4 über 120 Hz falsch',
+      E.rauschen.falsch345 === 0 && E.rauschen.d34falsch === 0, 'F3–F5 ' + E.rauschen.falsch345 + ', ΔF3–4 ' + E.rauschen.d34falsch + ' falsch; ' + det(E.rauschen));
+    // Gegenprobe: Vibrato verschmiert hohe Teiltöne, ist aber kein Rauschen
+    {
+      let n = 0, alle = 0;
+      for (const v of ['a', 'i', 'o', 'u']) for (const f0 of F0S) for (const [rate, cent] of [[6, 50], [4, 30]]) {
+        const x = D.resample(vib(f0, 0.4, v, rate, cent), SR, TSR);
+        for (let i = 900; i + 900 <= x.length; i += 240) { const r = D.analyseAt(x, TSR, i, {}); if (!r.voiced) continue; n++; if (r.valid.every(Boolean)) alle++; }
+      }
+      check('K2b', 'Gegenprobe: saubere Vokale mit Vibrato (6 Hz ±50 Cent, 4 Hz ±30 Cent): alle fünf Formanten in mindestens 95 % der Rahmen gültig', n > 0 && alle >= 0.95 * n, alle + '/' + n);
+    }
   }
 };

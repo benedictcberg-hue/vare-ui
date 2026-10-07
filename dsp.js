@@ -44,6 +44,14 @@
        Cluster weit) darf nicht als F6 gelesen werden. */
   var SLOT_LO = [0, 550, 1700, 2600, 3000, 4450];
   var SLOT_HI = [1100, 2800, 3500, 4500, F_PEAK_MAX_HZ, Infinity];
+  /* Ein Formant ist nur gemessen, wenn die Hüllkurve oberhalb seines Gipfels bis zur Obergrenze um
+     mindestens DROP_MIN_DB unter seinen Pegel fällt. Ohne Rauschen fällt sie hinter dem obersten
+     Formanten steil ab. Mit Mikrofonrauschen läuft sie in einen flachen Boden (nach der Preemphase
+     steigt weißes Rauschen sogar an); liegt ein Gipfel kaum darüber, bestimmt das Rauschen seine Lage,
+     und alle Fenster und Ordnungen wiederholen denselben Fehler, weil sie dieselben Abtastwerte sehen.
+     Gemessen (Median über Fenster und Ordnungen): saubere Vokale mindestens 21 dB, mit Vibrato 30 dB;
+     die Slots, die bei SNR 30–50 dB falsch und trotzdem gültig waren, höchstens 5,3 dB. */
+  var DROP_MIN_DB = 10;
   var BW_ARTIFACT_HZ = 40;        // physik.md 2.4: LPC-Bandbreiten darunter sind Artefakt, keine Messung         // ab hier gilt ein Gipfel als verschmolzen (zwei Formanten in einem)
   var SENTINEL = -99;             // Darstellung für „keine Messung“
   var SPEED_OF_SOUND_CM_S = 35000;
@@ -282,7 +290,7 @@
   /* Gipfel mit Prominenz, parabolisch verfeinert. Bandbreite aus der −3-dB-Breite. */
   function peaksFromEnvelope(env, sr, nMax, minProm) {
     var nBins = env.length, df = (sr / 2) / (nBins - 1), cand = [];
-    var fTop = Math.min(sr / 2 - 250, F_PEAK_MAX_HZ);
+    var fTop = Math.min(sr / 2 - 250, F_PEAK_MAX_HZ), iTop = Math.min(nBins - 1, Math.round(fTop / df));
     for (var i = 2; i < nBins - 2; i++) {
       if (env[i] <= env[i - 1] || env[i] < env[i + 1]) continue;
       var l = i, r = i;
@@ -303,7 +311,11 @@
       if (lo < i && env[lo + 1] !== env[lo]) loX = lo + (half - env[lo]) / (env[lo + 1] - env[lo]);
       if (hi > i && env[hi - 1] !== env[hi]) hiX = hi - (half - env[hi]) / (env[hi - 1] - env[hi]);
       var bw = (hiX - loX) * df;
-      if (f > 120 && f < fTop) cand.push({ f: f, bw: bw, amp: env[i], prom: prom, bwArtifact: bw < BW_ARTIFACT_HZ });
+      if (!(f > 120 && f < fTop)) continue;
+      // Abfall der Hüllkurve vom Gipfel bis zu ihrem tiefsten Punkt darüber (bis zur Obergrenze)
+      var tief = env[i];
+      for (var b = i + 1; b <= iTop; b++) if (env[b] < tief) tief = env[b];
+      cand.push({ f: f, bw: bw, amp: env[i], prom: prom, bwArtifact: bw < BW_ARTIFACT_HZ, drop: env[i] - tief });
     }
     cand.sort(function (p, q) { return q.prom - p.prom; });
     var keep = cand.slice(0, nMax);
@@ -330,7 +342,7 @@
     var refIdx = -1, best = -1;
     for (var pi = 0; pi < prefer.length; pi++) { var c = prefer[pi]; if (c >= 0 && per[c].length > best) { best = per[c].length; refIdx = c; } }
     for (o = 0; o < orders.length; o++) if (per[o].length > best) { best = per[o].length; refIdx = o; }
-    var slots = [[], [], [], [], []], bwSlot = [NaN, NaN, NaN, NaN, NaN], bwArt = [false, false, false, false, false];
+    var slots = [[], [], [], [], []], drops = [[], [], [], [], []], bwSlot = [NaN, NaN, NaN, NaN, NaN], bwArt = [false, false, false, false, false];
     var bwOrder = orders.indexOf(14) >= 0 ? orders.indexOf(14) : refIdx;
     if (refIdx >= 0) {
       var ref = per[refIdx], nSlots = Math.min(5, ref.length);
@@ -354,7 +366,7 @@
         }
         for (var s1 = 0; s1 < nSlots; s1++) {
           if (!assign[s1]) continue;
-          slots[s1].push(assign[s1].f);
+          slots[s1].push(assign[s1].f); drops[s1].push(assign[s1].drop);
           if (o === bwOrder) { bwSlot[s1] = assign[s1].bw; bwArt[s1] = !!assign[s1].bwArtifact; }
         }
       }
@@ -367,7 +379,7 @@
     if (refIdx >= 0) for (var r = 0; r < per[refIdx].length; r++) refF.push(per[refIdx][r].f);
     return { F: F, sdOrder: sdOrder, nOrders: nOrders, BW: bwSlot, bwArtifact: bwArt, merged: merged,
       nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN,
-      slotUnsure: slotNumberUnsure(refF, nOrders) };
+      slotUnsure: slotNumberUnsure(refF, nOrders), drops: drops };
   }
 
   /* Zuordnung Gipfel → Slot ist eine Annahme, keine Messung: der k-te gefundene Gipfel gilt als Fk.
@@ -704,7 +716,7 @@
       voiced: false, f0: NaN, note: '--', ap: 1, rmsDb: NaN,
       F: nan5.slice(), sdOrder: nan5.slice(), sdWin: nan5.slice(), BW: nan5.slice(),
       nOrders: [0, 0, 0, 0, 0], nWin: [0, 0, 0, 0, 0], valid: [false, false, false, false, false], merged: [false, false, false, false, false],
-      slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
+      slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
@@ -781,8 +793,14 @@
     for (i = 0; i < perWin.length; i++) for (k = 0; k < 5; k++) {
       if (perWin[i].slotUnsure[k]) { out.slotUnsure[k] = true; out.slotGrund[k] = 'nummer'; }
     }
+    // Formant im Rauschboden: Median des Hüllkurvenabfalls über alle Fenster und Ordnungen
     for (k = 0; k < 5; k++) {
-      out.valid[k] = isFinite(out.F[k]) && out.nWin[k] >= 3 && out.sdWin[k] < smax && out.nOrders[k] >= 2 && out.sdOrder[k] < smax && !out.slotUnsure[k];
+      var dr = [];
+      for (i = 0; i < perWin.length; i++) dr = dr.concat(perWin[i].drops[k]);
+      out.rauschBoden[k] = dr.length > 0 && !(median(dr) >= DROP_MIN_DB);
+    }
+    for (k = 0; k < 5; k++) {
+      out.valid[k] = isFinite(out.F[k]) && out.nWin[k] >= 3 && out.sdWin[k] < smax && out.nOrders[k] >= 2 && out.sdOrder[k] < smax && !out.slotUnsure[k] && !out.rauschBoden[k];
     }
     out.d34 = out.F[3] - out.F[2]; out.d45 = out.F[4] - out.F[3];
     out.d34valid = out.valid[2] && out.valid[3]; out.d45valid = out.valid[3] && out.valid[4];
@@ -1078,7 +1096,7 @@
     analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
-    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,
