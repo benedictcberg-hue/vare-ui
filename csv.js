@@ -4,15 +4,22 @@
    SPALTENFORMAT: Die Spaltenliste TAKE_COLUMNS ist ein abgeleiteter PLATZHALTER, bis das
    Zielformat nachgereicht ist. Sie ist die einzige Stelle, die beim Tausch angefasst werden muss:
    jede Zeile = { key, get(take) → Wert, dec (Nachkommastellen) }. Fehlende Zahlen werden als −99.00
-   geschrieben (Sentinel), Texte in Anführungszeichen, Anführungszeichen verdoppelt. */
+   geschrieben (Sentinel), fehlende Texte leer. Texte mit Trenner, Anführungszeichen oder Zeilenumbruch
+   stehen in Anführungszeichen, Anführungszeichen verdoppelt. Excel DE: Formelschutz (DIALECTS). */
 (function (root) {
   'use strict';
 
   var SENTINEL = -99;
+  /* formelSchutz: Excel führt eine Zelle als Formel aus, die mit =, +, - oder @ beginnt, auch nach
+     Leerzeichen oder Tabulator. Ein Kommentar „=HYPERLINK(…)“ wäre dann Code, „-3 dB gepresst“ eine
+     Fehlermeldung statt Notiz. Im Dialekt Excel DE steht vor solchem TEXT ein Apostroph; Excel zeigt es
+     mit an, der Text dahinter bleibt unverändert. Zahlen betrifft das nie: −99,00 bleibt eine Zahl.
+     Der Standard-Dialekt (pandas) schreibt den Text unverändert — dort ist er Wert, kein Code. */
   var DIALECTS = {
-    standard: { sep: ',', dec: '.', bom: false, name: 'Standard (Komma, Punkt) — pandas' },
-    excelde: { sep: ';', dec: ',', bom: true, name: 'Excel DE (Semikolon, Komma)' }
+    standard: { sep: ',', dec: '.', bom: false, formelSchutz: false, name: 'Standard (Komma, Punkt) — pandas' },
+    excelde: { sep: ';', dec: ',', bom: true, formelSchutz: true, name: 'Excel DE (Semikolon, Komma, Text gegen Formeln geschützt)' }
   };
+  var FORMEL_ANFANG = /^\s*[=+\-@]/;
 
   function g(path) {                                   // Zugriff 'summary.f0.med'
     var parts = path.split('.');
@@ -55,7 +62,9 @@
     { key: 'f0_med_hz', get: g('summary.f0.med'), dec: 1 },
     { key: 'f0_q1_hz', get: g('summary.f0.q1'), dec: 1 },
     { key: 'f0_q3_hz', get: g('summary.f0.q3'), dec: 1 },
-    { key: 'f0_note', get: g('summary.f0.note') },
+    /* Die Note gehört zu einem gemessenen Grundton. Ohne F0 liefert hzToNote '--' — ein Text, wo nichts
+       gemessen ist; fehlender Text ist in dieser CSV leer (fehlende Zahl −99). */
+    { key: 'f0_note', get: function (t) { var f = t && t.summary && t.summary.f0; return (f && typeof f.med === 'number' && isFinite(f.med) && f.note && f.note !== '--') ? f.note : null; } },
     /* F0-Median, Quartile und Note stammen nur aus Rahmen, deren Grundton die Gegenprobe besteht
        (analysis.js summarise). Wie viele das nicht taten und wie viele korrigiert wurden, steht hier;
        ältere Auswertungen kennen beides nicht (−99). */
@@ -194,6 +203,7 @@
     if (typeof v === 'number') return fmtNum(v, dec, dialect);
     if (typeof v === 'boolean') return v ? '1' : '0';
     var s = String(v);
+    if (dialect.formelSchutz && FORMEL_ANFANG.test(s)) s = "'" + s;
     if (s.indexOf(dialect.sep) >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) s = '"' + s.replace(/"/g, '""') + '"';
     return s;
   }

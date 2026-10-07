@@ -93,6 +93,19 @@ Oberfläche erst nach Verbindung), Mikrofon, Kalibrierung, Take gegen bekannte F
 Chronik, CSV, Sicherung, Import, Detailansicht, Neu-Analyse, Bedienelemente ab 46 px.
 Die GitHub-API wird nachgestellt — kein Netz, kein echtes Token.
 
+## CSV
+
+Zwei Dialekte, einstellbar unter „Einstellungen“:
+
+- **Standard** (Komma, Dezimalpunkt, ohne BOM) — für pandas und andere Leser. Text steht unverändert da.
+- **Excel DE** (Semikolon, Dezimalkomma, mit BOM). Text, der mit `=`, `+`, `-` oder `@` beginnt, auch nach
+  Leerzeichen, Tabulator oder Zeilenumbruch, bekommt ein Apostroph vorangestellt (`'=1+1`). Sonst führte
+  Excel ihn als Formel aus. Excel zeigt das Apostroph mit an; der Text dahinter ist unverändert. Zahlen
+  betrifft das nie: `-99,00` bleibt eine Zahl.
+
+In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
+fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
+
 ## Dateien
 
 | Datei | Zweck | unter Node testbar |

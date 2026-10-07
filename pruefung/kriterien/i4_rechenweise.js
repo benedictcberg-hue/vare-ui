@@ -154,5 +154,43 @@ module.exports = async function (H) {
       (soll ? (anders.length ? 'anders in: ' + anders.join(', ') : 'gleich') : 'keine Aufnahme für ' + D.VERSION) + (gleichAlt.length ? ' | rechnet wie ' + gleichAlt.join(', ') : '')
       + ' | jetzt ' + JSON.stringify(fa));
   }
+
+  /* ---------- I4c: CSV für Excel DE ---------- */
+  {
+    const { C } = H, T2 = require(path.join(__dirname, 't2_pruefstaerke.js'));
+    // Texte, die Excel als Formel ausführen würde (auch nach Leerzeichen, Tabulator, Zeilenumbruch), und solche,
+    // die nur ein Zeichen davon enthalten. Mit Trenner und Anführungszeichen, damit Schutz und Quoting zusammen greifen.
+    const FORMEL = ['=1+1', '+49 170', '-3 dB gepresst', '@SUMME(A1)', ' =A1', '\t-2', '\r\n=HYPERLINK("x";"y")', '  +1; 2'];
+    const HARMLOS = ['a=b', 'x-y', 'Ton + Luft', 'mail@x', '', 'G3', '(-1)'];
+    const zelle = (text, dialect, sep) => {
+      const t = { code: 'Q', label: text, comment: text, summary: { rms: { med: -20.5, max: -3.25 } } };
+      const { rows, errors } = T2.parseCsv(C.takesToCsv([t], dialect).replace(/^\uFEFF/, ''), sep), h = rows[0] || [], r = rows[1] || [];
+      return { label: r[h.indexOf('label')], comment: r[h.indexOf('comment')], rms: r[h.indexOf('rms_med_dbfs')], rmsMax: r[h.indexOf('rms_max_dbfs')], felder: r.length === h.length && !errors.length };
+    };
+    const bad = [];
+    for (const x of FORMEL.concat(HARMLOS)) {
+      const de = zelle(x, 'excelde', ';'), st = zelle(x, 'standard', ',');
+      const sollDe = FORMEL.includes(x) ? "'" + x : x;
+      if (de.label !== sollDe || de.comment !== sollDe || !de.felder) bad.push('Excel DE ' + JSON.stringify(x) + ' → ' + JSON.stringify(de.label));
+      if (st.label !== x || st.comment !== x || !st.felder) bad.push('Standard ' + JSON.stringify(x) + ' → ' + JSON.stringify(st.label));
+      if (de.rms !== '-20,50' || de.rmsMax !== '-3,25' || st.rms !== '-20.50') bad.push('Zahl ' + de.rms + ' / ' + st.rms);
+    }
+    // Rahmen-CSV: dieselbe Zellregel (fmtCell); negative Zahlen bleiben Zahlen, Wörter des Kerns bleiben.
+    const ser = H.A.makeSeries(2); ser.rms[0] = -20.25; ser.f1[0] = NaN; ser.gate[0] = 2;
+    const fr = T2.parseCsv(C.framesToCsv(ser, 'excelde', H.V).replace(/^\uFEFF/, ''), ';').rows, fh = fr[0] || [];
+    if (fr[1][fh.indexOf('rms_dbfs')] !== '-20,25' || fr[1][fh.indexOf('f1')] !== '-99,0' || fr[1][fh.indexOf('gate')] !== 'stabil') bad.push('Rahmen ' + [fr[1][fh.indexOf('rms_dbfs')], fr[1][fh.indexOf('f1')], fr[1][fh.indexOf('gate')]].join('|'));
+    if (C.fmtCell('-x', null, C.DIALECTS.excelde) !== "'-x" || C.fmtCell(-1.5, 1, C.DIALECTS.excelde) !== '-1,5' || C.fmtCell('-x', null, C.DIALECTS.standard) !== '-x') bad.push('fmtCell');
+    check('I4c', 'CSV Excel DE: Text, der mit =, +, -, @ beginnt (auch nach Leerzeichen, Tab, Zeilenumbruch), steht mit Apostroph davor; harmloser Text, Zahlen (auch negative und −99) und der Standard-Dialekt bleiben unverändert',
+      !bad.length, bad.length ? bad.slice(0, 5).join(' | ') : FORMEL.length + ' Formeltexte geschützt, ' + HARMLOS.length + ' harmlose unverändert, beide Dialekte');
+
+    // f0_note: ohne gemessenen Grundton leer, wie jeder fehlende Text — nicht '--'.
+    const sig = H.noise(Math.round(0.6 * H.SR), 1e-3, 77), still = await A.analyseTake(sig, H.SR, { hopS: 0.05 });
+    const ohne = { code: 'S', summary: still.summary }, mit = { code: 'M', summary: { f0: { med: 196, q1: 195, q3: 197, n: 10, note: 'G3' } } };
+    const altImport = { code: 'N', summary: { f0: { med: null, q1: null, q3: null, n: 0, note: '--' } } };
+    const note = (t, d, sep) => { const { rows } = T2.parseCsv(C.takesToCsv([t], d).replace(/^\uFEFF/, ''), sep); return rows[1][rows[0].indexOf('f0_note')] + '|' + rows[1][rows[0].indexOf('f0_med_hz')]; };
+    const got = [note(ohne, 'standard', ','), note(ohne, 'excelde', ';'), note(altImport, 'standard', ','), note(mit, 'standard', ','), note(mit, 'excelde', ';')];
+    check('I4c', 'CSV: f0_note ohne gemessenen Grundton leer (beide Dialekte, auch null aus einer älteren Sicherung), mit Grundton die Note',
+      still.summary.f0.note === '--' && got.join(' ') === '|-99.0 |-99,0 |-99.0 G3|196.0 G3|196,0', 'Zusammenfassung „' + still.summary.f0.note + '“ → ' + got.join(' '));
+  }
 };
 module.exports.fingerabdruck = fingerabdruck;

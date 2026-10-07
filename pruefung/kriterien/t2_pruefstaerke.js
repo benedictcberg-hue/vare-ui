@@ -429,3 +429,4 @@ module.exports = async function (H) {
 // Sollpfade für Gegenproben außerhalb des Prüflaufs (z. B. Einlesen mit einem anderen CSV-Leser).
 module.exports.TAKE_SOLL = TAKE_SOLL;
 module.exports.FRAME_SOLL = FRAME_SOLL;
+module.exports.parseCsv = parseCsv;
