@@ -267,7 +267,7 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
 In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
 
-Stand Kern 4.0.0: 99 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
+Stand Kern 4.0.0: 100 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
 
 - **Take:** `f0_unsure_share`, `f0_korrektur_share`, `shr_unsure_share`, `shr_unsure_max_db`,
   `shr_other_max_db`, `voicing_floor_dbfs`. F0, Note, SHR und H1−H2 kommen nur aus sicheren Rahmen; die

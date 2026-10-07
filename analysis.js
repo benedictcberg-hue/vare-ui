@@ -12,9 +12,10 @@
      Abgeleitete; F0KORR = YIN-Wert durch die Gegenprobe ersetzt (sichtbar, nicht unsicher);
      SHRUNSURE = Raster zweifelhaft oder Grundton unsicher; OCTUNTER = Reihe unter 60 Hz, nicht geteilt
      (dann auch OCTAMBIG). SUBGRID heißt seit dem SHR-Raster aus dem Kamm „Hauptwert auf 2·F0“.
-     Frei in Uint16: 8192, 16384, 32768. */
+     NAHT = das Fenster des Rahmens überdeckt eine Stelle, an der Abtastwerte fehlen (Signallücke): kein Messwert,
+     als Pause geführt. Frei in Uint16: 16384, 32768. */
   var FLAG = { VOICED: 1, OCTAVE: 2, SUBGRID: 4, H1H2UNSURE: 8, D34VALID: 16, D45VALID: 32, SCORE: 64, OCTAMBIG: 128, VOWELAMBIG: 256,
-    F0UNSURE: 512, F0KORR: 1024, SHRUNSURE: 2048, OCTUNTER: 4096 };
+    F0UNSURE: 512, F0KORR: 1024, SHRUNSURE: 2048, OCTUNTER: 4096, NAHT: 8192 };
 
   /* Gründe je Rahmen als kleine Codes (Uint8), nicht als Text: Texte in einem gewöhnlichen Array
      kosteten bei einer Stunde (360 000 Rahmen) ein Vielfaches und überstünden keine Sicherung als
@@ -349,16 +350,35 @@
     return med;
   }
 
+  /* Rahmen an einer Naht: Sein Fenster enthält Signal von beiden Seiten einer Lücke, also keinen gesungenen
+     Zustand. Er wird nicht gemessen, sondern als stimmloser Rahmen ohne jeden Wert geführt (Pause), mit NAHT. */
+  function nahtRahmen() {
+    var nan5 = [NaN, NaN, NaN, NaN, NaN], nein5 = [false, false, false, false, false];
+    return { voiced: false, f0: NaN, ap: NaN, rmsDb: NaN, F: nan5, sdOrder: nan5, sdWin: nan5, BW: nan5, valid: nein5, slotUnsure: nein5, slotGrund: ['', '', '', '', ''], rauschBoden: nein5,
+      nPeaksRef: 0, d34: NaN, d45: NaN, d34valid: false, d45valid: false, sfr: NaN, shr: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      f0Cep: NaN, f0Yin: NaN, shrGrid: NaN, shrOther: NaN, shrKamm: NaN, shrZweitpuls: NaN, f0Grund: '', f0Korrektur: '', shrGrund: '',
+      octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, f0Unsure: false, shrUnsure: false };
+  }
+
   /* Hauptaufruf. samples: Float32Array/Float64Array bei sr. Liefert Promise<{ summary, series, meta }>.
      onProgress(done, total) wird je Block gerufen; zwischen Blöcken gibt die Funktion den Faden frei.
      o.abbrechen (Funktion): liefert sie vor einem Block true, endet die Analyse ohne Ergebnis — das Promise
      wird mit einem Fehler verworfen, der abgebrochen = true trägt. So lässt sich ein langer Take mitten in
-     der Rechnung abbrechen, ohne dass halbe Werte entstehen. */
+     der Rechnung abbrechen, ohne dass halbe Werte entstehen.
+     o.naehteS (Sekunden im Signal): Stellen, an denen Abtastwerte fehlen (Signallücke, app.js). Dort ist das
+     Signal ohne Pause aneinandergesetzt; über einer Atempause entstand so ein gehaltener Tonsprung, der als
+     sicherer Befund dastand (Befund N7). Jede Naht gilt als Pause: Rahmen, deren längstes Fenster sie
+     überdeckt, werden nicht gemessen (NAHT, Pause), und die Feinspur samt Sprungsuche läuft je Abschnitt
+     zwischen den Nähten — kein Bezugston und kein Sprung reicht über eine Naht. */
   function analyseTake(samples, sr, o, onProgress) {
     var opts = {};
     for (var k in DEFAULTS) opts[k] = (o && o[k] != null) ? o[k] : DEFAULTS[k];
     var abbrechen = (o && typeof o.abbrechen === 'function') ? o.abbrechen : null;
-    var TSR = D.TARGET_SR;
+    var TSR = D.TARGET_SR, dauer = samples.length / sr, naehte = [];
+    ((o && o.naehteS) || []).forEach(function (x) { if (typeof x === 'number' && x > 0 && x < dauer) naehte.push(x); });
+    naehte.sort(function (a, b) { return a - b; });
+    var nahtRand = Math.max.apply(null, D.WINDOWS.concat([D.MAIN_WINDOW])) / 2 + 1 / TSR;
+    function anNaht(t) { for (var q = 0; q < naehte.length; q++) if (Math.abs(t - naehte[q]) < nahtRand) return true; return false; }
     var ds = D.resample(samples, sr, TSR);
     var hop = Math.max(1, Math.round(opts.hopS * TSR)), half = Math.round(0.03 * TSR);
     var centres = [];
@@ -375,14 +395,18 @@
           if (abbrechen && abbrechen()) { var ab = new Error('Analyse abgebrochen'); ab.abgebrochen = true; reject(ab); return; }
           var end = Math.min(centres.length, i + opts.chunk);
           for (; i < end; i++) {
-            var t = centres[i] / TSR, r = D.analyseAt(ds, TSR, centres[i], frameOpts);
+            var t = centres[i] / TSR, naht = anNaht(t), r = naht ? nahtRahmen() : D.analyseAt(ds, TSR, centres[i], frameOpts);
             var inp = { t: t, voiced: r.voiced, F1: r.F[0], F2: r.F[1], F3: r.F[2], valid1: r.valid[0], valid2: r.valid[1], d34: r.d34, d34valid: r.d34valid };
             inputs.push(inp);
             fillFrame(series, i, t, r);
+            if (naht) series.flags[i] |= FLAG.NAHT;
           }
           if (onProgress) onProgress(i, centres.length);
           if (i < centres.length) { setTimeout(step, opts.yieldMs); return; }
           applyGate(series, V.gateOffline(inputs, opts.gate || {}));
+          // Ein Rahmen an der Naht ist Pause, auch wenn das Gatter ihn in einem stabilen Fenster mitzählt: kein
+          // Segment und keine Wertung reicht über eine Naht.
+          for (var q = 0; q < centres.length; q++) if (series.flags[q] & FLAG.NAHT) { series.gate[q] = 0; series.cls[q] = -1; series.score[q] = NaN; series.flags[q] &= ~(FLAG.SCORE | FLAG.VOWELAMBIG); }
           var sfrByNote = normaliseSfr(series);
           /* Zweite Tonhöhenspur mit kurzem Fenster: die Hauptspur misst auf mindestens 60 ms und
              verliert dadurch Kiekser unter etwa 90 ms vollständig. Unterschieden wird nur nach Dauer —
@@ -390,9 +414,15 @@
              gehaltener Sprung (ab 5 Halbtönen) ist nicht automatisch ein Registerwechsel: Ein legato
              gesungener Melodiesprung (Quarte bis Oktave) zählt genauso. Einen Registerbruch zeigt
              erst ein Qualitätseinbruch am Übergang, und den prüft diese Zählung nicht. */
-          var fein = D.pitchTrackFine(ds, TSR, opts.fine || {});
-          var spruenge = D.detectJumps(fein, opts.jumps || {});
-          var meta = { hopS: opts.hopS, durationS: samples.length / sr, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
+          var grenzen = [0], fein = null, spruenge = [];
+          for (var g = 0; g < naehte.length; g++) grenzen.push(Math.min(ds.length, Math.round(naehte[g] * TSR)));
+          grenzen.push(ds.length);
+          for (g = 0; g + 1 < grenzen.length; g++) {
+            var spur = D.pitchTrackFine(ds.subarray(grenzen[g], grenzen[g + 1]), TSR, opts.fine || {}), ab = grenzen[g] / TSR;
+            if (!fein) fein = spur;
+            D.detectJumps(spur, opts.jumps || {}).forEach(function (e) { e.startS += ab; spruenge.push(e); });
+          }
+          var meta = { hopS: opts.hopS, durationS: samples.length / sr, naehteS: naehte, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
           var summary = summarise(series, meta);
           summary.sfrByNote = sfrByNote;
           var stimmSek = summary.voicedShare * meta.durationS;
@@ -483,9 +513,13 @@
     return r;
   }
 
+  /* Ein Take mit Signallücke (app.js signalLuecken, recorder.js) ist eine unvollständige Aufnahme: Was in der
+     Lücke gesungen wurde, fehlt. Er bleibt in der Chronik, sichtbar gekennzeichnet, ist aber keine Referenz. */
+  function lueckenhaft(take) { var l = take && take.signalLuecken; return !!(l && l.length); }
+
   /* Referenzen je Vokal: engstes Bestsegment über alle Takes, mit Herkunft. aktuell (optional, siehe
      unvergleichbar): Takes, die anders gerechnet sind, zählen nicht. Ohne aktuell wird die
-     Rechenweise nicht geprüft. */
+     Rechenweise nicht geprüft. Takes mit Signallücke zählen nie. */
   function computeRefs(takes, previous, aktuell) {
     var refs = {};
     /* Eine angepinnte Referenz wird nach einer Neu-Analyse aus dem neuen Bestsegment desselben Takes
@@ -503,6 +537,7 @@
       var uv = host ? unvergleichbar(host, aktuell) : '';
       if (!host) grund = wer + ' ist gelöscht.';
       else if (uv) grund = wer + ' ist anders gerechnet als jetzt eingestellt: ' + uv + '.';
+      else if (lueckenhaft(host)) grund = wer + ' hat eine Signallücke (Aufnahme unvollständig).';
       else if (!hb || !isFinite(hb.d34Med)) grund = wer + ' hat in seiner letzten Auswertung ' + (pv && pv.segmentsAmbiguous ? 'für /' + p + '/ nur zweideutig zugeordnete Segmente, kein Bestsegment.' : 'kein Bestsegment für /' + p + '/.');
       else if (hb.ambiguousShare > AMBIG_MAX_SHARE) grund = wer + ': das Bestsegment für /' + p + '/ ist zweideutig zugeordnet (' + Math.round(100 * hb.ambiguousShare) + ' % der Rahmen).';
       refs[p] = grund ? verwaist(pr, host, grund) : refAus(host, hb, true);
@@ -511,7 +546,7 @@
       var t = takes[i], per = t.summary && t.summary.perVowel;
       if (!per) continue;
       // Bericht 2, Befund 2: ein Take mit gesenkter F3-Schwelle machte sein tiefes, enges Cluster zur Zielmarke.
-      if (unvergleichbar(t, aktuell)) continue;
+      if (unvergleichbar(t, aktuell) || lueckenhaft(t)) continue;
       for (var cls in per) {
         var b = per[cls].bestSegment;
         if (!b || !isFinite(b.d34Med)) continue;
@@ -540,7 +575,7 @@
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

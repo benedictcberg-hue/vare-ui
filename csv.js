@@ -52,6 +52,9 @@
     { key: 'warmup_state', get: g('sitzung.warmup') },
     { key: 'warmup_min', get: g('sitzung.warmupMin'), dec: 0 },
     { key: 'duration_s', get: g('durationS'), dec: 2 },
+    /* Signallücke: Sekunden, die in der Aufnahme fehlen (Gerätewechsel, Aussetzer). 0 = geprüft, keine;
+       −99 = nicht geprüft (ältere Takes). Ein Take mit Lücke ist keine Referenz, seine Nähte gelten als Pause. */
+    { key: 'signal_gap_s', get: g('signalLueckeS'), dec: 2 },
     { key: 'sample_rate', get: g('sampleRate'), dec: 0 },
     { key: 'device', get: g('deviceLabel') },
     { key: 'kernel_version', get: g('analysis.kernelVersion') },

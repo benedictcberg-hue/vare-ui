@@ -205,7 +205,7 @@
     if (seen !== st.lastSeen) { st.lastSeen = seen; st.lastSeenAt = now; }
     else if (now - (st.lastSeenAt || now) > 300) {
       freezeLive('kein Signal vom Mikrofon — Gerät oder Ausgabegerät gewechselt?');
-      if (st.taking && !st.noSignalWarned) { st.noSignalWarned = true; status('Kein Signal vom Mikrofon — der laufende Take ist nicht verwertbar.', true); }
+      if (st.taking && !st.noSignalWarned) { st.noSignalWarned = true; status('Kein Signal vom Mikrofon — dem laufenden Take fehlt ein Stück. Er wird mit der Lücke gespeichert, als lückenhaft gekennzeichnet und zählt nicht als Referenz.', true); }
       return;
     }
     st.noSignalWarned = false;
@@ -453,42 +453,44 @@
       if (el >= total + 0.1 || !st.rec || !st.rec.active) {
         clearInterval(iv);
         if (!st.rec || !st.rec.active) { st.calRunning = false; $('btn-cal').disabled = true; $('cal-progress').hidden = true; status('Kalibrierung abgebrochen — Mikrofon nicht mehr aktiv.', true); updateTakeButton(); return; }
-        var take = st.rec.endTake();
-        if (take.durationS < total - 0.3) {
-          st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
-          status('Kalibrierung abgebrochen (' + take.durationS.toFixed(1).replace('.', ',') + ' s von ' + total + ' s aufgenommen) — nicht übernommen.', true);
-          return;
-        }
-        $('cal-progress').textContent = 'Auswertung …';
-        setTimeout(function () {
-          try {
-            var info = st.rec.info, rec = K.analyseCalibration(take.samples, take.sampleRate, { deviceLabel: info.deviceLabel, deviceId: info.deviceId, createdAt: new Date().toISOString(), id: 'cal-' + uuid() });
-            rec.captureFlags = { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl };
-            // Gehört zur Kette (ketteAbweichung): ein Headset im Freisprechprofil liefert eine andere Rate.
-            rec.trackSampleRate = info.trackSampleRate || null;
-            /* Eine Kalibrierung, die keine Zahlen hergibt, darf nicht als Bezug gelten: sonst
-               rechnet jeder Take danach gegen einen Rauschboden, den es nicht gibt. */
-            var fehlt = [];
-            if (!isFinite(rec.floorDb)) fehlt.push('Rauschboden');
-            if (!isFinite(rec.levelDb) || !rec.nVoiced) fehlt.push('/a/ nicht erkannt');
-            if (!isFinite(rec.snrDb)) fehlt.push('SNR');
-            if (fehlt.length) {
-              st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
-              status('Kalibrierung unbrauchbar (' + fehlt.join(', ') + ') — nicht übernommen. Lauter singen, näher ans Mikrofon, Ablauf wiederholen.', true);
-              return;
-            }
-            S.allCalibrations().then(function (all) {
-              var prev = all.filter(function (c) { return c.deviceLabel === rec.deviceLabel; })[0] || all[0] || null;
-              var warnings = K.compare(prev, rec);
-              st.cal = rec; st.calSession = true; st.rmsRing = [];
-              return S.putCalibration(rec).then(function () { renderCalStatus(warnings); });
-            }).catch(function (e) { status('Kalibrierung konnte nicht gespeichert werden: ' + e.message, true); }).then(function () {
-              st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
-            });
-          } catch (e) { st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; status('Kalibrierung fehlgeschlagen: ' + e.message, true); updateTakeButton(); }
-        }, 20);
+        Promise.resolve(st.rec.endTake()).then(kalibrierungAuswerten);
       }
     }, 100);
+    function kalibrierungAuswerten(take) {
+      if (take.durationS < total - 0.3) {
+        st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+        status('Kalibrierung abgebrochen (' + take.durationS.toFixed(1).replace('.', ',') + ' s von ' + total + ' s aufgenommen) — nicht übernommen.', true);
+        return;
+      }
+      $('cal-progress').textContent = 'Auswertung …';
+      setTimeout(function () {
+        try {
+          var info = st.rec.info, rec = K.analyseCalibration(take.samples, take.sampleRate, { deviceLabel: info.deviceLabel, deviceId: info.deviceId, createdAt: new Date().toISOString(), id: 'cal-' + uuid() });
+          rec.captureFlags = { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl };
+          // Gehört zur Kette (ketteAbweichung): ein Headset im Freisprechprofil liefert eine andere Rate.
+          rec.trackSampleRate = info.trackSampleRate || null;
+          /* Eine Kalibrierung, die keine Zahlen hergibt, darf nicht als Bezug gelten: sonst
+             rechnet jeder Take danach gegen einen Rauschboden, den es nicht gibt. */
+          var fehlt = [];
+          if (!isFinite(rec.floorDb)) fehlt.push('Rauschboden');
+          if (!isFinite(rec.levelDb) || !rec.nVoiced) fehlt.push('/a/ nicht erkannt');
+          if (!isFinite(rec.snrDb)) fehlt.push('SNR');
+          if (fehlt.length) {
+            st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+            status('Kalibrierung unbrauchbar (' + fehlt.join(', ') + ') — nicht übernommen. Lauter singen, näher ans Mikrofon, Ablauf wiederholen.', true);
+            return;
+          }
+          S.allCalibrations().then(function (all) {
+            var prev = all.filter(function (c) { return c.deviceLabel === rec.deviceLabel; })[0] || all[0] || null;
+            var warnings = K.compare(prev, rec);
+            st.cal = rec; st.calSession = true; st.rmsRing = [];
+            return S.putCalibration(rec).then(function () { renderCalStatus(warnings); });
+          }).catch(function (e) { status('Kalibrierung konnte nicht gespeichert werden: ' + e.message, true); }).then(function () {
+            st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+          });
+        } catch (e) { st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; status('Kalibrierung fehlgeschlagen: ' + e.message, true); updateTakeButton(); }
+      }, 20);
+    }
   }
 
   /* ---------- Take ---------- */
@@ -648,15 +650,27 @@
       return;
     }
     clearInterval(st.timer); st.taking = false; $('btn-take').textContent = 'Take starten'; $('btn-take').className = 'primary';
-    var take = st.rec.endTake();
-    if (take.durationS < st.settings.minTakeS) { status('Take zu kurz (' + take.durationS.toFixed(1) + ' s) — nicht gespeichert.', true); updateTakeButton(); return; }
     /* Alles, was zu diesem Take gehört, wird JETZT festgehalten. Die Analyse dauert Sekunden; wer
        währenddessen schon den nächsten Take beschriftet, eine neue Sitzung beginnt oder das Gerät
        wechselt, darf damit nicht den gerade gesungenen Take umschreiben. Danach sind die Felder
        frei für den nächsten Take. */
     var feld = takeAngaben(new Date());
     st.pendingCtx = null; $('take-label').value = ''; $('take-comment').value = '';
-    finishTake(take.samples, take.sampleRate, feld);
+    // Der Recorder schließt den Take mit kurzem Nachlauf ab (recorder.js endTake); bis dahin kein neuer Take.
+    st.busy = true; updateTakeButton();
+    Promise.resolve(st.rec.endTake()).then(function (take) {
+      if (take.durationS < st.settings.minTakeS) {
+        st.busy = false; updateTakeButton();
+        status('Take zu kurz (' + take.durationS.toFixed(1) + ' s) — nicht gespeichert.', true);
+        if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
+        return;
+      }
+      /* Signallücken gehören zum Take: Sie werden mit ihm gespeichert, die Analyse wertet jede Naht als Pause,
+         und der Take ist überall als lückenhaft gekennzeichnet (Befund N7). Ein Recorder, der nichts über
+         Lücken sagt, liefert null: unbekannt, nicht „keine“. */
+      feld.signalLuecken = take.luecken ? take.luecken : null;
+      finishTake(take.samples, take.sampleRate, feld);
+    });
   }
   function takeAngaben(jetzt) {
     var info = (st.rec && st.rec.info) || {}, cal = st.cal, s = st.settings;
@@ -670,6 +684,9 @@
     };
   }
   function fehlerText(e) { return (e && (e.message || e.name)) || String(e); }
+  // Stellen im Signal, an denen Abtastwerte fehlen und die Teile aneinanderstoßen (analysis.js o.naehteS).
+  function nahtStellen(luecken) { return (luecken || []).filter(function (l) { return l && l.art === 'naht' && typeof l.beiS === 'number'; }).map(function (l) { return l.beiS; }); }
+  function lueckeSumme(luecken) { if (!luecken) return null; var s = 0; luecken.forEach(function (l) { if (l && isFinite(l.dauerS)) s += l.dauerS; }); return s; }
   function wavRettenKnopf(box, text, name, blob) {
     var b = document.createElement('button'); b.className = 'danger'; b.textContent = text;
     b.addEventListener('click', function () { download(name, blob()); });
@@ -706,8 +723,10 @@
       vorabText = 'Aufnahme nicht vorab gesichert (' + fehlerText(e) + ') — bis die Analyse fertig ist, liegt sie nur im Speicher dieser Seite. Seite nicht schließen.';
       status(vorabText, true);
     });
+    var opts = {}; for (var ok in feld.opts) opts[ok] = feld.opts[ok];
+    opts.naehteS = nahtStellen(feld.signalLuecken);
     vorab.then(function () {
-      return A.analyseTake(samples, sr, feld.opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; });
+      return A.analyseTake(samples, sr, opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; });
     }).then(function (res) {
       return Promise.all([S.getMeta('nextCode', 0), S.allTakes()]).then(function (rr) {
         var n = A.nextCodeIndex(rr[1], rr[0]);
@@ -720,7 +739,9 @@
           timeLocal: wallClock(now), tzOffsetMin: tzOffsetMin(now),
           sitzung: feld.sitzung,
           vowelIntent: feld.vowelIntent, calibrationId: feld.calibrationId,
-          analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio
+          analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio,
+          // Signallücken: [] = keine, null = unbekannt (Recorder ohne Lückenerkennung). Summe in Sekunden für die CSV.
+          signalLuecken: feld.signalLuecken || null, signalLueckeS: lueckeSumme(feld.signalLuecken)
         };
         /* Take, Rahmenverlauf und WAV in einer Transaktion (storage.js putTakeSeries); die vorab gesicherte
            Aufnahme verlässt pending im selben Zug, ihr WAV bleibt (oder geht, wenn kein Audio gespeichert werden
@@ -803,7 +824,9 @@
   }
   function renderTakeResult(take) {
     var s = take.summary, per = s.perVowel || {}, f3u = CH.f3Unter(take);
+    var luecke = CH.lueckenText(take);
     $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
+      (luecke ? '<div class="notice warn"><span class="rust">' + CH.esc(luecke) + '</span></div>' : '') +
       '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
       // F0 und SHR max aus sicheren Rahmen; der Rest steht in Rost daneben (wie im Detail).
@@ -858,7 +881,8 @@
         if (!a) throw new Error('kein Audio gespeichert');
         return a.blob.arrayBuffer().then(function (buf) {
           var dec = W.decode(buf);
-          return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, abbrechen: abbrechen }, fortschritt);
+          // Die Nähte des Takes gelten auch bei jeder Neu-Analyse als Pause: das WAV enthält sie.
+          return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, abbrechen: abbrechen, naehteS: nahtStellen(t0.signalLuecken) }, fortschritt);
         });
       });
     }).then(function (res) {
@@ -964,6 +988,7 @@
       if (!b) return;
       var uv = unvergleichbar(take);
       if (uv) { status('Nicht angepinnt: Take ' + take.code + ' ist anders gerechnet als jetzt eingestellt (' + uv + '). Erst neu analysieren.', true); return; }
+      if (A.lueckenhaft(take)) { status('Nicht angepinnt: Take ' + take.code + ' hat eine Signallücke — eine unvollständige Aufnahme ist keine Referenz.', true); return; }
       st.refs[cls] = { d34: b.d34Med, takeId: take.id, code: take.code, label: take.label, date: take.createdAt, startS: b.startS, lenS: b.lenS, pinned: true };
       // Gleich neu bestimmen: computeRefs prüft den Pin wie jeden anderen (z. B. zweideutiges Bestsegment).
       S.setMeta('refs', st.refs).then(recomputeRefs).then(function () {

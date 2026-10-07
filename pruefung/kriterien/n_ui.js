@@ -8,7 +8,12 @@
    B1c: Export und Import sind während „Alle neu analysieren“ gesperrt, mit Hinweis.
    B1d: Meldungen stimmen mit dem Speicherzustand: Speicher reicht für Take und Verlauf, nicht für das WAV.
    B1e: Die Aufnahme liegt vor der Analyse in IndexedDB; nach dem Neuladen wird sie angeboten (fortsetzen, WAV
-        sichern, verwerfen); während Aufnahme und Analyse fragt die Seite vor dem Verlassen nach. */
+        sichern, verwerfen); während Aufnahme und Analyse fragt die Seite vor dem Verlassen nach.
+   B1f: recorder-worklet.js und recorder.js erkennen Signallücken (Eingang fehlt, Kontext steht, Anfang, Ende)
+        auf den Abtastwert genau und täuschen keine vor (spätes Stück, beschäftigter Hauptfaden beim Stopp).
+   B1g: analysis.js wertet eine Naht als Pause: kein gemessener Rahmen über der Naht, kein Sprung über sie hinweg.
+   B1h: Ein Take mit Signallücke wird gespeichert und überall als lückenhaft gekennzeichnet (Ergebnis, Liste,
+        Detail, Sprung-Kachel, CSV), ist keine Referenz, und die Neu-Analyse behält die Nähte. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto');
 const { Blob } = require('buffer');
@@ -481,6 +486,198 @@ module.exports = async function (H) {
       + ' | fortgesetzt: ' + (t ? t.code + ' „' + t.label + '“ „' + t.comment + '“ Stelle ' + (t.sitzung && t.sitzung.position) + ' Audio ' + hatAudio + ' Verlauf ' + !!serie : 'kein Take') + ', Anzeige weg=' + box().hidden
       + ' | verworfen=' + verworfen + ' | Version 1 → 2: ' + umgestellt);
   } catch (e) { check('B1e', 'Ablauf Neuladen während der Analyse läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1f · Lückenerkennung in recorder-worklet.js und recorder.js ---------- */
+  try {
+    const bad = [], belege = [];
+    // Worklet: process() mit 128er-Quanten; fehlt der Eingang, geht das angefangene Stück sofort ab.
+    {
+      const posted = [], sbw = { Date: { now: () => 1000 }, registerProcessor: (n, k) => { sbw.Klasse = k; }, Reflect, Object, Float32Array, isFinite };
+      sbw.AudioWorkletProcessor = function () { this.port = { postMessage: (d) => posted.push(d) }; };
+      vm.createContext(sbw);
+      vm.runInContext(quelle('recorder-worklet.js'), sbw, { filename: 'recorder-worklet.js' });
+      const proc = new sbw.Klasse();
+      const quant = k => { const a = new Float32Array(128); for (let i = 0; i < 128; i++) a[i] = k * 128 + i; return a; };
+      for (let k = 0; k < 40; k++) {
+        sbw.currentFrame = k * 128;
+        if (k >= 20 && k < 25) proc.process([[]]); else proc.process([[quant(k)]]);   // Quanten 20–24: kein Eingang
+      }
+      const ok = posted.every(m => m && m.s instanceof Float32Array && typeof m.f === 'number' && typeof m.t === 'number')
+        && posted.every(m => m.s.every((v, i) => v === m.f + i));   // jeder Wert sitzt auf seinem Rahmen
+      const fr = posted.map(m => m.f + '+' + m.s.length);
+      if (!ok || posted.length !== 2 || posted[0].f !== 0 || posted[0].s.length !== 2048 || posted[1].f !== 2048 || posted[1].s.length !== 512) bad.push('Worklet: ' + (posted.length ? fr.join(' ') : 'nichts gesendet') + (posted[0] && !(posted[0].s) ? ' (alte Form ohne Rahmen und Uhrzeit)' : ''));
+      // Nach der Lücke beginnt das nächste Stück am neuen Rahmen.
+      for (let k = 40; k < 56; k++) { sbw.currentFrame = k * 128; proc.process([[quant(k)]]); }
+      const letzt = posted[posted.length - 1];
+      if (!letzt || letzt.f !== 25 * 128 || letzt.s.length !== 2048 || !letzt.s.every((v, i) => v === letzt.f + i)) bad.push('Worklet nach der Lücke: ' + (letzt ? letzt.f + '+' + (letzt.s ? letzt.s.length : '?') : 'nichts'));
+      belege.push('Worklet ' + posted.map(m => m.f + '+' + (m.s ? m.s.length : '?')).join(' '));
+    }
+    // Recorder: nachgebildete Audiokette; die Stücke kommen mit Rahmen und Uhrzeit, wie das Worklet sie schickt.
+    const SRr = 48000, BL = 2048;
+    async function lauf(plan, opt) {
+      opt = opt || {};
+      let jetzt = 1e6, port = null;
+      const sbr = { Date: { now: () => jetzt }, setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: h => clearTimeout(h), Float32Array, isFinite, Math, Promise };
+      const knoten = () => ({ connect() { }, disconnect() { } });
+      sbr.navigator = { mediaDevices: { getUserMedia: () => Promise.resolve({ getAudioTracks: () => [{ label: 'Prüfmikrofon', getSettings: () => ({ deviceId: 'x', sampleRate: SRr }), stop() { } }], getTracks: () => [] }) } };
+      sbr.AudioContext = function () { this.sampleRate = SRr; this.state = 'running'; this.destination = {}; this.audioWorklet = { addModule: () => Promise.resolve() }; };
+      sbr.AudioContext.prototype = { createMediaStreamSource: knoten, createGain: () => Object.assign(knoten(), { gain: { value: 1 } }), resume: () => Promise.resolve(), close: () => Promise.resolve() };
+      sbr.AudioWorkletNode = function () { const n = knoten(); n.port = { onmessage: null }; port = n.port; return n; };
+      sbr.self = sbr;
+      vm.createContext(sbr);
+      vm.runInContext(quelle('recorder.js'), sbr, { filename: 'recorder.js' });
+      const rec = sbr.VARERECORDER.createRecorder();
+      await rec.start(null);
+      const schick = (f, t, n) => { const a = new Float32Array(n || BL); port.onmessage({ data: opt.alt ? a : { s: a, f, t } }); };
+      jetzt = 2e6; rec.beginTake();
+      const r = await plan({ schick, uhr: v => { if (v != null) jetzt = v; return jetzt; }, rec });
+      return r;
+    }
+    const ms = n => n / SRr * 1000, T0 = 2e6;
+    // Sauber: 3 s am Stück, Stopp mitten im Stück danach.
+    const sauber = await lauf(async ({ schick, uhr, rec }) => {
+      let f = 96000;
+      for (let k = 0; k < 70; k++) { f += BL; uhr(T0 + ms((k + 1) * BL) + 3); schick(f - BL, uhr()); }
+      uhr(T0 + ms(70 * BL) + 20); const p = rec.endTake(); uhr(T0 + ms(71 * BL) + 3); schick(f, uhr()); f += BL;
+      return p;
+    });
+    // Eingang fehlt 1,5 s: Rahmen springen (wie das Worklet sie dann meldet).
+    const ohneEingang = await lauf(async ({ schick, uhr, rec }) => {
+      let f = 0, wand = T0;
+      for (let k = 0; k < 40; k++) { wand += ms(BL); uhr(wand + 2); schick(f, uhr()); f += BL; }
+      f += 72000; wand += 1500;
+      for (let k = 0; k < 40; k++) { wand += ms(BL); uhr(wand + 2); schick(f, uhr()); f += BL; }
+      uhr(wand + 10); const p = rec.endTake(); wand += ms(BL); uhr(wand + 2); schick(f, uhr());
+      return p;
+    });
+    // Kontext steht 2 s: Rahmen lückenlos, die Uhr springt.
+    const angehalten = await lauf(async ({ schick, uhr, rec }) => {
+      let f = 0, wand = T0;
+      for (let k = 0; k < 40; k++) { wand += ms(BL); uhr(wand + 2); schick(f, uhr()); f += BL; }
+      wand += 2000;
+      for (let k = 0; k < 40; k++) { wand += ms(BL); uhr(wand + 2); schick(f, uhr()); f += BL; }
+      uhr(wand + 10); const p = rec.endTake(); wand += ms(BL); uhr(wand + 2); schick(f, uhr());
+      return p;
+    });
+    // Audiofaden hängt 300 ms und holt auf: kein Verlust, keine Lücke. Beim Stopp hängt der Hauptfaden:
+    // die letzten Stücke kommen erst nach dem Stopp an, gehören aber dazu.
+    const wandVon = k => T0 + ms((k + 1) * BL) + 2;
+    const aufgeholt = await lauf(async ({ schick, uhr, rec }) => {
+      let f = 0;
+      for (let k = 0; k < 76; k++) { const t = (k >= 30 && k < 37) ? Math.max(wandVon(k), wandVon(29) + 300) : wandVon(k); uhr(t); schick(f, t); f += BL; }
+      uhr(wandVon(79) + 5); const p = rec.endTake();
+      // Stücke 76–79 vor dem Stopp abgeschickt, erst danach ausgeliefert; Stück 80 nach dem Stopp abgeschickt (nur sein Anfang zählt).
+      for (let k = 76; k < 81; k++) { uhr(wandVon(79) + 400); schick(f, wandVon(k)); f += BL; }
+      return p;
+    });
+    const sollAufgeholt = 80 * BL + (BL - Math.ceil((wandVon(80) - (wandVon(79) + 5)) / 1000 * SRr));
+    // Signal 1 s vor dem Stopp weg, nach dem Stopp kommt nichts mehr: Lücke am Ende (nach dem Nachlauf).
+    const endeWeg = await lauf(async ({ schick, uhr, rec }) => {
+      let f = 0, wand = T0;
+      for (let k = 0; k < 50; k++) { wand += ms(BL); uhr(wand + 2); schick(f, uhr()); f += BL; }
+      uhr(wand + 1000); return rec.endTake();
+    });
+    // Ältere Worklet-Datei ohne Rahmen und Uhrzeit: Ankunftszeit zählt; 2 s ohne Stücke mitten im Take.
+    const alt = await lauf(async ({ schick, uhr, rec }) => {
+      let wand = T0;
+      for (let k = 0; k < 40; k++) { wand += ms(BL); uhr(wand + 2); schick(); }
+      wand += 2000;
+      for (let k = 0; k < 40; k++) { wand += ms(BL); uhr(wand + 2); schick(); }
+      uhr(wand + 10); const p = rec.endTake(); uhr(wand + ms(BL) + 2); schick();
+      return p;
+    }, { alt: true });
+    const z = r => r && r.luecken ? r.luecken.map(l => l.art + '@' + l.beiS.toFixed(3) + '/' + l.dauerS.toFixed(3)).join(',') || 'keine' : 'keine Angabe';
+    const eine = (r, art, bei, dauer, tol) => !!(r && r.luecken && r.luecken.length === 1 && r.luecken[0].art === art && Math.abs(r.luecken[0].beiS - bei) < 1e-6 + (tol || 0) && Math.abs(r.luecken[0].dauerS - dauer) <= (tol || 1e-6));
+    if (!(sauber.luecken && sauber.luecken.length === 0 && sauber.samples.length > 70 * BL && sauber.samples.length <= 71 * BL)) bad.push('sauber: ' + z(sauber) + ', ' + sauber.samples.length + ' Werte');
+    if (!eine(ohneEingang, 'naht', 40 * BL / SRr, 1.5)) bad.push('Eingang fehlt 1,5 s: ' + z(ohneEingang));
+    if (!eine(angehalten, 'naht', 40 * BL / SRr, 2.0, 0.01)) bad.push('Kontext steht 2 s: ' + z(angehalten));
+    if (!(aufgeholt.luecken && aufgeholt.luecken.length === 0 && aufgeholt.samples.length === sollAufgeholt)) bad.push('spätes Stück und Hänger beim Stopp: ' + z(aufgeholt) + ', ' + aufgeholt.samples.length + ' statt ' + sollAufgeholt + ' Werte');
+    if (!eine(endeWeg, 'ende', 50 * BL / SRr, 1.0, 0.01)) bad.push('Signal am Ende weg: ' + z(endeWeg));
+    if (!eine(alt, 'naht', 40 * BL / SRr, 2.0, 0.01)) bad.push('ohne Rahmenzähler: ' + z(alt));
+    belege.push('sauber ' + z(sauber), 'Eingang fehlt ' + z(ohneEingang), 'Kontext steht ' + z(angehalten), 'aufgeholt ' + z(aufgeholt), 'Ende ' + z(endeWeg), 'ohne Rahmen ' + z(alt));
+    check('B1f', 'Signallücken erkannt (Eingang fehlt, Kontext steht, Ende, ohne Rahmenzähler) auf den Abtastwert bzw. 10 ms genau; keine vorgetäuscht (spätes Stück, Hänger beim Stopp); das Worklet trennt Stücke an jeder Lücke',
+      !bad.length, bad.length ? bad.join(' | ') : belege.join(' | '));
+  } catch (e) { check('B1f', 'Ablauf Lückenerkennung läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1g · Naht als Pause in analysis.js ---------- */
+  // /a/ auf A3 3 s, 0,5 s Atempause, /a/ auf D3 3 s (7 HT), Raumrauschen; 2 s ab 2,5 s fehlen: die Naht liegt über der
+  // Pause. F3 über dem Mindestwert, damit der Take ein Bestsegment hat (B1h: keine Referenz trotz Bestsegment).
+  const vok = (f0, d) => { const v = D.synthVowel(f0, [700, 1200, 2600, 3400, 4200], BW5, d, SR, { gain: 0.3 }); const r = Math.round(0.03 * SR); for (let i = 0; i < r; i++) { v[i] *= i / r; v[v.length - 1 - i] *= i / r; } return v; };
+  const roh = concat([noise(SR / 2, 2e-4, 21), vok(220, 3), noise(SR / 2, 2e-4, 22), vok(146.83, 3), noise(SR / 2, 2e-4, 23)]);
+  { const z = noise(roh.length, 2e-4, 24); for (let i = 0; i < roh.length; i++) roh[i] += z[i]; }
+  const NAHT = concat([roh.subarray(0, Math.round(2.5 * SR)), roh.subarray(Math.round(4.5 * SR))]);
+  try {
+    const A = H.A, F = A.FLAG;
+    const mit = await A.analyseTake(Float32Array.from(NAHT), SR, { hopS: 0.05, naehteS: [2.5] });
+    const ohne = await A.analyseTake(Float32Array.from(NAHT), SR, { hopS: 0.05 });
+    const rand = Math.max.apply(null, D.WINDOWS.concat([D.MAIN_WINDOW])) / 2;
+    let ueber = 0, gemessen = 0, markiert = 0, segUeber = 0;
+    for (let i = 0; i < mit.series.t.length; i++) {
+      const anNaht = Math.abs(mit.series.t[i] - 2.5) < rand;
+      if (anNaht) { ueber++; if ((mit.series.flags[i] & F.VOICED) || mit.series.gate[i] !== 0 || isFinite(mit.series.f1[i])) gemessen++; if (F.NAHT && (mit.series.flags[i] & F.NAHT)) markiert++; }
+    }
+    (mit.summary.segments || []).forEach(sg => { if (sg.startS < 2.5 && sg.startS + sg.lenS > 2.5) segUeber++; });
+    const spM = mit.summary.spruenge, spO = ohne.summary.spruenge;
+    const ueberNaht = spM.liste.filter(e => e.startS - 0.2 < 2.5 && e.startS + e.dauerS > 2.5).length;
+    check('B1g', 'Naht als Pause: kein Rahmen, dessen Fenster die Naht überdeckt, ist gemessen oder gewertet (alle als Naht markiert), kein Segment und kein Tonsprung über die Naht',
+      ueber > 0 && gemessen === 0 && markiert === ueber && segUeber === 0 && spM.gehalten === 0 && ueberNaht === 0,
+      'Rahmen an der Naht ' + ueber + ', davon gemessen ' + gemessen + ', markiert ' + markiert + ' | Segmente über der Naht ' + segUeber + ' | gehaltene Sprünge mit Nahtangabe ' + spM.gehalten
+      + ' (ohne Nahtangabe ' + spO.gehalten + (spO.liste[0] ? ': ' + spO.liste[0].halbtoene.toFixed(1) + ' HT bei ' + spO.liste[0].startS.toFixed(2) + ' s' : '') + ')');
+  } catch (e) { check('B1g', 'Ablauf Naht in der Analyse läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1h · Take mit Signallücke durch die Seite ---------- */
+  try {
+    const luecke = [{ beiS: 2.5, dauerS: 2.0, art: 'naht' }];
+    let liefer = () => ({ samples: Float32Array.from(NAHT), sampleRate: SR, durationS: NAHT.length / SR, luecken: luecke });
+    const br = idbNeu(), p = await seiteNeu(br, () => liefer(), SR);
+    p.kalibriert('cal-1'); await p.mikrofon();
+    p.el('take-label').value = 'mit Lücke';
+    const L = await p.take();
+    const ergebnis = p.el('take-result').innerHTML;
+    // Referenzen, solange L der einzige Take ist: Sein Bestsegment wäre die Zielmarke, gälte die Lücke nicht.
+    const refs = await p.S.getMeta('refs', {});
+    liefer = () => Object.assign(normal(), { luecken: [] });
+    p.el('take-label').value = 'ohne Lücke';
+    const N0 = await p.take();
+    // Ein Take von früher, ohne Lückenprüfung.
+    const frueher = Object.assign(await p.S.getTake(N0.id), { id: 'frueher', code: 'Q', signalLuecken: undefined, signalLueckeS: undefined });
+    delete frueher.signalLuecken; delete frueher.signalLueckeS; await p.S.putTake(frueher);
+    const refAusL = Object.keys(refs).filter(c => refs[c] && refs[c].takeId === L.id);
+    const bestL = Object.keys((L.summary && L.summary.perVowel) || {}).filter(c => L.summary.perVowel[c].bestSegment);
+    // Liste
+    p.sb.VAREAPP.refreshChronik(); await p.warte(() => /Signallücke/.test(p.el('takes-list').innerHTML) || p.el('takes-list').innerHTML.length > 200, 3000);
+    const liste = p.el('takes-list').innerHTML, zeile = id => { const m = new RegExp('<tr data-id="' + id + '">([\\s\\S]*?)</tr>').exec(liste); return m ? m[1] : ''; };
+    const listeOk = /class="tag rust"[^>]*>Signallücke</.test(zeile(L.id)) && !/Signallücke/.test(zeile(N0.id)) && !/Signallücke/.test(zeile('frueher'));
+    // Detail
+    p.geheZu('#/take/' + L.id);
+    await p.warte(() => p.el('take-detail').innerHTML.indexOf('<h2>' + L.code + ' ') >= 0, 3000);
+    const det = p.el('take-detail').innerHTML, ks = U.kacheln(det), spr = ks.find(k => /^Tonsprünge/.test(k.k)) || {};
+    const detailOk = /class="small rust">Signal unterbrochen: bei 2,5 s fehlen 2,0 s/.test(det) && /\bunsure\b/.test(spr.klasse || '') && !/data-pin=/.test(det);
+    // Anpinnen verweigert
+    if (bestL.length) p.sb.VAREAPP.handlers.pinRef(bestL[0], L);
+    await new Promise(r => setTimeout(r, 30));
+    const pinMeldung = p.status(), refs2 = await p.S.getMeta('refs', {});
+    // CSV
+    const csv = p.sb.VARECSV.takesToCsv([await p.S.getTake(L.id), await p.S.getTake(N0.id), await p.S.getTake('frueher')], 'standard').split(/\r?\n/);
+    const kopf = csv[0].split(','), spalte = (zeilenNr) => csv[zeilenNr].split(',')[kopf.indexOf('signal_gap_s')];
+    const csvOk = spalte(1) === '2.00' && spalte(2) === '0.00' && spalte(3) === '-99.00';
+    // Neu-Analyse behält die Nähte
+    p.st().settings.hopS = 0.05;
+    p.sb.VAREAPP.handlers.reanalyse(await p.S.getTake(L.id));
+    await p.warte(() => !p.st().busy && /Neu analysiert|fehlgeschlagen/.test(p.status()), 30000);
+    const L2 = await p.S.getTake(L.id), serie2 = await p.S.getSeries(L.id);
+    let naehte2 = 0; for (let i = 0; i < serie2.t.length; i++) if (serie2.flags[i] & 8192) naehte2++;
+    const neuOk = (L2.history || []).length === 1 && L2.summary.spruenge.gehalten === 0 && naehte2 > 0;
+    check('B1h', 'Take mit Signallücke: gespeichert mit Stelle und Dauer, Naht als Pause (0 Sprünge), in Rost in Ergebnis, Liste und Detail, Sprung-Kachel unsicher, keine Referenz und nicht anpinnbar, CSV signal_gap_s 2,00 (ohne Lücke 0,00, früher −99), Neu-Analyse behält die Nähte',
+      !!L && L.signalLueckeS === 2 && L.signalLuecken && L.signalLuecken.length === 1 && L.summary.spruenge.gehalten === 0 && /class="rust">Signal unterbrochen: bei 2,5 s fehlen 2,0 s/.test(ergebnis)
+      && N0 && N0.signalLueckeS === 0 && !/Signal unterbrochen/.test(p.el('take-result').innerHTML)
+      && bestL.length > 0 && refAusL.length === 0 && Object.keys(refs2).every(c => !refs2[c] || refs2[c].takeId !== L.id) && /Signallücke/.test(pinMeldung)
+      && listeOk && detailOk && csvOk && neuOk,
+      'Take ' + (L ? L.code + ' Lücke ' + L.signalLueckeS + ' s, gehalten ' + L.summary.spruenge.gehalten : 'fehlt') + ' | ohne Lücke ' + (N0 && N0.signalLueckeS) + ' | Ergebnis Rost=' + /class="rust">Signal unterbrochen/.test(ergebnis)
+      + ' | Bestsegmente ' + bestL.join(',') + ', als Referenz ' + (refAusL.join(',') || 'keine') + ' | Anpinnen: „' + pinMeldung.slice(0, 70) + '“ | Liste=' + listeOk + ' Detail=' + detailOk + ' (Sprung-Kachel ' + (spr.klasse || '?') + ')'
+      + ' | CSV ' + [1, 2, 3].map(spalte).join('/') + ' | Neu-Analyse: Historie ' + (L2.history || []).length + ', gehalten ' + L2.summary.spruenge.gehalten + ', Nahtrahmen ' + naehte2);
+    p.schliessen();
+  } catch (e) { check('B1h', 'Ablauf Take mit Signallücke läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

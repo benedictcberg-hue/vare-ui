@@ -199,7 +199,8 @@
       var s = t.summary || {}, old = t.analysis && t.analysis.kernelVersion !== D.VERSION, thr = f3Schwelle(t), f3u = f3Unter(t);
       var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(t) : '';
       h += '<tr data-id="' + esc(t.id) + '">' +
-        '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span></td>' +
+        '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span>'
+          + (A.lueckenhaft(t) ? ' <span class="tag rust" title="' + esc(lueckenText(t)) + '">Signallücke</span>' : '') + '</td>' +
         '<td class="mono">' + esc(t.vowelIntent || '–') + ' / ' + esc(s.vowel && s.vowel.dominant || '–') + '</td>' +
         '<td class="num">' + (s.f0 ? fmt(s.f0.med) + ' ' + esc(s.f0.note) + listeUnsicher(s.f0UnsureShare, 'Grundton unsicher') : '–') + '</td>' +
         '<td><canvas class="bars" height="28"></canvas></td>' +
@@ -345,11 +346,24 @@
     };
     var d34 = 'ΔF3–4 ' + v('d34') + (isFinite(series.score[i]) ? ' (gewertet)' : '');
     d34 = (stimmhaft && !(fl & F.D34VALID)) ? rost(d34 + '?') : esc(d34);
+    // Ein Rahmen an einer Naht ist keine Pause, sondern eine Stelle ohne Signal: sagen, nicht still „Pause“.
+    if (F.NAHT && (fl & F.NAHT)) return esc('t ' + v('t', 2) + ' s · ') + rost('Signallücke: Rahmen an einer Naht, nicht gemessen, als Pause gewertet');
     return esc('t ' + v('t', 2) + ' s · ' + ['Pause', 'Übergang', 'stabil'][series.gate[i]] + (series.cls[i] >= 0 ? ' /' + V.CENTROIDS[series.cls[i]].cls + '/' : '')) + ' · ' + f0 +
       ' · ' + [0, 1, 2, 3, 4].map(formant).join(' ') + ' · ' + d34 + esc(' · SFR ' + v('sfr', 1)) +
       ' · ' + shr + esc(' · CPP ' + v('cpp', 1)) + ' · ' + h12 + esc(' · ' + v('rms', 1) + ' dBFS');
   }
 
+  /* Signallücken eines Takes als Satz (app.js signalLuecken, recorder.js): wo, wie lang, was daraus folgt.
+     '' ohne Lücke; ältere Takes ohne Prüfung haben keine Angabe und bekommen keinen Satz. */
+  function sek(x) { return zahl(x) ? fmt(x, 1).replace('.', ',') + ' s' : '? s'; }
+  function lueckenText(take) {
+    var l = take && take.signalLuecken;
+    if (!l || !l.length) return '';
+    var teile = l.map(function (x) {
+      return x.art === 'anfang' ? 'am Anfang fehlen ' + sek(x.dauerS) : x.art === 'ende' ? 'am Ende fehlen ' + sek(x.dauerS) : 'bei ' + sek(x.beiS) + ' fehlen ' + sek(x.dauerS);
+    });
+    return 'Signal unterbrochen: ' + teile.join(', ') + '. Die Teile stoßen ohne Pause aneinander; jede Naht gilt als Pause. Take lückenhaft, keine Referenz.';
+  }
   /* Bestes Segment eines Vokals; ein Segment, dessen Rahmen überwiegend zweideutig zugeordnet sind,
      wird nicht Bestsegment (analysis.js) — dann sagen, warum hier keins steht. */
   function bestSegmentText(k, pv) {
@@ -396,7 +410,9 @@
       /* Gezählt wird nur Weite und Dauer. Ein legato gesungener Melodiesprung erfüllt dieselbe
          Bedingung wie ein Registerbruch; ob es einer ist, zeigt erst ein Qualitätseinbruch am
          Übergang. Deshalb neutrale Namen, nicht „Registerwechsel“. */
-      cell('Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms', s.spruenge ? fmt(s.spruenge.gehalten) + ' (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' /s)' : '– (ältere Auswertung)', false, !!(s.spruenge && s.spruenge.gehalten > 0)) +
+      /* Bei einer Signallücke ist offen, was in der Lücke gesungen wurde: die Zahl gilt nur für das Aufgenommene. */
+      cell('Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms', (s.spruenge ? fmt(s.spruenge.gehalten) + ' (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' /s)' : '– (ältere Auswertung)') + (A.lueckenhaft(take) ? ' — nur das Aufgenommene, Take lückenhaft' : ''),
+        A.lueckenhaft(take), !!(s.spruenge && s.spruenge.gehalten > 0)) +
       cell('kurze Kanten unter 90 ms', s.spruenge ? fmt(s.spruenge.kante) + ' (λ ' + fmt(s.spruenge.lambdaKante, 3) + ' /s)' : '– (ältere Auswertung)') +
       '</div>';
   }
@@ -449,6 +465,7 @@
       '<h2>' + esc(take.code) + ' <span id="d-label-view">' + esc(take.label) + '</span></h2>' +
       '<div class="small muted">' + esc(dateShort(take.createdAt)) + ' · ' + esc(take.deviceLabel || '') + ' · ' + fmt(take.sampleRate) + ' Hz · Kern ' + esc(take.analysis && take.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">älterer Kern</span>' : '') + (s.floorSource === 'calibration' ? ' · kalibriert' : ' · <span class="rust">Rauschboden ' + (s.floorSource === 'unknown' ? 'unbekannt' : 'geschätzt') + '</span>') + '</div>' +
       '<div class="small">' + kontextZeile(take) + '</div>' +
+      (A.lueckenhaft(take) ? '<div class="small rust">' + esc(lueckenText(take)) + '</div>' : '') +
       '<div class="row"><label>Bezeichnung <input type="text" id="d-label" value="' + esc(take.label) + '" size="24"></label>' +
       '<label>Vokalabsicht <select id="d-intent">' + intents.map(function (v) { return '<option value="' + esc(v) + '"' + (v === (take.vowelIntent || '') ? ' selected' : '') + '>' + (v ? '/' + esc(v) + '/' : '–') + '</option>'; }).join('') + '</select></label>' +
       '<label>Einsing-Status <select id="d-warmup">' +
@@ -461,6 +478,7 @@
       '<div class="panel"><canvas id="d-lanes" height="420"></canvas><div id="d-hover" class="mono small muted hover-zeile">Maus über die Spuren bewegen.</div></div>' +
       '<div class="panel actions"><button id="d-frames">Rahmen-CSV</button><button id="d-row">CSV-Zeile</button>' + (hasAudio ? '<button id="d-wav">WAV</button><button id="d-re">Neu analysieren (Kern ' + esc(D.VERSION) + ')</button>' : '<span class="small muted">kein Audio gespeichert — Neu-Analyse nicht möglich</span> ') +
       (uv ? '<span class="small muted">Nicht als Referenz wählbar — anders gerechnet als jetzt eingestellt: ' + esc(uv) + '.</span> '
+        : A.lueckenhaft(take) ? '<span class="small muted">Nicht als Referenz wählbar — Signallücke im Take.</span> '
         : Object.keys(s.perVowel || {}).map(function (k) { return s.perVowel[k].bestSegment ? '<button data-pin="' + esc(k) + '">Als Referenz für /' + esc(k) + '/ anpinnen</button>' : ''; }).join('')) +
       '<button id="d-del" class="danger">Take löschen</button></div>' +
       (take.history && take.history.length ? '<div class="panel small muted">Frühere Auswertungen: ' + take.history.map(historieText).join(', ')
@@ -488,5 +506,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

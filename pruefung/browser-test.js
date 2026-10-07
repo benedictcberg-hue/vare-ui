@@ -152,6 +152,9 @@ const WAV = path.join(SP, 'fake.wav');
     }
     const hasAudio = await page.evaluate(id => VARESTORE.hasAudio(id), takes[0].id);
     check('Audio (WAV) mitgespeichert', hasAudio === true);
+    // Keine vorgetäuschte Lücke: Über das echte AudioWorklet kommt der Take lückenlos an.
+    check('Take ohne Aussetzer: keine Signallücke erkannt (Rahmenzähler und Uhrzeit aus dem AudioWorklet)', Array.isArray(takes[0].signalLuecken) && takes[0].signalLuecken.length === 0 && takes[0].signalLueckeS === 0,
+      JSON.stringify({ luecken: takes[0].signalLuecken, summe: takes[0].signalLueckeS }));
     await page.screenshot({ path: path.join(SP, 'shot-result.png'), fullPage: true });
     // Prüfsignal
     await page.click('#btn-pruef');
@@ -441,12 +444,26 @@ const WAV = path.join(SP, 'fake.wav');
     // Wirft ein Schritt (fehlt etwa die Anzeige), reißen die offenen Prüfungen dieses Abschnitts, und der Durchgang läuft weiter.
     const NEULADEN_NAMEN = ['Datenbank Version 1 → 2: die vorhandene Chronik bleibt, der Laden für unvollendete Analysen ist da',
       'Neuladen während der Analyse: Aufnahme vor der Analyse in IndexedDB, Rückfrage beim Verlassen, danach als unvollendete Analyse angeboten',
-      'Fortsetzen nach dem Neuladen: derselbe Take mit Bezeichnung, Stelle in der Sitzung, WAV und Rahmenverlauf; nichts mehr offen'];
+      'Fortsetzen nach dem Neuladen: derselbe Take mit Bezeichnung, Stelle in der Sitzung, WAV und Rahmenverlauf; nichts mehr offen',
+      'Aussetzer von 1,5 s mitten im Take: als Signallücke erkannt, Take gespeichert und in Ergebnis, Detail und CSV als lückenhaft gekennzeichnet'];
     const neuladenErledigt = [], neuladenCheck = (k, ok, d) => { neuladenErledigt.push(k); check(NEULADEN_NAMEN[k], ok, d); };
     let ctx4 = null;
     try {
       ctx4 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
       await ctx4.route('https://api.github.com/**', korpusRoute);
+      // Aussetzer nachstellen: Solange window.__drop gilt, kommen die Nachrichten des AudioWorklets nicht an (wie ein
+      // übergelaufener Eingangspuffer bei einem Gerätewechsel); der Kontext läuft weiter.
+      await ctx4.addInitScript(() => {
+        window.__drop = false;
+        const Orig = window.AudioWorkletNode;
+        if (!Orig) return;
+        window.AudioWorkletNode = function (c, name, opts) {
+          const node = new Orig(c, name, opts), port = node.port; let h = null;
+          Object.defineProperty(port, 'onmessage', { configurable: true, get() { return h; }, set(fn) { h = fn; port.addEventListener('message', ev => { if (!window.__drop) h.call(port, ev); }); port.start(); } });
+          return node;
+        };
+        window.AudioWorkletNode.prototype = Orig.prototype;
+      });
       const p4 = await ctx4.newPage();
       p4.on('pageerror', e => errors.push(String(e && e.stack || e)));
       // Rückfragen beim Verlassen werden mitgeschrieben und abgelehnt, außer der Ablauf erlaubt das Verlassen ausdrücklich.
@@ -498,6 +515,32 @@ const WAV = path.join(SP, 'fake.wav');
       const nach = await p4.evaluate(id => Promise.all([VARESTORE.getTake(id), VARESTORE.allPending(), VARESTORE.hasAudio(id), VARESTORE.getSeries(id)]).then(r => ({ code: r[0] && r[0].code, label: r[0] && r[0].label, pos: r[0] && r[0].sitzung && r[0].sitzung.position, pending: r[1].length, audio: r[2], serie: !!r[3], angebotWeg: document.getElementById('offene-analysen').hidden, ergebnis: document.getElementById('take-result').textContent.slice(0, 40) })), vor.pending[0] || '');
       neuladenCheck(2,
         nach.label === 'Neuladen-Probe' && nach.code === 'D' && nach.pos === 1 && nach.pending === 0 && nach.audio && nach.serie && nach.angebotWeg && /Gespeichert als D/.test(nach.ergebnis), JSON.stringify(nach));
+      // Aussetzer: 2 s nach dem Start kommen 1,5 s lang keine Abtastwerte an, dann wieder.
+      await p4.click('#btn-mic');
+      await p4.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
+      await p4.waitForTimeout(500);
+      await p4.fill('#take-label', 'Aussetzer-Probe');
+      await p4.click('#btn-take');
+      await p4.waitForTimeout(2000); await p4.evaluate(() => { window.__drop = true; });
+      await p4.waitForTimeout(1500); await p4.evaluate(() => { window.__drop = false; });
+      await p4.waitForTimeout(1500); await p4.click('#btn-take');
+      await p4.waitForFunction(() => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Aussetzer-Probe')), null, { timeout: 60000, polling: 300 }).catch(() => { });
+      await p4.waitForFunction(() => !VAREAPP.state.busy, null, { timeout: 30000 }).catch(() => { });
+      const lk = await p4.evaluate(() => VARESTORE.allTakes().then(ts => { const t = ts.find(x => x.label === 'Aussetzer-Probe'); if (!t) return null;
+        const csv = VARECSV.takesToCsv([t], 'standard').split(/\r?\n/), kopf = csv[0].split(','), wert = csv[1].split(',')[kopf.indexOf('signal_gap_s')];
+        const rost = document.querySelector('#take-result .rust');
+        return { id: t.id, luecken: t.signalLuecken, summe: t.signalLueckeS, csv: wert, ergebnis: rost ? { text: rost.textContent, farbe: getComputedStyle(rost).color } : null }; }));
+      let detailZeile = null;
+      if (lk) {
+        await p4.evaluate(id => { location.hash = '#/take/' + id; }, lk.id);
+        await p4.waitForFunction(() => document.querySelector('#take-detail .grid'), null, { timeout: 10000 }).catch(() => { });
+        detailZeile = await p4.evaluate(() => { const e = document.querySelector('#take-detail .small.rust'); return e ? { text: e.textContent, farbe: getComputedStyle(e).color } : null; });
+      }
+      const eineNaht = !!lk && Array.isArray(lk.luecken) && lk.luecken.length === 1 && lk.luecken[0].art === 'naht' && lk.luecken[0].dauerS > 1.3 && lk.luecken[0].dauerS < 1.8;
+      neuladenCheck(3,
+        eineNaht && Math.abs(Number(lk.csv) - lk.summe) < 0.006 && !!lk.ergebnis && lk.ergebnis.farbe === 'rgb(168, 90, 60)' && /Signal unterbrochen/.test(lk.ergebnis.text)
+        && !!detailZeile && detailZeile.farbe === 'rgb(168, 90, 60)' && /Signal unterbrochen/.test(detailZeile.text),
+        JSON.stringify({ luecken: lk && lk.luecken, csv: lk && lk.csv, ergebnis: lk && lk.ergebnis, detail: detailZeile }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
     } catch (e) { NEULADEN_NAMEN.forEach((n, k) => { if (neuladenErledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
     if (ctx4) await ctx4.close();
 
