@@ -68,7 +68,10 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    Referenz je Vokalklasse aus der eigenen Chronik, nie über Vokale hinweg verglichen.
 2. **Session-Recorder mit Chronik.** Take aufnehmen, Analyse im 10-ms-Raster mit Ordnungs-
    und Fensterlängensweep, Zusammenfassung und Rahmenverlauf und WAV in IndexedDB,
-   CSV-Export, JSON-Sicherung und -Import, Neu-Analyse mit neuerem Kern.
+   CSV-Export, JSON-Sicherung und -Import, Neu-Analyse mit neuerem Kern — einzeln oder als
+   „Alle neu analysieren“ für jeden Take mit gespeichertem Audio (abbrechbar; Takes ohne Audio werden
+   genannt und bleiben „anders gerechnet“). Verglichen und als Referenz genutzt werden nur Takes mit
+   gleicher Rechenweise (Kernversion, Zusammenfassung, Gatter, Rahmenabstand, Streuungsgrenze).
 3. **Kalibrierpflicht.** 5 s Stille, 3 s /a/, 1 s Ausklang vor dem ersten Take. Rauschboden,
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
