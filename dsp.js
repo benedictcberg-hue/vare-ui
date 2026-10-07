@@ -389,6 +389,18 @@
         }
       }
     }
+    // Enge Gipfelpaare der Referenz, die keine andere Ordnung in zwei Gipfel trennt (slotMergeUnsure)
+    var allein = [];
+    if (refIdx >= 0) for (var s2 = 0; s2 + 1 < nSlots; s2++) {
+      var gap = ref[s2 + 1].f - ref[s2].f, lo = ref[s2].f - gap / 2, hi = ref[s2 + 1].f + gap / 2, getrennt = !(gap < SLOT_TOL_HZ);
+      for (o = 0; o < orders.length && !getrennt; o++) {
+        if (o === refIdx) continue;
+        var im = 0;
+        for (var p2 = 0; p2 < per[o].length; p2++) if (per[o][p2].f >= lo && per[o][p2].f <= hi) im++;
+        getrennt = im >= 2;
+      }
+      allein.push(!getrennt);
+    }
     var F = [], sdOrder = [], nOrders = [], merged = [], refF = [];
     for (var k = 0; k < 5; k++) {
       F.push(median(slots[k])); sdOrder.push(spread(slots[k])); nOrders.push(slots[k].length);
@@ -397,7 +409,7 @@
     if (refIdx >= 0) for (var r = 0; r < per[refIdx].length; r++) refF.push(per[refIdx][r].f);
     return { F: F, sdOrder: sdOrder, nOrders: nOrders, BW: bwSlot, bwArtifact: bwArt, merged: merged,
       nPeaksRef: refIdx >= 0 ? per[refIdx].length : 0, refOrder: refIdx >= 0 ? orders[refIdx] : NaN, peaks: refF,
-      slotUnsure: slotNumberUnsure(refF, nOrders), slotMerged: slotMergeUnsure(refF, nOrders, bwMax, fremd), drops: drops };
+      slotUnsure: slotNumberUnsure(refF, nOrders), slotMerged: slotMergeUnsure(refF, nOrders, bwMax, fremd, allein), drops: drops };
   }
 
   /* Zuordnung Gipfel → Slot ist eine Annahme, keine Messung: der k-te gefundene Gipfel gilt als Fk.
@@ -463,7 +475,7 @@
   /* Verschmolzen oder umstritten: der k-te Gipfel ist richtig nummeriert, kann aber zwei Resonanzen in
      einem sein. Gemessen bei /u/ 196 Hz mit Rauschen: F1 300 und F2 700 Hz verschmelzen zu einem Gipfel
      bei 440–460 Hz, F1 gilt als gültig und liegt 150 Hz daneben. Bei F5 4100 / F6 4400 Hz (Rosenberg-
-     Quelle, 247 Hz) steht der gemeinsame Gipfel 140 Hz über F5. Drei Anzeichen, je Fenster:
+     Quelle, 247 Hz) steht der gemeinsame Gipfel 140 Hz über F5. Vier Anzeichen, je Fenster:
      - Eine zulässige Lesart lässt neben dem Gipfel eine Resonanz fehlen (auch über dem obersten), die
        fehlende Resonanz kann nach den Slotgrenzen höchstens SLOT_TOL_HZ von ihm entfernt liegen, und
        der Gipfel ist in irgendeiner Ordnung breiter als MERGED_BW_HZ. Gesungene Bandbreiten liegen bei
@@ -477,9 +489,19 @@
        F2-Slot). Liegt er weiter weg, fehlt der Referenz eine Resonanz: alles darüber ist unsicher.
      - Ein Nachbargipfel innerhalb SLOT_TOL_HZ wird nur von einer Ordnung gesehen: die anderen Ordnungen
        haben ihn in diesen Gipfel gezogen.
+     - Zwei Gipfel näher als SLOT_TOL_HZ trennt nur die Referenzordnung; jede andere Ordnung sieht dort
+       höchstens einen Gipfel. Die Zuordnung verteilt diesen einen Gipfel auf beide Slots, beide Werte
+       rücken zusammen, und Wert und Abstand sind über die Ordnungen nicht belegt. Gemessen am tiefen
+       engen Cluster F3 1700 / F4 2000 Hz bei 196 Hz mit rosa Rauschen 30 dB: Ordnung 16 trennt bei
+       1680/1928, 14 und 12 sehen 1760 bzw. 1862 Hz; gültig waren F3 1717, F4 1895 und ΔF3–4 156–178
+       statt 300 Hz (13 Rahmen im Clustersatz mit Rauschen 30–50 dB, 8424 Rahmen). Mit dieser Regel 0;
+       Preis dort 3853 → 3819 gültige ΔF3–4, bei verschmolzenen Clustern mit Rauschen 1192 → 1115, auf
+       den Sätzen unter 250 Hz (a/e/i/o/u, Impuls/Rosenberg, Vibrato, Rauschen 30–50 dB) 1 von 14385
+       gültigen Slots.
      bwMax: größte Bandbreite je Slot über alle Ordnungen; fremd: Frequenzen der Gipfel anderer
-     Ordnungen, die keinem Slot zugeordnet wurden. */
-  function slotMergeUnsure(P, nOrd, bwMax, fremd) {
+     Ordnungen, die keinem Slot zugeordnet wurden; allein[i] (optional): das Paar der Gipfel i und i+1
+     trennt nur die Referenzordnung. */
+  function slotMergeUnsure(P, nOrd, bwMax, fremd, allein) {
     var n = Math.min(5, P.length), uns = [false, false, false, false, false], deut = deutungen(P, nOrd), i, k;
     for (i = 0; i < deut.length; i++) {
       var d = deut[i], nb = [];
@@ -500,6 +522,7 @@
     for (i = 0; i < n; i++) if (!(nOrd[i] >= 2)) {
       for (k = i - 1; k <= i + 1; k += 2) if (k >= 0 && k < n && Math.abs(P[k] - P[i]) <= SLOT_TOL_HZ) uns[k] = true;
     }
+    for (i = 0; i + 1 < n; i++) if (allein && allein[i]) { uns[i] = true; uns[i + 1] = true; }
     return uns;
   }
 

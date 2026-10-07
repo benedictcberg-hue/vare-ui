@@ -7,7 +7,8 @@
      A2f stehende Töne ohne Fehlmarke, A2g Vertrag der Felder.
    A3: Formanten nach dem Teiltonabstand (analyseAt: teiltonPruefen) —
      A3a ΔF3–4/ΔF4–5 über 250 Hz, A3b Slots über 375 Hz und Nummernrutsch, A3c Gipfelpaare, A3d unsicherer
-     Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag.
+     Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag, A3g tiefes enges
+     Cluster, das nur eine LPC-Ordnung trennt.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -823,5 +824,54 @@ module.exports = async function (H) {
         n >= 70 && falsch === 0 && u1 === '1100' && u2 === '-' && u3 === '01100' && leerOk,
         n + ' Rahmen, abweichend ' + falsch + '; teiltonFraglich ' + [u1, u2, u3].join(' ') + '; Pause ' + (leerOk ? 'leer' : 'nicht leer') + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
     }
+  }
+
+  /* ---------- A3g: tiefes enges Cluster, das nur eine LPC-Ordnung trennt ----------
+     F3 1700 / F4 2000 Hz (physik.md §4, unter dem Sängerformantband) mit Rauschen: Ordnung 16 trennt beide,
+     12 und 14 sehen einen gemeinsamen Gipfel. Die Zuordnung verteilte ihn auf beide Slots, ΔF3–4 schrumpfte
+     auf 156–178 statt 300 Hz und galt als gültig. (1) Vertrag je Fenster aus den Gipfeln der Ordnungen
+     nachgerechnet: Trennt nur die Referenzordnung ein Paar näher als 400 Hz, ist keiner der beiden Slots
+     gültig. (2) Kein gültiges ΔF3–4 über 120 Hz falsch. Signale wie im Prüfsatz K2 (Impulsquelle, LCG-Rauschen
+     weiß und rosa, Rauschabstand im Analyseband). */
+  {
+    const eff = x => { let p = 0; for (let i = 0; i < x.length; i++) p += x[i] * x[i]; return Math.sqrt(p / x.length); };
+    function rosa(n, seed) {
+      const w = H.noise(n, 1, seed), y = new Float64Array(n); let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < n; i++) { const v = w[i]; b0 = 0.99886 * b0 + v * 0.0555179; b1 = 0.99332 * b1 + v * 0.0750759; b2 = 0.96900 * b2 + v * 0.1538520; b3 = 0.86650 * b3 + v * 0.3104856; b4 = 0.55000 * b4 + v * 0.5329522; b5 = -0.7616 * b5 - v * 0.0168980; y[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + v * 0.5362; b6 = v * 0.115926; }
+      return y;
+    }
+    function signal(F, B, f0, art, snr, seed) {
+      const x48 = D.synthVowel(f0, F, B, 0.4, SR, { gain: 0.3 }), x = D.resample(x48, SR, TSR);
+      const nz = D.resample(art === 'rosa' ? rosa(x48.length, seed) : H.noise(x48.length, 1, seed), SR, TSR);
+      const g = eff(x) * Math.pow(10, -snr / 20) / eff(nz), y = new Float64Array(x.length);
+      for (let i = 0; i < x.length; i++) y[i] = x[i] + g * nz[i];
+      return y;
+    }
+    // Referenzordnung wie analyseWindow: die meisten Gipfel, bei Gleichstand 14, dann 12, dann 16
+    function urteil(seg) {
+      const win = D.hann(D.preemph(seg, 0.97)), O = D.ORDERS, per = O.map(o => D.formantsFromLPC(D.burg(win, o), TSR, 5));
+      let ref = -1, best = -1;
+      for (const o of [14, 12, 16]) { const c = O.indexOf(o); if (c >= 0 && per[c].length > best) { best = per[c].length; ref = c; } }
+      const R = per[ref], allein = [false, false, false, false, false];
+      for (let s = 0; s + 1 < Math.min(5, R.length); s++) {
+        const gap = R[s + 1].f - R[s].f; if (!(gap < 400)) continue;
+        const lo = R[s].f - gap / 2, hi = R[s + 1].f + gap / 2;
+        if (!per.some((p, o) => o !== ref && p.filter(q => q.f >= lo && q.f <= hi).length >= 2)) { allein[s] = true; allein[s + 1] = true; }
+      }
+      return allein;
+    }
+    let n = 0, entsch = 0, verletzt = 0, d34 = 0, d34f = 0; const bsp = [];
+    for (const [F1, F2] of [[680, 1250], [480, 1400]]) for (const F3 of [1700, 2000]) for (const f0 of [110, 147, 196]) for (const art of ['weiss', 'rosa']) for (const snr of [30, 40]) {
+      const T = [F1, F2, F3, F3 + 300, 3050], y = signal(T, [70, 90, 100, 110, 160], f0, art, snr, 99);
+      for (let i = 900; i + 900 <= y.length; i += 240) {
+        const r = D.analyseAt(y, TSR, i, {}); if (!r.voiced) continue; n++;
+        const gesperrt = [false, false, false, false, false];
+        for (const L of D.WINDOWS) { const m = Math.round(L * TSR), st = i - (m >> 1); if (st < 0 || st + m > y.length) continue; urteil(y.subarray(st, st + m)).forEach((b, k) => { if (b) gesperrt[k] = true; }); }
+        for (let k = 0; k < 5; k++) if (gesperrt[k] && isFinite(r.F[k])) { entsch++; if (r.valid[k]) { verletzt++; if (bsp.length < 3) bsp.push(T.join('/') + ' ' + f0 + ' ' + art + ' ' + snr + ' dB: F' + (k + 1) + ' gültig'); } }
+        if (r.d34valid) { d34++; if (Math.abs(r.d34 - 300) > 120) { d34f++; if (bsp.length < 3) bsp.push(T.join('/') + ' ' + f0 + ' ' + art + ' ' + snr + ' dB: ΔF3–4 ' + Math.round(r.d34)); } }
+      }
+    }
+    check('A3g', 'tiefes enges Cluster F3 1700/2000, ΔF3–4 300 Hz (98–196 Hz, Rauschen weiß/rosa 30/40 dB): ein Paar, das nur die Referenzordnung trennt, ist nicht gültig (mind. 20 entscheidende Slots); kein gültiges ΔF3–4 über 120 Hz falsch',
+      verletzt === 0 && entsch >= 20 && d34f === 0, n + ' Rahmen, entscheidend ' + entsch + ', trotzdem gültig ' + verletzt + '; ΔF3–4 gültig ' + d34 + ', davon falsch ' + d34f + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
   }
 };
