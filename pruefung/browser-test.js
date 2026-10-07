@@ -162,7 +162,9 @@ const WAV = path.join(SP, 'fake.wav');
     await page.click('#takes-list a[href^="#/take/"]');
     await page.waitForFunction(() => document.getElementById('d-lanes'), null, { timeout: 10000 });
     await page.waitForTimeout(500);
-    const box = await page.$eval('#d-lanes', c => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    // Ins Bild holen: Wie weit unten die Spuren liegen, hängt an der Höhe der Kacheln darüber (z. B. ein
+    // Anteil unsicherer Grundtonrahmen im Take). Sonst ginge die Maus womöglich unter den Fensterrand.
+    const box = await page.$eval('#d-lanes', c => { c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
     await page.mouse.move(box.x + box.w * 0.5, box.y + 200);
     await page.waitForTimeout(200);
     const hover = await page.textContent('#d-hover');
@@ -314,6 +316,35 @@ const WAV = path.join(SP, 'fake.wav');
     check('Anderes Gerät nach der Kalibrierung: Take gesperrt, Rauschboden nicht „kalibriert“ und in Rost, Wechsel benannt',
       g.gesperrt && g.id === null && !/kalibriert/.test(g.boden) && /unsure/.test(g.klasse) && /anderes Gerät/.test(g.warnung), JSON.stringify(g));
 
+    // ---------- Live: Grundton- und SHR-Unsicherheit in Rost, Korrektur ohne Rost (Farben aus dem Browser) ----------
+    // Das Mikrofon läuft noch. analyseAt liefert für die Dauer der Prüfung einen echten Rahmen eines sauberen
+    // /a/ bei 196 Hz, in dem nur die Felder gesetzt sind, wie der Kern sie meldet (null steht für NaN).
+    const ROST_L = 'rgb(168, 90, 60)', GOLD_L = 'rgb(201, 162, 39)';
+    const liveFall = a => page.evaluate(async a => {
+      const D = window.VAREDSP;
+      if (!window.__echteAnalyse) window.__echteAnalyse = D.analyseAt;
+      const sig = D.resample(D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 0.4, 48000), 48000, D.TARGET_SR);
+      const fr = Object.assign({}, window.__echteAnalyse(sig, D.TARGET_SR, sig.length - 1, { align: 'end', wantSpectrum: true, floorDb: -70 }), a);
+      for (const k in a) if (a[k] === null) fr[k] = NaN;
+      D.analyseAt = () => fr;
+      await new Promise(r => setTimeout(r, 400));
+      const kachel = id => { const st = document.getElementById('st-' + id), v = document.getElementById('v-' + id), sp = v.querySelector('.unsicher-teil');
+        return { klasse: st.className, text: v.textContent, farbe: getComputedStyle(v).color, teil: sp ? { text: sp.textContent, farbe: getComputedStyle(sp).color } : null }; };
+      return { f0: kachel('f0'), f1: kachel('f1'), shr: kachel('shr'), h1h2: kachel('h1h2') };
+    }, a);
+    const lU = await liveFall({ f0Unsure: true, f0Grund: 'cepstrum', f0Cep: 98, shrUnsure: true, shrGrund: 'grundton', shrOther: null });
+    const lK = await liveFall({ f0Korrektur: 'teiltonreihe', f0Yin: 98 });
+    const lS = await liveFall({ shr: -10, shrGrid: 392, shrOther: -48.7, shrUnsure: true, shrGrund: 'kamm+zweitpuls', shrKamm: -10.1, shrZweitpuls: 0.79 });
+    const lW = await liveFall({ shr: -10, shrUnsure: false, shrOther: null, shrGrund: '' });
+    await page.evaluate(() => { window.VAREDSP.analyseAt = window.__echteAnalyse; });
+    check('Live im Browser: unsicherer Grundton in Rost mit Grund (auch SHR und H1−H2), F1/F0 als Teil in Rost neben schwarzem F1; korrigierter Grundton ohne Rost',
+      lU.f0.farbe === ROST_L && /Grundton unsicher: Cepstrum zeigt 98\.0 Hz/.test(lU.f0.text) && lU.shr.farbe === ROST_L && lU.h1h2.farbe === ROST_L
+      && !!lU.f1.teil && lU.f1.teil.farbe === ROST_L && lU.f1.farbe !== ROST_L && lK.f0.farbe !== ROST_L && /korrigiert aus 98\.0 Hz, Teiltonreihe/.test(lK.f0.text),
+      JSON.stringify({ unsicher: lU.f0, f1: lU.f1, korrigiert: lK.f0 }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+    check('Live im Browser: SHR-Raster zweifelhaft → beide Werte mit Raster in Rost, keine Warnung; sicheres SHR −10 dB in Gold',
+      lS.shr.farbe === ROST_L && !/befund/.test(lS.shr.klasse) && /-10\.0 dB \(Raster 392 Hz\) · -48\.7 dB \(Raster 196 Hz\)/.test(lS.shr.text) && lW.shr.farbe === GOLD_L,
+      JSON.stringify({ zweifel: lS.shr, sicher: lW.shr }).replace(/rgb\(168, 90, 60\)/g, 'ROST').replace(/rgb\(201, 162, 39\)/g, 'GOLD'));
+
     // ---------- Token: „merken“ und „Token entfernen“ in einem frischen Browserprofil ----------
     const ctx2 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
     await ctx2.route('https://api.github.com/**', korpusRoute);
@@ -392,6 +423,44 @@ const WAV = path.join(SP, 'fake.wav');
       dk(/^SHR/).farbe === GOLD && dk(/^Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms$/).farbe === GOLD && dk(/^kurze Kanten unter 90 ms$/).v.startsWith('2') && dk(/ΔF3–4 stabil/).farbe === GOLD
       && dk(/^F4$/).farbe !== GOLD && !/Register/.test(seite) && /nicht messbar/.test(dk(/SNR/).v || ''),
       ['SHR', 'Tonsprünge', 'kurze Kanten', 'ΔF3–4 stabil', 'SNR'].map(n => n + ': ' + JSON.stringify(dk(new RegExp(n)))).join(' | ').replace(new RegExp(ROST.replace(/[()]/g, '\\$&'), 'g'), 'ROST').replace(new RegExp(GOLD.replace(/[()]/g, '\\$&'), 'g'), 'GOLD'));
+
+    // ---------- Detail und Hover: Take mit unsicherem und korrigiertem Grundton (Farben aus dem Browser) ----------
+    const A = require(path.join(ROOT, 'analysis.js')), F = A.FLAG, nG = 60, gs = A.makeSeries(nG);
+    for (let i = 0; i < nG; i++) {
+      gs.t[i] = 0.01 * i; gs.f0[i] = 196; gs.f0Yin[i] = 196; gs.f0Cep[i] = 196; gs.rms[i] = -20; gs.ap[i] = 0.1; gs.flags[i] = F.VOICED; gs.cls[i] = -1; gs.gate[i] = 1; gs.score[i] = NaN;
+      [700, 1200, 2500, 3300, 4200].forEach((f, k) => { gs['f' + (k + 1)][i] = f; }); gs.valid[i] = 31;
+      gs.shr[i] = -30; gs.shrGrid[i] = 196; gs.shrOther[i] = NaN; gs.shrKamm[i] = -1; gs.shrZweitpuls[i] = 0.1; gs.h1h2[i] = 2; gs.h1h2c[i] = 3;
+      if (i >= 20 && i < 30) { gs.flags[i] |= F.F0UNSURE | F.SHRUNSURE; gs.f0Grund[i] = A.codeAus('f0Grund', 'cepstrum'); gs.f0Cep[i] = 98; gs.shrGrund[i] = A.codeAus('shrGrund', 'grundton'); }
+      if (i >= 35 && i < 45) { gs.flags[i] |= F.F0KORR; gs.f0Korrektur[i] = A.codeAus('f0Korrektur', 'teiltonreihe'); gs.f0Yin[i] = 98; }
+    }
+    const gTake = { id: 'e2e-grundton', code: 'G', label: 'Grundton', createdAt: '2026-03-02T10:00:00.000Z', durationS: 0.6, sampleRate: 48000, deviceLabel: 'Prüfgerät',
+      analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 }, analysedAt: '2026-03-02T10:00:00.000Z' }, history: [],
+      summary: A.summarise(gs, { hopS: 0.01, durationS: 0.6, floorDb: -80, floorSource: 'calibration', floorKnown: true }) };
+    fs.writeFileSync(path.join(SP, 'grundton.json'), C.serializeBackup({ takes: [gTake], series: { [gTake.id]: gs }, refs: null, calibrations: [], settings: null, kernelVersion: D.VERSION }));
+    await p3.evaluate(() => { location.hash = '#/chronik'; });
+    await p3.waitForSelector('#btn-import-json', { state: 'visible' });
+    // Die Meldung des vorigen Imports lautet gleich: erst leeren, sonst ginge es weiter, bevor der Take da ist.
+    await p3.evaluate(() => { const m = document.querySelector('[role=status]'); if (m) m.textContent = ''; });
+    const [fc4] = await Promise.all([p3.waitForEvent('filechooser'), p3.click('#btn-import-json')]);
+    await fc4.setFiles(path.join(SP, 'grundton.json'));
+    await p3.waitForFunction(() => /Import: 1 Takes übernommen/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 10000 });
+    await p3.evaluate(() => { location.hash = '#/take/e2e-grundton'; });
+    await p3.waitForFunction(() => document.getElementById('d-lanes') && document.querySelector('#take-detail .grid'), null, { timeout: 10000 });
+    await p3.waitForTimeout(300);
+    const f0Kachel = await p3.$$eval('#take-detail .stat', els => { const e = els.find(x => /^F0 Median/.test(x.querySelector('.k').textContent)); const sp = e && e.querySelector('.v .rust'); return e ? { v: e.querySelector('.v').textContent, rost: sp ? getComputedStyle(sp).color : null } : null; });
+    // Die Spuren liegen unter den Kacheln, womöglich außerhalb des Fensters: erst hinscrollen, dann messen.
+    const box2 = await p3.$eval('#d-lanes', c => { c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width }; });
+    const hoverBei = async idx => {
+      await p3.mouse.move(box2.x + 46 + idx / (nG - 1) * (box2.w - 46 - 70), box2.y + 50);
+      await p3.waitForTimeout(150);
+      return p3.$eval('#d-hover', el => ({ text: el.textContent, rost: Array.from(el.querySelectorAll('.rust')).map(s => ({ text: s.textContent, farbe: getComputedStyle(s).color })) }));
+    };
+    const hU = await hoverBei(25), hK = await hoverBei(40);
+    check('Detail im Browser: F0-Median aus sicheren Rahmen, unsicherer Anteil in Rost daneben; Hover: unsicherer Grundton in Rost mit Grund, korrigierter mit altem Wert ohne Rost',
+      !!f0Kachel && /^196 \[196–196\]/.test(f0Kachel.v) && /Grundton unsicher in 17 %/.test(f0Kachel.v) && f0Kachel.rost === ROST
+      && hU.rost.some(r => /^F0 196\.0 \(Grundton unsicher: Cepstrum zeigt 98\.0 Hz\)$/.test(r.text) && r.farbe === ROST) && hU.rost.some(r => /^SHR -30\.0 .*unsicher: Grundton unsicher$/.test(r.text))
+      && /F0 196\.0 \(korrigiert aus 98\.0 Hz, Teiltonreihe\)/.test(hK.text) && !hK.rost.length,
+      JSON.stringify({ f0Kachel, unsicher: hU.rost, korrigiert: hK.text.slice(0, 120) }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
     await ctx3.close();
   } catch (e) { fails.push('AUSNAHME ' + (e && e.stack || e)); console.log('AUSNAHME', e); }
   check('Keine JavaScript-Fehler auf der Seite', errors.length === 0, errors.join(' | '));

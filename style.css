@@ -33,6 +33,8 @@ main { max-width: 980px; margin: 0 auto; padding: 1rem; display: flex; flex-dire
    Tonsprünge). Gold ohne Strich — Rost und Strich bleiben unsicheren Messwerten vorbehalten. */
 .stat.befund .v, .befund { color: var(--gold); }
 .stat.frozen .v { color: var(--muted); }
+/* Unsicherer Teil einer Kachel, deren übriger Wert trägt (F1/F0 bei unsicherem Grundton). */
+.unsicher-teil { border-bottom: 1px dashed var(--rust); }
 button, select, input[type="text"], input[type="file"], textarea { min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
 button { cursor: pointer; }
 button.primary { border-color: var(--gold); color: var(--gold); }

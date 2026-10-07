@@ -9,7 +9,9 @@
    Jitter (Gegenprobe gerissen und korrigiert), /a/ 150 Hz mit jedem zweiten Impuls halb so stark
    (SHR-Raster zweifelhaft, beide Werte), /a/ 80 Hz ebenso (Reihe bei 40 Hz, nicht geteilt), enger
    Cluster 348,2 Hz (YIN eine Oktave tief, korrigiert). Die Sollwerte kommen aus analyseAt selbst,
-   Rahmen für Rahmen, nicht aus den Marken der Serie. */
+   Rahmen für Rahmen, nicht aus den Marken der Serie.
+   I2a Serie und Sicherung, I2b Zusammenfassung, I2c CSV, I2d Anzeige (chronik.js und app.js in einer
+   vm-Umgebung wie in u_oberflaeche.js; die Farben im echten Browser prüft pruefung/browser-test.js). */
 'use strict';
 const path = require('path');
 
@@ -226,5 +228,238 @@ module.exports = async function (H) {
     for (const k of ['f0_unsure_share', 'f0_korrektur_share', 'shr_unsure_share', 'shr_unsure_max_db', 'shr_other_max_db']) { const c = altTake[0].indexOf(k); if (c < 0 || !/^-99\.0+$/.test(altTake[1][c])) bad.push('Take ' + k + ' ' + (c < 0 ? 'fehlt' : altTake[1][c])); }
     check('I2c', 'Ältere Serie und Zusammenfassung ohne die neuen Felder: Marken und Zahlen −99, Gründe leer (nicht 0 = „sicher“), übrige Spalten unverändert, kein Absturz',
       !bad.length, bad.length ? bad.slice(0, 5).join('; ') : NEU.length + ' Rahmenspalten, 5 Take-Spalten');
+  }
+
+  /* ---------- I2d: Anzeige (chronik.js und app.js in einer vm-Umgebung, wie in u_oberflaeche.js) ---------- */
+  const vm = require('vm'), fs = require('fs');
+  const ROOT = path.join(__dirname, '..', '..'), quelle = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  // Zeichenfläche, die Aufrufe UND gesetzte Farben in Reihenfolge mitschreibt.
+  function leinwand() {
+    const ops = [];
+    const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { ops.push([k, a]); }), set: (t, k, v) => { t[k] = v; ops.push(['set', k, v]); return true; } });
+    return { cv: { clientWidth: 450, style: {}, getContext: () => ctx }, ops };
+  }
+  // Punkte mit Farbe: [{ art: 'fill'|'stroke', farbe, x, y, w, h }] für Rechtecke der Größe 2 oder 3.
+  function punkte(ops) {
+    const out = []; let fill = '', stroke = '';
+    for (const [k, a, v] of ops) {
+      if (k === 'set') { if (a === 'fillStyle') fill = v; if (a === 'strokeStyle') stroke = v; continue; }
+      if ((k === 'fillRect' || k === 'strokeRect') && (a[2] === 2 || a[2] === 3) && a[2] === a[3]) out.push({ art: k === 'fillRect' ? 'fill' : 'stroke', farbe: k === 'fillRect' ? fill : stroke, x: a[0], y: a[1] });
+    }
+    return out;
+  }
+  function kacheln(html) {
+    const out = [], re = /<div class="stat([^"]*)"><span class="k">([\s\S]*?)<\/span><span class="v">([\s\S]*?)<\/span><\/div>/g;
+    let m;
+    while ((m = re.exec(html))) out.push({ klasse: m[1].trim(), k: m[2].replace(/<[^>]+>/g, ''), v: m[3].replace(/<[^>]+>/g, ''), vHtml: m[3] });
+    return out;
+  }
+  const chronikSb = () => {
+    const sb = { console: { log() { }, warn() { }, error() { } }, devicePixelRatio: 1 };
+    sb.self = sb; sb.window = sb; vm.createContext(sb);
+    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+    return sb;
+  };
+  const sb = chronikSb(), CHR = sb.VARECHRONIK, COL = CHR.COL;
+  const fmt = (v, d) => CHR.fmt(v, d);
+  const finde = (bed) => { for (let i = 0; i < R.length; i++) if (R[i].voiced && bed(R[i])) return i; return -1; };
+  {
+    // Hover an echten Rahmen des Prüftakes: unsicher in Rost mit Grund, korrigiert mit altem Wert ohne Rost.
+    const bad = [], belege = [];
+    const iU = finde(r => r.f0Unsure && r.f0Grund === 'cepstrum'), iT = finde(r => r.f0Unsure && r.f0Grund === 'teiltonreihe');
+    const iK = finde(r => r.f0Korrektur && !r.octaveAmbiguous && !r.shrUnsure), iS = finde(r => r.shrUnsure && !r.f0Unsure && isFinite(r.shrOther));
+    const iO = finde(r => r.octaveUnterGrenze), iN = finde(r => !r.f0Unsure && !r.f0Korrektur && !r.octaveAmbiguous && !r.octaveCorrected && !r.shrUnsure);
+    if ([iU, iT, iK, iS, iO, iN].some(i => i < 0)) bad.push('Fall fehlt im Prüftake: ' + [iU, iT, iK, iS, iO, iN].join(','));
+    const hov = i => { try { return CHR.hoverText(ser, i); } catch (e) { return 'AUSNAHME ' + e.message; } };
+    const rostTeile = h => (h.match(/<span class="rust">[^<]*<\/span>/g) || []).map(x => x.replace(/<[^>]+>/g, ''));
+    const ohneSpans = h => h.replace(/<span class="rust">|<\/span>/g, '');
+    const pruef = (name, i, soll, kein) => {
+      if (i < 0) return;
+      const h = hov(i), rost = rostTeile(h).join(' ‖ ');
+      for (const [teil, text] of soll) if (!(teil === 'rost' ? rost : ohneSpans(h)).includes(text)) bad.push(name + ': „' + text + '“ fehlt' + (teil === 'rost' ? ' in Rost' : '') + ' — ' + ohneSpans(h).slice(0, 160));
+      for (const text of kein || []) if (rost.includes(text)) bad.push(name + ': „' + text + '“ in Rost');
+      if (/</.test(ohneSpans(h))) bad.push(name + ': HTML außer den Rost-Marken');
+      belege.push(name + ' ' + (rost || 'kein Rost'));
+    };
+    if (iU >= 0) pruef('unsicher/Cepstrum', iU, [['rost', 'F0 ' + fmt(R[iU].f0, 1) + ' (Grundton unsicher: Cepstrum zeigt ' + fmt(R[iU].f0Cep, 1) + ' Hz'], ['rost', 'H1−H2'], ['rost', 'Grundton unsicher)'], ['rost', 'SHR ' + fmt(R[iU].shr, 1)]]);
+    if (iT >= 0) pruef('unsicher/Teiltonreihe', iT, [['rost', 'Grundton unsicher: eigene Teiltonreihe fehlt']]);
+    if (iK >= 0) pruef('korrigiert', iK, [['text', 'F0 ' + fmt(R[iK].f0, 1) + ' (korrigiert aus ' + fmt(R[iK].f0Yin, 1) + ' Hz, ' + (R[iK].f0Korrektur === 'cepstrum' ? 'Cepstrum' : 'Teiltonreihe') + ')']], ['F0', 'korrigiert']);
+    if (iS >= 0) {
+      const r = R[iS], anders = r.shrGrid > 1.5 * r.f0 ? r.f0 : 2 * r.f0;
+      pruef('SHR-Zweifel', iS, [['rost', 'SHR ' + fmt(r.shr, 1) + ' (Raster ' + fmt(r.shrGrid) + ' Hz) / ' + fmt(r.shrOther, 1) + ' (Raster ' + fmt(anders) + ' Hz), unsicher: ' + CHR.shrGrundText(r.shrGrund, r.shrKamm, r.shrZweitpuls)]], ['F0']);
+    }
+    if (iO >= 0) pruef('unter 60 Hz', iO, [['rost', 'Reihe unter 60 Hz, nicht geteilt']]);
+    if (iN >= 0 && rostTeile(hov(iN)).length) bad.push('sicherer Rahmen mit Rost: ' + hov(iN).slice(0, 120));
+    check('I2d', 'Hover (Detail): unsicherer Grundton samt SHR und H1−H2 in Rost mit Grund (Cepstrum-Wert bzw. fehlende Teiltonreihe), korrigierter mit altem Wert ohne Rost, SHR-Zweifel mit beiden Werten und Rastern in Rost, „Reihe unter 60 Hz, nicht geteilt“; sicherer Rahmen ohne Rost',
+      !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : belege.join(' | ').slice(0, 400));
+  }
+  {
+    // F0-Spur: Rost hohl für unsicher (F0UNSURE oder Oktave offen), Gold für korrigiert, nie Rost für Korrektur.
+    const l = leinwand(); let fehler = '';
+    try { CHR.drawLanes(l.cv, ser, {}, null); } catch (e) { fehler = e.message; }
+    const p0 = punkte(l.ops).filter(p => p.y >= 8 && p.y <= 91);
+    const zahl = (art, farbe) => p0.filter(p => p.art === art && p.farbe === farbe).length;
+    let sollU = 0, sollK = 0, sollN = 0;
+    for (let i = 0; i < R.length; i++) {
+      if (!R[i].voiced) continue;
+      if (R[i].f0Unsure || R[i].octaveAmbiguous) sollU++; else if (R[i].f0Korrektur || R[i].octaveCorrected) sollK++; else sollN++;
+    }
+    const ist = { rostHohl: zahl('stroke', COL.rust), gold: zahl('fill', COL.gold), hell: zahl('fill', COL.ink), rostVoll: zahl('fill', COL.rust) };
+    check('I2d', 'Chronik, F0-Spur: unsichere Rahmen hohl in Rost, korrigierte in Gold (nicht Rost), übrige hell',
+      !fehler && ist.rostHohl === sollU && ist.gold === sollK && ist.hell === sollN && ist.rostVoll === 0 && sollU > 0 && sollK > 0,
+      (fehler ? 'Ausnahme ' + fehler + ' | ' : '') + 'Soll unsicher ' + sollU + ', korrigiert ' + sollK + ', übrig ' + sollN + ' | Ist ' + JSON.stringify(ist));
+  }
+  {
+    // Detail und Liste mit der Zusammenfassung des Prüftakes und Abwandlungen.
+    const El = function () { this.innerHTML = ''; };
+    El.prototype.querySelector = function () { return { addEventListener() { }, value: '', hidden: false, getContext: () => leinwand().cv.getContext() }; };
+    El.prototype.querySelectorAll = function () { return []; };
+    const detail = su => { const d = new El(); CHR.renderDetail(d, { id: 'i2', code: 'I', label: 'Prüftake', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }, null, {}, false, {}); return kacheln(d.innerHTML); };
+    const k = (ks, re) => ks.find(x => re.test(x.k)) || { klasse: '?', v: '', vHtml: '' };
+    const bad = [], su = res.summary, mit = o => Object.assign(JSON.parse(JSON.stringify(su)), o);
+    let ks = [];
+    try { ks = detail(su); } catch (e) { bad.push('Ausnahme ' + e.message); }
+    const f0 = k(ks, /^F0 Median/), shr = k(ks, /^SHR/), okt = k(ks, /korrigiert/), h12 = k(ks, /^H1−H2/);
+    const pz = x => CHR.prozent ? CHR.prozent(x) : String(Math.round(x * 100));
+    if (!new RegExp('<span class="rust">· Grundton unsicher in ' + pz(su.f0UnsureShare) + ' % der Rahmen, nicht im Median</span>').test(f0.vHtml) || f0.klasse !== '') bad.push('F0 „' + f0.v + '“ (' + f0.klasse + ')');
+    if (!f0.v.startsWith(fmt(su.f0.med) + ' [')) bad.push('F0-Median fehlt: ' + f0.v);
+    if (!/<span class="rust">· unsicher in [^<]* %: bis -?[\d.]+ dB, anderes Raster bis -?[\d.]+ dB<\/span>/.test(shr.vHtml) || !shr.v.includes(fmt(su.shrUnsureMax, 1)) || !shr.v.includes(fmt(su.shrOtherMax, 1))) bad.push('SHR „' + shr.v + '“');
+    if (!/ohne [^)]* % mit unsicherem Grundton/.test(h12.v)) bad.push('H1−H2 „' + h12.v + '“');
+    if (!/^Grundton korrigiert · Oktave unsicher$/.test(okt.k) || !okt.v.startsWith(pz(su.octaveCorrectedShare) + ' (Gegenprobe ' + pz(su.f0KorrekturShare) + ')')) bad.push('Korrektur-Kachel „' + okt.k + '“ „' + okt.v + '“');
+    // Abwandlungen: viele Korrekturen ohne offene Oktave → kein Rost; überwiegend unsicher → Rost; SHR-Warnung nur aus sicheren Rahmen.
+    const kor = k(detail(mit({ octaveCorrectedShare: 0.6, f0KorrekturShare: 0.4, octaveAmbiguousShare: 0 })), /korrigiert/);
+    if (kor.klasse !== '') bad.push('60 % korrigiert, Oktave nie offen: Kachel „' + kor.klasse + '“ statt ohne Rost');
+    const viel = detail(mit({ f0UnsureShare: 0.7, shrUnsureShare: 0.7 }));
+    if (k(viel, /^F0 Median/).klasse !== 'unsure' || k(viel, /^SHR/).klasse !== 'unsure') bad.push('70 % unsicher: F0 „' + k(viel, /^F0 Median/).klasse + '“, SHR „' + k(viel, /^SHR/).klasse + '“ statt unsure');
+    const keineWarnung = k(detail(mit({ shr: Object.assign({}, su.shr, { max: -30 }), shrUnsureMax: -8, shrOtherMax: -12 })), /^SHR/);
+    if (keineWarnung.klasse === 'befund') bad.push('Warnung aus unsicheren Rahmen (sicher max −30, unsicher bis −8)');
+    const alt = mit({}); for (const f of ['f0UnsureShare', 'f0KorrekturShare', 'shrUnsureShare', 'shrUnsureMax', 'shrOtherMax']) delete alt[f];
+    const ka = detail(alt);
+    if (!/ältere Auswertung/.test(k(ka, /^F0 Median/).v) || /rust/.test(k(ka, /^F0 Median/).vHtml)) bad.push('ältere Auswertung: „' + k(ka, /^F0 Median/).v + '“');
+    // Liste: Anteil unsicher in Rost neben F0 und SHR max.
+    const div = new El(); let zellen = [];
+    try { CHR.renderList(div, [{ id: 'i2', code: 'I', label: 'Prüftake', createdAt: '2026-03-02T09:00:00.000Z', durationS: 3, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } }, summary: su }], {}, {}); zellen = ((/<tr data-id="[^"]*">([\s\S]*?)<\/tr>/.exec(div.innerHTML) || [])[1] || '').split(/<\/td>/); } catch (e) { bad.push('Liste: ' + e.message); }
+    if (!/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[2] || '') || !/class="rust small"[^>]*>[^<]*% unsicher</.test(zellen[7] || '')) bad.push('Liste F0 „' + (zellen[2] || '').replace(/<[^>]+>/g, '') + '“ SHR „' + (zellen[7] || '').replace(/<[^>]+>/g, '') + '“');
+    check('I2d', 'Detail und Liste: F0 und SHR aus sicheren Rahmen, der unsichere Anteil in Rost daneben (SHR mit Höchstwerten beider Raster), Rost erst ab der Hälfte; Korrektur nicht rostig; keine SHR-Warnung aus unsicheren Rahmen; ältere Auswertung benannt',
+      !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : 'F0 „' + f0.v + '“ | SHR „' + shr.v + '“ | „' + okt.k + '“ ' + okt.v);
+  }
+  {
+    /* Live: app.js unverändert in einer vm-Umgebung. Das Mikrofon liefert Stille; analyseAt wird durch
+       einen echten Rahmen eines sauberen /a/ bei 196 Hz ersetzt, in dem nur die Grundton- und SHR-Felder
+       so gesetzt sind, wie der Kern sie meldet. Geprüft wird, was in den Kacheln, im Hinweis, in der
+       Teiltonleiter und in der 20-s-Spur steht. */
+    const els = {}, canv = {}, intervalle = [];
+    class El {
+      constructor(id) { this.id = id || ''; this._t = ''; this.kinder = []; this.className = ''; this.hidden = false; this.disabled = false; this.value = ''; this.style = {}; this.clientWidth = 600; this._on = {}; this.innerHTML = ''; this.checked = false; this.files = []; }
+      get textContent() { return this._t + this.kinder.map(k => k.textContent).join(''); }
+      set textContent(v) { this._t = String(v); this.kinder = []; }
+      addEventListener(t, f) { (this._on[t] = this._on[t] || []).push(f); }
+      removeEventListener() { }
+      click() { (this._on.click || []).forEach(f => f({ target: this, preventDefault() { } })); }
+      setAttribute(k, v) { this['@' + k] = String(v); }
+      getAttribute(k) { return this['@' + k] == null ? null : this['@' + k]; }
+      querySelector() { return new El(); }
+      querySelectorAll() { return []; }
+      appendChild(c) { this.kinder.push(c); return c; }
+      insertBefore(c) { return c; }
+      remove() { } focus() { }
+      getContext() { const l = leinwand(); canv[this.id] = l.ops; return l.cv.getContext(); }
+      getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: 600, height: 100 }; }
+    }
+    const el = id => els[id] || (els[id] = new El(id));
+    let raf = null;
+    const meta = new Map(), P = v => Promise.resolve(v);
+    const store = { open: () => P(), putTake: () => P(), getTake: () => P(null), allTakes: () => P([]), deleteTake: () => P(), putSeries: () => P(), getSeries: () => P(null), putAudio: () => P(), getAudio: () => P(null),
+      deleteAudio: () => P(), hasAudio: () => P(false), audioIds: () => P([]), putCalibration: () => P(), allCalibrations: () => P([]), deleteCalibration: () => P(),
+      getMeta: (k, fb) => P(meta.has(k) ? meta.get(k) : fb), setMeta: (k, v) => { meta.set(k, v); return P(); }, clearAll: () => P(), estimate: () => P(null), persist: () => P(false), persisted: () => P(false) };
+    const rec = { active: false, info: null, sampleRate: 48000, samplesSeen: 0, recordedSeconds: 0,
+      start() { rec.active = true; rec.info = { deviceLabel: 'Testmikrofon', deviceId: 'standard', sampleRate: 48000, trackSampleRate: 48000, capture: 'worklet', echoCancellation: false, noiseSuppression: false, autoGainControl: false }; return P(rec.info); },
+      stop() { rec.active = false; return P(); }, beginTake() { }, endTake() { return { samples: new Float32Array(0), sampleRate: 48000, durationS: 0 }; }, latest: s => new Float32Array(Math.round(s * 48000)) };
+    const leer = () => ({ getItem: () => null, setItem() { }, removeItem() { } });
+    const doc = { readyState: 'complete', activeElement: null, body: new El('body'), getElementById: el, createElement: () => new El(), querySelector: () => el('main'), querySelectorAll: () => [], addEventListener() { } };
+    const ab = { document: doc, console: { log() { }, warn() { }, error() { } }, navigator: {}, location: { hash: '#/aufnahme', protocol: 'http:', origin: 'http://localhost' },
+      addEventListener() { }, removeEventListener() { }, requestAnimationFrame: f => { raf = f; return 1; }, cancelAnimationFrame() { }, performance: { now: () => Date.now() },
+      setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: h => clearTimeout(h),
+      setInterval: (f, ms) => { const h = setInterval(f, ms); if (h.unref) h.unref(); intervalle.push(h); return h; }, clearInterval: h => clearInterval(h),
+      confirm: () => true, alert() { }, crypto: { randomUUID: () => require('crypto').randomUUID() }, Blob: require('buffer').Blob, URL, btoa, atob, Date, devicePixelRatio: 1,
+      localStorage: leer(), sessionStorage: leer(), fetch: () => Promise.reject(new Error('kein Netz')), TextDecoder };
+    ab.window = ab; ab.self = ab;
+    const bad = [], belege = [];
+    try {
+      vm.createContext(ab);
+      for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
+      ab.VARESTORE = store; ab.VARERECORDER = { createRecorder: () => rec, listDevices: () => P([]) };
+      vm.runInContext(quelle('app.js'), ab, { filename: 'app.js' });
+      const st = ab.VAREAPP.state;
+      for (let w = 0; w < 500 && !st.settings; w++) await new Promise(r => setTimeout(r, 2));
+      el('btn-mic').click();
+      for (let w = 0; w < 500 && !(rec.active && raf); w++) await new Promise(r => setTimeout(r, 2));
+      const DD = ab.VAREDSP, echt = DD.analyseAt, sig = DD.resample(DD.synthVowel(196, AV[0], AV[1], 0.4, 48000), 48000, DD.TARGET_SR);
+      const basis = echt(sig, DD.TARGET_SR, sig.length - 1, { align: 'end', wantSpectrum: true, floorDb: -70 });
+      let jetzt = 1000;
+      const zeige = aenderung => {
+        const fr = Object.assign({}, basis, aenderung);
+        DD.analyseAt = () => fr;
+        rec.samplesSeen += 1000; jetzt += 100;
+        for (const k in canv) delete canv[k];
+        raf(jetzt);
+        const kach = id => ({ klasse: el('st-' + id).className, text: el('v-' + id).textContent, rost: el('v-' + id).kinder.filter(c => /\brust\b/.test(c.className)).map(c => c.textContent).join(' ') });
+        return { f0: kach('f0'), f1: kach('f1'), shr: kach('shr'), h1h2: kach('h1h2'), hinweis: el('live-hints').textContent, spek: canv['spec-canvas'] || [], hist: canv['hist-canvas'] || [] };
+      };
+      if (!(basis.voiced && basis.valid[0] && !basis.f0Unsure && !basis.shrUnsure && !basis.octaveAmbiguous)) bad.push('Grundrahmen nicht sauber');
+      const hat = (s, t) => s.includes(t);
+      // 1. Gegenprobe gerissen: F0, Note, F1/F0, SHR, H1−H2, Teiltonleiter, Hinweis.
+      let a = zeige({ f0Unsure: true, f0Grund: 'cepstrum', f0Cep: 98, shrUnsure: true, shrGrund: 'grundton', shrOther: NaN });
+      if (!/\bunsure\b/.test(a.f0.klasse) || !hat(a.f0.text, 'Grundton unsicher: Cepstrum zeigt 98.0 Hz')) bad.push('F0 unsicher: „' + a.f0.text + '“ ' + a.f0.klasse);
+      if (/\bunsure\b/.test(a.f1.klasse) || !hat(a.f1.rost, 'Grundton unsicher') || !hat(a.f1.rost, '(H')) bad.push('F1/F0: „' + a.f1.text + '“ Rost „' + a.f1.rost + '“ ' + a.f1.klasse);
+      if (!/\bunsure\b/.test(a.shr.klasse) || /befund/.test(a.shr.klasse) || !hat(a.shr.text, 'unsicher: Grundton unsicher')) bad.push('SHR bei unsicherem Grundton: „' + a.shr.text + '“ ' + a.shr.klasse);
+      if (!/\bunsure\b/.test(a.h1h2.klasse) || !hat(a.h1h2.text, 'Grundton unsicher')) bad.push('H1−H2: „' + a.h1h2.text + '“ ' + a.h1h2.klasse);
+      if (!/^Grundton unsicher \(Cepstrum zeigt 98\.0 Hz\)/.test(a.hinweis)) bad.push('Hinweis „' + a.hinweis.slice(0, 80) + '“');
+      const leiter = punkte(a.spek).length, leiterRost = a.spek.filter(o => o[0] === 'fillText' && /Teiltöne .* Grundton unsicher/.test(o[1][0])).length;
+      let fillNow = '', leiterFarben = new Set();
+      for (const [k2, x2, v2] of a.spek) { if (k2 === 'set' && x2 === 'fillStyle') fillNow = v2; if (k2 === 'fillRect' && x2[1] === 8 && x2[3] === 34) leiterFarben.add(fillNow); }
+      if (!(leiterFarben.size === 1 && leiterFarben.has(COL.rust)) || !leiterRost) bad.push('Teiltonleiter ' + [...leiterFarben].join('/') + ', Beschriftung ' + leiterRost);
+      // 2·F0 in der 20-s-Spur (Höhe 140): y = 140 − 12 − f/4000 · 120; Punkt hohl in Rost an genau dieser Höhe.
+      const y2f0 = 140 - 12 - Math.min(4000, 2 * basis.f0) / 4000 * 120 - 1.5;
+      const histRost = punkte(a.hist).filter(p => p.art === 'stroke' && p.farbe === COL.rust && Math.abs(p.y - y2f0) < 0.01).length;
+      if (!histRost) bad.push('20-s-Spur: 2·F0 nicht hohl in Rost');
+      belege.push('F0 „' + a.f0.text + '“');
+      // 2. Korrigiert: sichtbar, nicht rostig.
+      a = zeige({ f0Korrektur: 'teiltonreihe', f0Yin: 98 });
+      if (/\bunsure\b/.test(a.f0.klasse) || !hat(a.f0.text, 'korrigiert aus 98.0 Hz, Teiltonreihe')) bad.push('F0 korrigiert: „' + a.f0.text + '“ ' + a.f0.klasse);
+      a = zeige({ octaveCorrected: true, subFactor: 2 });
+      if (/\bunsure\b/.test(a.f0.klasse) || !hat(a.f0.text, 'Teiler 2 aus Teiltonreihe')) bad.push('F0 Teilerkontrolle: „' + a.f0.text + '“ ' + a.f0.klasse);
+      belege.push('korrigiert „' + a.f0.text + '“');
+      // 3. Unter 60 Hz nicht geteilt.
+      a = zeige({ octaveAmbiguous: true, octaveUnterGrenze: true });
+      if (!/\bunsure\b/.test(a.f0.klasse) || !hat(a.f0.text, 'Reihe unter 60 Hz, nicht geteilt')) bad.push('unter 60 Hz: „' + a.f0.text + '“');
+      // 4. SHR-Raster zweifelhaft: beide Werte mit Raster in Rost, keine Warnung trotz −10 dB.
+      a = zeige({ shr: -10, shrGrid: 392, shrOther: -48.7, shrUnsure: true, shrGrund: 'kamm+zweitpuls', shrKamm: -10.1, shrZweitpuls: 0.79 });
+      if (!/\bunsure\b/.test(a.shr.klasse) || /befund/.test(a.shr.klasse) || !hat(a.shr.text, '-10.0 dB (Raster 392 Hz) · -48.7 dB (Raster 196 Hz) — unsicher: Kamm -10.1 dB, zweite Anregung 0.79')) bad.push('SHR-Zweifel: „' + a.shr.text + '“ ' + a.shr.klasse);
+      belege.push('SHR „' + a.shr.text + '“');
+      // 5. Gegenprobe: sicheres SHR über −15 dB ist ein Befund (Gold), nicht unsicher.
+      a = zeige({ shr: -10, shrUnsure: false, shrOther: NaN, shrGrund: '' });
+      if (a.shr.klasse.trim() !== 'stat befund') bad.push('sicheres SHR −10 dB: „' + a.shr.klasse + '“ statt Befund');
+      ab.VAREDSP.analyseAt = echt;
+    } catch (e) { bad.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    check('I2d', 'Live: unsicherer Grundton in Rost mit Grund, mit ihm F1/F0 (Teil in Rost), SHR, H1−H2, Teiltonleiter, Hinweis und 2·F0-Spur; korrigiert (Gegenprobe, Teilerkontrolle) sichtbar ohne Rost; „Reihe unter 60 Hz, nicht geteilt“; SHR-Zweifel mit beiden Werten und Rastern in Rost ohne Warnung, sicheres SHR über −15 dB als Befund',
+      !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : belege.join(' | '));
+    // Ergebnis gleich nach dem Take (renderTakeResult): derselbe Prüftake über finishTake.
+    const badE = [];
+    let ergebnis = '';
+    try {
+      const st = ab.VAREAPP.state;
+      ab.VAREAPP.finishTake(SIG, SR);
+      for (let w = 0; w < 30000 && !/Gespeichert als/.test(el('take-result').innerHTML); w += 5) await new Promise(r => setTimeout(r, 5));
+      for (let w = 0; w < 2000 && st.busy; w += 5) await new Promise(r => setTimeout(r, 5));
+      ergebnis = el('take-result').innerHTML;
+      const ks = kacheln(ergebnis), kf0 = ks.find(x => x.k === 'F0') || { v: '', vHtml: '', klasse: '?' }, kshr = ks.find(x => /SHR max/.test(x.k)) || { v: '', vHtml: '' };
+      if (!/<span class="rust">· Grundton unsicher in \d+ % der Rahmen, nicht im Median<\/span>/.test(kf0.vHtml) || kf0.klasse !== '') badE.push('F0 „' + kf0.v + '“ (' + kf0.klasse + ')');
+      if (!/<span class="rust">· unsicher in \d+ %: bis -?[\d.]+ dB, anderes Raster bis -?[\d.]+ dB<\/span>/.test(kshr.vHtml)) badE.push('SHR „' + kshr.v + '“');
+      if (!ks.length) badE.push('keine Kacheln: ' + ergebnis.slice(0, 120));
+    } catch (e) { badE.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    intervalle.forEach(h => clearInterval(h));
+    check('I2d', 'Ergebnis nach dem Take: F0 und SHR max aus sicheren Rahmen, unsicherer Anteil in Rost daneben (SHR mit Höchstwerten beider Raster)',
+      !badE.length, badE.length ? badE.join(' | ') : kacheln(ergebnis).filter(x => /^F0$|SHR/.test(x.k)).map(x => x.k + ' „' + x.v + '“').join(' | '));
   }
 };

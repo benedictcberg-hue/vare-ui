@@ -206,7 +206,7 @@
     // Nur stimmhafte Rahmen in den Verlauf: dsp.js füllt F und valid auch in Pausen, und ein
     // Formantpunkt aus Raumgeräusch sah in der 20-s-Spur genauso aus wie ein Messwert.
     st.hist.push({ t: t, f2: fr.voiced ? fr.F[1] : NaN, f3: fr.voiced ? fr.F[2] : NaN,
-      f0x2: fr.voiced ? 2 * fr.f0 : NaN, v2: fr.voiced && fr.valid[1], v3: fr.voiced && fr.valid[2] });
+      f0x2: fr.voiced ? 2 * fr.f0 : NaN, v2: fr.voiced && fr.valid[1], v3: fr.voiced && fr.valid[2], u0: !!(fr.voiced && fr.f0Unsure) });
     while (st.hist.length && st.hist[0].t < t - 20) st.hist.shift();
     renderLive(fr, gs, fl);
   }
@@ -233,9 +233,12 @@
   /* Drei Zustände, nicht zwei: Rost und gestrichelt heißt „Messwert trägt nicht“. Ein Befund, der
      sicher gemessen ist und trotzdem Aufmerksamkeit braucht — F3 unter dem Zielwert, SHR über der
      Warnschwelle —, bekommt Gold ohne Strich. Sonst heißt dieselbe Markierung zweierlei. */
-  function setStat(id, text, unsure, frozen, note) {
-    var el = $('st-' + id); el.className = 'stat' + (unsure ? ' unsure' : (note ? ' befund' : '')) + (frozen ? ' frozen' : '');
-    $('v-' + id).textContent = text;
+  /* rost: ein Teil des Werts, der unsicher ist, obwohl der Rest der Kachel trägt — F1/F0 bei unsicherem
+     Grundton neben einem gültigen F1. Er steht in Rost mit Strich dahinter, die Kachel bleibt, wie sie ist. */
+  function setStat(id, text, unsure, frozen, note, rost) {
+    var el = $('st-' + id), v = $('v-' + id); el.className = 'stat' + (unsure ? ' unsure' : (note ? ' befund' : '')) + (frozen ? ' frozen' : '');
+    v.textContent = text;
+    if (rost) { var sp = document.createElement('span'); sp.className = 'rust unsicher-teil'; sp.textContent = rost; v.appendChild(sp); }
   }
   function renderLive(fr, gs, fl) {
     drawLevel(fr.rmsDb, fl.db);
@@ -270,12 +273,23 @@
       st.lastValid[k] = !!fr.valid[k];
       disp.push(fr.valid[k] ? st.smooth[k] : fr.F[k]);
     }
-    var f0Note = fr.octaveCorrected ? ' (Teiler ' + fr.subFactor + ' aus Teiltonreihe)' : (fr.octaveAmbiguous ? ' (Subharmonische nahe der Schwelle — Oktave unsicher)' : '');
-    setStat('f0', fmt(fr.f0, 1) + ' Hz ' + fr.note + f0Note, fr.octaveCorrected || fr.octaveAmbiguous);
+    /* Grundton: Rost nur, wenn er unsicher ist — Gegenprobe gerissen (f0Unsure, mit Grund) oder Oktave
+       offen (octaveAmbiguous; unter 60 Hz nicht geteilt eigens benannt). Korrigiert (Teilerkontrolle oder
+       Gegenprobe) ist ein geprüfter Wert: sichtbar mit dem alten Wert, aber nicht rostig. Früher stand
+       gerade die Korrektur in Rost. Die Note hängt am Grundton und steht in derselben Kachel. */
+    var f0z = [], f0Uns = !!(fr.f0Unsure || fr.octaveAmbiguous);
+    if (fr.f0Unsure) f0z.push('Grundton unsicher: ' + CH.f0GrundText(fr.f0Grund, fr.f0Cep));
+    if (fr.octaveAmbiguous) f0z.push(CH.oktavText(fr.octaveUnterGrenze));
+    if (fr.f0Korrektur) f0z.push(CH.f0KorrText(fr.f0Korrektur, fr.f0Yin));
+    else if (fr.octaveCorrected) f0z.push('Teiler ' + fr.subFactor + ' aus Teiltonreihe');
+    setStat('f0', fmt(fr.f0, 1) + ' Hz ' + fr.note + (f0z.length ? ' (' + f0z.join('; ') + ')' : ''), f0Uns);
     // Warum ein Formant unsicher ist, gehört neben die Zahl — „Zuordnung unsicher“ heißt etwas
     // anderes als „Streuung zu groß“: im ersten Fall ist womöglich der falsche Formant gemeint.
     function why(k) { return fr.slotUnsure[k] ? ' — Zuordnung unsicher, nur ' + fr.nPeaksRef + ' Resonanzen' : (fr.valid[k] ? '' : ' — Streuung'); }
-    setStat('f1', fmt(fr.F[0]) + ' Hz · ' + fmt(fr.f1f0, 2) + ' (H' + fmt(fr.nearestHarmonic) + ')' + why(0), !fr.valid[0]);
+    // F1 kommt aus der LPC und trägt für sich; F1/F0 und der nächste Teilton hängen am Grundton.
+    var f1f0 = fmt(fr.f1f0, 2) + ' (H' + fmt(fr.nearestHarmonic) + ')';
+    if (fr.f0Unsure) setStat('f1', fmt(fr.F[0]) + ' Hz' + why(0) + ' · ', !fr.valid[0], false, false, f1f0 + ' Grundton unsicher');
+    else setStat('f1', fmt(fr.F[0]) + ' Hz · ' + f1f0 + why(0), !fr.valid[0]);
     setStat('f2', fmt(disp[1]) + ' Hz' + why(1), !fr.valid[1]);
     // Rost heißt „Messwert trägt nicht“. „F3 unter dem Zielwert“ ist eine sichere Messung und
     // gehört in den Text, nicht in die Warnfarbe.
@@ -286,13 +300,20 @@
     setStat('d34', fmt(fr.d34) + ' Hz' + (isFinite(gs.score) ? ' gewertet' : ' — nicht gewertet' + (gs.reason ? ': ' + gs.reason : '')), !fr.d34valid, false, fr.d34valid && !isFinite(gs.score));
     setStat('d45', fmt(fr.d45) + ' Hz', !fr.d45valid);
     setStat('sfr', fmt(fr.sfr, 1) + ' dB', false);
-    // SHR über der Warnschwelle ist ein Befund (Ventrikularfalten), keine Messunsicherheit.
-    setStat('shr', fmt(fr.shr, 1) + ' dB' + (fr.shrGrid > fr.f0 * 1.5 ? ' (Raster ' + fmt(fr.shrGrid) + ' Hz = ' + D.hzToNote(fr.shrGrid) + ')' : ''), false, false, fr.shr > -15);
+    /* SHR über der Warnschwelle ist ein Befund (Ventrikularfalten), keine Messunsicherheit — aber nur,
+       wenn das Raster feststeht. Ist es zweifelhaft oder der Grundton unsicher (shrUnsure), stehen beide
+       Werte mit ihrem Raster in Rost, mit dem Grund, und es gibt keine Warnung: Welcher Wert gilt, ist
+       offen (physik.md §7.5). Der andere Wert fehlt, wenn nur der Grundton die Unsicherheit trägt. */
+    if (fr.shrUnsure) {
+      var anders = fr.shrGrid > fr.f0 * 1.5 ? fr.f0 : 2 * fr.f0;
+      setStat('shr', fmt(fr.shr, 1) + ' dB (Raster ' + fmt(fr.shrGrid) + ' Hz)' + (CH.zahl(fr.shrOther) ? ' · ' + fmt(fr.shrOther, 1) + ' dB (Raster ' + fmt(anders) + ' Hz)' : '')
+        + ' — unsicher: ' + CH.shrGrundText(fr.shrGrund, fr.shrKamm, fr.shrZweitpuls), true);
+    } else setStat('shr', fmt(fr.shr, 1) + ' dB' + (fr.shrGrid > fr.f0 * 1.5 ? ' (Raster ' + fmt(fr.shrGrid) + ' Hz = ' + D.hzToNote(fr.shrGrid) + ')' : ''), false, false, fr.shr > -15);
     setStat('cpp', fmt(fr.cpp, 1) + ' dB', false);
-    setStat('h1h2', fmt(fr.h1h2, 1) + ' · ' + fmt(fr.h1h2c, 1) + ' dB' + (fr.h1h2unsure ? ' (filtergetrieben)' : ''), fr.h1h2unsure);
-    var hint = $('live-hints');
-    if (fr.sparseHarmonics) hint.innerHTML = 'Grundton über 250 Hz: zwischen den Teiltönen liegt kein Messpunkt, ein Formant kann bis zu ±' + fmt(fr.harmonicPullHz) + ' Hz auf dem nächsten Teilton einrasten. Die Streuung der Sweeps zeigt das nicht an.';
-    else hint.textContent = hintText();
+    // H1−H2 und H1*−H2* lesen die Linien bei F0 und 2·F0: mit dem Grundton unsicher.
+    setStat('h1h2', fmt(fr.h1h2, 1) + ' · ' + fmt(fr.h1h2c, 1) + ' dB' + (fr.h1h2unsure ? ' (filtergetrieben)' : '') + (fr.f0Unsure ? ' (Grundton unsicher)' : ''), fr.h1h2unsure || fr.f0Unsure);
+    var hint = $('live-hints'), hinweis = fr.sparseHarmonics ? 'Grundton über 250 Hz: zwischen den Teiltönen liegt kein Messpunkt, ein Formant kann bis zu ±' + fmt(fr.harmonicPullHz) + ' Hz auf dem nächsten Teilton einrasten. Die Streuung der Sweeps zeigt das nicht an.' : hintText();
+    hint.textContent = (fr.f0Unsure ? 'Grundton unsicher (' + CH.f0GrundText(fr.f0Grund, fr.f0Cep) + '): Note, F1/F0, Teiltonleiter, SHR und H1−H2 hängen an ihm. ' : '') + hinweis;
     var tl = D.tubeLength(fr.F, fr.valid);
     setStat('tube', isFinite(tl.cm) ? fmt(tl.cm, 1) + ' cm (ΔF ' + fmt(tl.dF) + ')' : '– (zu wenig stabile Formanten)', !isFinite(tl.cm));
     var ref = cls ? st.refs[cls] : null;
@@ -329,8 +350,10 @@
       ctx.stroke();
     }
     if (!fr.voiced) { ctx.fillStyle = COL.muted; ctx.textAlign = 'left'; ctx.fillText('Pause', 6, 14); return; }
-    for (var m = 1; m * fr.f0 < 5000; m++) { ctx.fillStyle = (m === fr.nearestHarmonic) ? COL.gold : COL.muted; ctx.fillRect(x(m * fr.f0) - (m === fr.nearestHarmonic ? 1.5 : 0.5), 8, m === fr.nearestHarmonic ? 3 : 1, 34); }
-    ctx.fillStyle = COL.muted; ctx.textAlign = 'left'; ctx.fillText('Teiltöne ' + fmt(fr.f0, 1) + ' Hz, H' + fr.nearestHarmonic + ' an F1', 6, 52);
+    // Teiltonleiter aus dem Grundton: ist er unsicher, ist es die Leiter auch — Rost, und es steht dabei.
+    var leiterU = !!fr.f0Unsure;
+    for (var m = 1; m * fr.f0 < 5000; m++) { ctx.fillStyle = leiterU ? COL.rust : ((m === fr.nearestHarmonic) ? COL.gold : COL.muted); ctx.fillRect(x(m * fr.f0) - (m === fr.nearestHarmonic ? 1.5 : 0.5), 8, m === fr.nearestHarmonic ? 3 : 1, 34); }
+    ctx.fillStyle = leiterU ? COL.rust : COL.muted; ctx.textAlign = 'left'; ctx.fillText('Teiltöne ' + fmt(fr.f0, 1) + ' Hz, H' + fr.nearestHarmonic + ' an F1' + (leiterU ? ' — Grundton unsicher' : ''), 6, 52);
     for (var i = 0; i < 5; i++) {
       var F = disp ? disp[i] : fr.F[i];
       if (!isFinite(F)) continue;
@@ -357,7 +380,7 @@
     ctx.fillText('F3 gold · F2 hell · 2·F0 grau · hohl = instabil — letzte 20 s', 2, 10);
     for (var i = 0; i < st.hist.length; i++) {
       var e = st.hist[i], xx = x(e.t);
-      if (isFinite(e.f0x2)) { ctx.fillStyle = COL.muted; ctx.fillRect(xx - 1, y(e.f0x2) - 1, 2, 2); }
+      if (isFinite(e.f0x2)) { if (e.u0) { ctx.strokeStyle = COL.rust; ctx.strokeRect(xx - 1.5, y(e.f0x2) - 1.5, 3, 3); } else { ctx.fillStyle = COL.muted; ctx.fillRect(xx - 1, y(e.f0x2) - 1, 2, 2); } }
       if (isFinite(e.f2)) { if (e.v2) { ctx.fillStyle = COL.ink; ctx.fillRect(xx - 1, y(e.f2) - 1, 2, 2); } else { ctx.strokeStyle = COL.rust; ctx.strokeRect(xx - 1.5, y(e.f2) - 1.5, 3, 3); } }
       if (isFinite(e.f3)) { if (e.v3) { ctx.fillStyle = COL.gold; ctx.fillRect(xx - 1.5, y(e.f3) - 1.5, 3, 3); } else { ctx.strokeStyle = COL.rust; ctx.strokeRect(xx - 1.5, y(e.f3) - 1.5, 3, 3); } }
     }
@@ -664,12 +687,13 @@
     $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
       '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
-      '<div class="stat"><span class="k">F0</span><span class="v">' + fmt(s.f0.med) + ' Hz ' + CH.esc(s.f0.note) + '</span></div>' +
+      // F0 und SHR max aus sicheren Rahmen; der Rest steht in Rost daneben (wie im Detail).
+      '<div class="stat' + (CH.f0Unsicher(s) ? ' unsure' : '') + '"><span class="k">F0</span><span class="v">' + fmt(s.f0.med) + ' Hz ' + CH.esc(s.f0.note) + CH.f0Zusatz(s) + '</span></div>' +
       '<div class="stat"><span class="k">F1–F5 Median</span><span class="v">' + s.F.map(function (f) { return fmt(f.med); }).join(' · ') + '</span></div>' +
       // Ohne Wertung, weil F3 sicher unter dem Mindestwert liegt: Befund, nicht Rost (wie in der Chronik).
       '<div class="stat' + (s.d34stable.n ? '' : (f3u ? ' befund' : ' unsure')) + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ')' : (f3u ? 'nicht gewertet: F3 ' + fmt(f3u.f3) + ' Hz unter ' + fmt(f3u.schwelle) + ' Hz' : 'keine gewerteten Rahmen')) + '</span></div>' +
       '<div class="stat"><span class="k">Bestes Segment je Vokal</span><span class="v">' + (Object.keys(per).map(function (k) { return '/' + k + '/ ' + (per[k].bestSegment ? fmt(per[k].bestSegment.d34Med) : '–'); }).join(' · ') || '–') + '</span></div>' +
-      '<div class="stat"><span class="k">SFR · SHR max · CPP</span><span class="v">' + fmt(s.sfr.med, 1) + ' · ' + fmt(s.shr.max, 1) + ' · ' + fmt(s.cpp.med, 1) + '</span></div>' +
+      '<div class="stat"><span class="k">SFR · SHR max · CPP</span><span class="v">' + fmt(s.sfr.med, 1) + ' · ' + fmt(s.shr.max, 1) + ' · ' + fmt(s.cpp.med, 1) + CH.shrZusatz(s) + '</span></div>' +
       '<div class="stat' + (s.floorSource === 'calibration' ? '' : ' unsure') + '"><span class="k">stimmhaft · gültig · stabil · SNR</span><span class="v">' + fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' % · ' + fmt(s.snrDb, 1) + ' dB</span></div>' +
       '</div>';
   }
