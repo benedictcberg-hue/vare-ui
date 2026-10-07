@@ -836,6 +836,7 @@
      und Verdopplung in 61 von 971 Paaren über 0,45, in 7 über 0,6. Ein echter Oktavsprung hat bei der
      halben Periode keinen Dip. */
   var FENSTER_KREUZ_MAX = 0.6;
+  var FENSTER_NEBENDIP_TOL = 0.05;
 
   // kleinster echter Dip der YIN-Funktion dn in ±FENSTER_TON_HT um tau, sonst Infinity
   function dipNahe(dn, tau) {
@@ -847,6 +848,10 @@
      - Ganzzahliges Verhältnis m der Perioden (±1,5 HT): YIN kann im längeren Teil ein Vielfaches gewählt
        haben (Verdopplung, Rauschen, ein Formant zwischen den Teiltönen) — dann hat dieser Teil auch bei der
        kürzeren Periode einen Dip.
+     - Anderes Verhältnis, und der Teil mit der kürzeren Periode ist bei der längeren mindestens so periodisch
+       wie bei der eigenen (±FENSTER_NEBENDIP_TOL): YIN nahm dort den ersten Dip unter der Schwelle, einen
+       Nebendip (schmaler F1 auf dem 5. oder 6. Teilton: 4/5 oder 5/6 der Periode, dn um 0,14). Bei einem
+       echten Wechsel steht der höhere Ton bei der Periode des tieferen quer (Quinte: 1,5 Perioden).
      - Verhältnis p/q mit q = 2 oder 3 (±0,5 HT), etwa 3/2: Beide Teile können Vielfache derselben kürzeren
        Periode τ/q sein (YIN nahm 2T und 3T). Dann sind beide bei τ/q periodisch. Bei einer echten Quinte
        ist τ/q die Periode eines gemeinsamen Teiltons (220 und 330 Hz: 660 Hz), keine Periode der Töne:
@@ -859,6 +864,7 @@
     if (Math.abs(12 * Math.log2(a.f0 / b.f0)) <= FENSTER_TON_HT) return true;
     var lang = a.tau > b.tau ? a : b, kurz = lang === a ? b : a, rho = lang.tau / kurz.tau, m = Math.round(rho);
     if (m >= 2 && Math.abs(12 * Math.log2(rho / m)) <= FENSTER_TON_HT) return dipNahe(lang.dn, kurz.tau) < FENSTER_KREUZ_MAX;
+    if (dipNahe(kurz.dn, lang.tau) <= kurz.ap + FENSTER_NEBENDIP_TOL) return true;
     for (var q = 2; q <= 3; q++) {
       var pz = Math.round(rho * q);
       if (pz % q === 0 || Math.abs(12 * Math.log2(rho * q / pz)) > 0.5) continue;

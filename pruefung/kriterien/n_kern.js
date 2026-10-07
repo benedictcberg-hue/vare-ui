@@ -550,6 +550,27 @@ module.exports = async function (H) {
         (neu.length ? ' — \'rauschen\' z. B. ' + neu.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : ''));
     }
 
+    /* A2f (Fortsetzung) Schmaler F1 genau auf dem 3.–6. Teilton (tiefe Lage, wie K3): YIN nimmt in einzelnen
+       Teilfenstern einen Nebendip bei 4/5 oder 5/6 der Periode (dn knapp unter 0,15). Das ist kein zweiter
+       Ton; vorher galt jeder dritte Rahmen als 'wechsel', und die richtige Korrektur des Grundtons wurde als
+       Mischwert verworfen. */
+    {
+      s2 = 26500;
+      const L = [];
+      const SAETZE = [[121, 5, 45], [97, 5, 30]];
+      for (const f0 of [76, 95, 115, 133]) for (const m of [3, 4, 5, 6]) for (const b of [30, 45]) SAETZE.push([f0, m, b]);
+      for (const [f0, m, b] of SAETZE) {
+        const x = D.synthVowel(f0, [m * f0, 1250, 2500, 3300, 4200], [b, 90, 120, 150, 200], 0.6, SR);
+        for (const r of rahmenBei(x, [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45])) if (r.voiced) L.push({ nm: f0 + ' Hz F1 = ' + m + '·F0 B1 ' + b, r, f0 });
+      }
+      const fenster = L.filter(x => hat(x.r, 'wechsel') || hat(x.r, 'rand') || x.r.f0Grund === 'wechsel'), falsch = L.filter(x => !(Math.abs(x.r.f0 / x.f0 - 1) < 0.03) && !x.r.f0Unsure);
+      check('A2f', 'stehende Töne 76–133 Hz mit schmalem F1 (30/45 Hz) auf dem 3.–6. Teilton und Befund-Fälle 121/97 Hz: nie \'wechsel\', \'rand\' oder f0Grund \'wechsel\', kein falscher Grundton ohne f0Unsure',
+        L.length >= 200 && fenster.length === 0 && falsch.length === 0,
+        'Rahmen ' + L.length + ', Fenstergrund ' + fenster.length + ', falscher Grundton ohne Marke ' + falsch.length +
+        (fenster.length ? ' — ' + fenster.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r) + ' Teile ' + r1_(x.r.fensterF0Lo) + '–' + r1_(x.r.fensterF0Hi)).join(' | ') : '') +
+        (falsch.length ? ' — ' + falsch.slice(0, 3).map(x => x.nm + ' ' + zeig(x.r)).join(' | ') : ''));
+    }
+
     /* A2g Vertrag der neuen Felder und Gründe (dsp.js analyseAt), nachgerechnet aus Spektrum und Signal:
        Zwischenpegel (shrBoden, 'rauschen') und Fensterprobe (fenster*, 'rand', 'wechsel', Mischwert). */
     {
