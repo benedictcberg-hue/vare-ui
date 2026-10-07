@@ -70,17 +70,43 @@
   }
   function shrBefund(s) { return !!(s && s.shr && zahl(s.shr.max) && s.shr.max > SHR_WARN_DB); }
 
-  function renderRefs(el, refs, handlers) {
-    var keys = Object.keys(refs || {}).sort();
-    if (!keys.length) { el.innerHTML = '<p class="muted small">Noch keine Referenz — die erste stabile Aufnahme mit gültigem ΔF3–4 (F3 ≥ Mindestwert) setzt sie je Vokal.</p>'; return; }
+  /* Anteil zweideutig zugeordneter Rahmen (Vokal nahe der Grenze zum Nachbarn) neben einem
+     Bestsegment oder einer Referenz: Die Zahl ist gemessen, ihr Vokal aber teils unsicher. */
+  function zweideutigText(share) { return (zahl(share) && share > 0) ? ' <span class="rust small">zweideutig ' + fmt(share * 100) + ' %</span>' : ''; }
+  // Takes, die anders gerechnet sind als jetzt eingestellt, zählen nicht als Referenz: { Vokal: Anzahl }.
+  function uebergangenText(ueb) {
+    var ks = Object.keys(ueb || {}).filter(function (c) { return ueb[c] > 0; }).sort();
+    if (!ks.length) return '';
+    return 'Nicht als Referenz gezählt, weil anders gerechnet als jetzt eingestellt: ' + ks.map(function (c) { return '/' + esc(c) + '/ ' + fmt(ueb[c]) + (ueb[c] === 1 ? ' Take' : ' Takes'); }).join(', ')
+      + '. Nach einer Neu-Analyse mit den jetzigen Einstellungen (nur mit gespeichertem Audio) zählen sie wieder.';
+  }
+  /* Eine verwaiste Referenz ist angepinnt, lässt sich aus ihrem Take aber nicht mehr auffrischen
+     (computeRefs in analysis.js: verwaist, grund, kein d34). Sie bleibt sichtbar, mit Grund, und ist
+     keine Zielmarke. Neutral, denn das ist kein Messwert. grund nennt Codes aus Fremddaten: maskieren. */
+  function renderRefs(el, refs, handlers, uebergangen) {
+    var keys = Object.keys(refs || {}).sort(), ueb = uebergangenText(uebergangen);
+    if (!keys.length) { el.innerHTML = '<p class="muted small">' + (ueb ? 'Keine Referenz. ' + ueb : 'Noch keine Referenz — die erste stabile Aufnahme mit gültigem ΔF3–4 (F3 ≥ Mindestwert) setzt sie je Vokal.') + '</p>'; return; }
     var h = '<table><thead><tr><th>Vokal</th><th class="num">ΔF3–4 (Hz)</th><th>Take</th><th>Stelle</th><th></th></tr></thead><tbody>';
     keys.forEach(function (k) {
       var r = refs[k];
-      h += '<tr><td class="mono">/' + esc(k) + '/</td><td class="num">' + fmt(r.d34) + '</td><td>' + esc(r.code || '') + ' · ' + esc(dateShort(r.date)) + (r.pinned ? ' <span class="tag gold">angepinnt</span>' : '') + '</td><td class="mono small">' + fmt(r.startS, 1) + ' s, ' + fmt(r.lenS, 1) + ' s</td><td>' +
+      if (!r) return;
+      var verwaist = !!r.verwaist;
+      h += '<tr><td class="mono">/' + esc(k) + '/</td><td class="num">' + (verwaist ? '–' : fmt(r.d34) + zweideutigText(r.ambiguousShare)) + '</td><td>' + esc(r.code || '') + ' · ' + esc(dateShort(r.date)) + (r.pinned ? ' <span class="tag gold">angepinnt</span>' : '') +
+        (verwaist ? '<br><span class="small">verwaist: ' + esc(r.grund || 'Grund nicht angegeben') + (zahl(r.d34Zuletzt) ? ' · zuletzt ' + fmt(r.d34Zuletzt) + ' Hz' : '') + ' — keine Zielmarke</span>' : '') +
+        '</td><td class="mono small">' + fmt(r.startS, 1) + ' s, ' + fmt(r.lenS, 1) + ' s</td><td>' +
         (r.pinned ? '<button data-act="unpin" data-cls="' + esc(k) + '">Lösen</button>' : '') + '</td></tr>';
     });
-    el.innerHTML = h + '</tbody></table>';
+    el.innerHTML = h + '</tbody></table>' + (ueb ? '<p class="small muted">' + ueb + '</p>' : '');
     el.querySelectorAll('button[data-act="unpin"]').forEach(function (b) { b.addEventListener('click', function () { handlers.unpinRef(b.getAttribute('data-cls')); }); });
+  }
+
+  /* Zeile unter der Live-Anzeige. Verwaist: kein Wert, keine Differenz, der Grund. uebergangen: Zahl der
+     Takes mit diesem Vokal, die anders gerechnet sind — dann setzt nicht „die erste Aufnahme“ sie. */
+  function refZeile(cls, ref, score, uebergangen) {
+    if (!cls) return '';
+    if (ref && ref.verwaist) return 'Referenz /' + cls + '/ verwaist: ' + (ref.grund || 'Grund nicht angegeben') + (zahl(ref.d34Zuletzt) ? ' (zuletzt ' + fmt(ref.d34Zuletzt) + ' Hz)' : '') + ' — keine Zielmarke';
+    if (ref && zahl(ref.d34)) return 'Referenz /' + cls + '/: ' + fmt(ref.d34) + ' Hz (' + ref.code + ', ' + dateShort(ref.date) + ')' + (zahl(score) ? ' — live ' + fmt(score) + ' (' + (score - ref.d34 >= 0 ? '+' : '') + fmt(score - ref.d34) + ')' : '');
+    return 'keine Referenz für /' + cls + '/ — ' + (uebergangen > 0 ? uebergangen + (uebergangen === 1 ? ' Take ist' : ' Takes sind') + ' anders gerechnet als jetzt eingestellt und ' + (uebergangen === 1 ? 'zählt' : 'zählen') + ' nicht (neu analysieren)' : 'die erste stabile Aufnahme setzt sie');
   }
 
   function renderList(el, takes, audioIds, handlers) {
@@ -88,6 +114,7 @@
     var h = '<table><thead><tr><th>Take</th><th>Vokal<br><span class="small">Absicht / gemessen</span></th><th class="num">F0</th><th class="spalte-breit">F1–F5 Median, Quartile</th><th class="num">ΔF3–4 stabil</th><th class="num">F3 stabil</th><th class="num">SFR</th><th class="num">SHR max</th><th class="num">gültig</th><th>Kern</th><th></th></tr></thead><tbody>';
     takes.forEach(function (t) {
       var s = t.summary || {}, old = t.analysis && t.analysis.kernelVersion !== D.VERSION, thr = f3Schwelle(t), f3u = f3Unter(t);
+      var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(t) : '';
       h += '<tr data-id="' + esc(t.id) + '">' +
         '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span></td>' +
         '<td class="mono">' + esc(t.vowelIntent || '–') + ' / ' + esc(s.vowel && s.vowel.dominant || '–') + '</td>' +
@@ -98,7 +125,7 @@
         '<td class="num">' + (s.sfr ? fmt(s.sfr.med, 1) : '–') + '</td>' +
         '<td class="num">' + (s.shr ? (shrBefund(s) ? '<span class="befund" title="über der Warnschwelle ' + String(SHR_WARN_DB).replace('-', '−') + ' dB">' : '<span>') + fmt(s.shr.max, 1) + '</span>' : '–') + '</td>' +
         '<td class="num">' + fmt((s.validShare || 0) * 100) + ' %</td>' +
-        '<td class="small">' + esc(t.analysis && t.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">alt</span>' : '') + '</td>' +
+        '<td class="small">' + esc(t.analysis && t.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">alt</span>' : '') + (uv ? ' <span class="tag" title="' + esc(uv) + '">anders gerechnet</span>' : '') + '</td>' +
         '<td class="actions"><button data-act="csv">CSV</button>' + (audioIds[t.id] ? '<button data-act="wav">WAV</button><button data-act="re">Neu analysieren</button>' : '') + '<button data-act="del" class="danger">Löschen</button></td></tr>';
     });
     el.innerHTML = h + '</tbody></table>';
@@ -200,12 +227,19 @@
       ' · ΔF3–4 ' + v('d34') + (isFinite(series.score[i]) ? ' (gewertet)' : '') + (series.slotUnsure && series.slotUnsure[i] ? ' [Zuordnung unsicher, ' + (series.nPeaks ? series.nPeaks[i] : '?') + ' Resonanzen]' : '') + ' · SFR ' + v('sfr', 1) + ' · SHR ' + v('shr', 1) + ' · CPP ' + v('cpp', 1) + ' · H1−H2 ' + v('h1h2', 1) + ((series.flags[i] & A.FLAG.H1H2UNSURE) ? ' (filtergetrieben)' : '') + ' · ' + v('rms', 1) + ' dBFS';
   }
 
+  /* Bestes Segment eines Vokals; ein Segment, dessen Rahmen überwiegend zweideutig zugeordnet sind,
+     wird nicht Bestsegment (analysis.js) — dann sagen, warum hier keins steht. */
+  function bestSegmentText(k, pv) {
+    var b = pv && pv.bestSegment;
+    if (b) return '/' + esc(k) + '/ ' + fmt(b.d34Med) + zweideutigText(b.ambiguousShare);
+    return '/' + esc(k) + '/ –' + ((pv && pv.segmentsAmbiguous > 0) ? ' <span class="small">(nur zweideutig zugeordnete Segmente)</span>' : '');
+  }
   function summaryGrid(s, take) {
     function cell(k, v, unsure, befund) { return '<div class="stat' + (unsure ? ' unsure' : (befund ? ' befund' : '')) + '"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
     var thr = f3Schwelle(take), f3u = f3Unter(take);
     // Schlüssel und Zahlen aus einer importierten Sicherung sind Fremddaten: maskieren bzw. durch
     // fmt() schicken, sonst landet beliebiges HTML in der Detailansicht.
-    var per = s.perVowel || {}, perTxt = Object.keys(per).map(function (k) { return '/' + esc(k) + '/ ' + (per[k].bestSegment ? fmt(per[k].bestSegment.d34Med) : '–'); }).join(' · ') || '–';
+    var per = s.perVowel || {}, perTxt = Object.keys(per).map(function (k) { return bestSegmentText(k, per[k]); }).join(' · ') || '–';
     return '<div class="grid">' +
       cell('Dauer · Rahmen', fmt(take.durationS, 1) + ' s · ' + fmt(s.nFrames)) +
       cell('stimmhaft · gültig · stabil', fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' %') +
@@ -216,7 +250,9 @@
       ((s.d34stable && s.d34stable.n) ? cell('ΔF3–4 stabil, F3 ≥ ' + (thr != null ? fmt(thr) + ' Hz' : 'Minimum'), statRange(s.d34stable) + ' n=' + fmt(s.d34stable.n))
         : f3u ? cell('ΔF3–4 stabil, F3 ≥ ' + fmt(thr) + ' Hz', 'nicht gewertet: F3 stabil im Median ' + fmt(f3u.f3) + ' Hz, unter dem Mindestwert ' + fmt(f3u.schwelle) + ' Hz dieses Takes', false, true)
         : cell('ΔF3–4 stabil, F3 ≥ ' + (thr != null ? fmt(thr) + ' Hz' : 'Minimum'), '<span class="rust">keine gewerteten Rahmen</span>')) +
-      cell('Bestes Segment je Vokal', perTxt) + cell('ΔF4–5', statRange(s.d45)) +
+      cell('Bestes Segment je Vokal', perTxt) +
+      (zahl(s.vowelAmbiguousShare) ? cell('Vokal zweideutig zugeordnet', fmt(s.vowelAmbiguousShare * 100) + ' % der stabilen Rahmen', s.vowelAmbiguousShare > 0.5) : '') +
+      cell('ΔF4–5', statRange(s.d45)) +
       cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–'), false, shrBefund(s)) +
       cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben)', s.h1h2 && s.h1h2.unsureShare > 0.5) +
       cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
@@ -272,6 +308,8 @@
 
   function renderDetail(el, take, series, refs, hasAudio, handlers) {
     var s = take.summary || {}, old = take.analysis && take.analysis.kernelVersion !== D.VERSION;
+    // Eine Referenz gilt nur unter gleicher Rechenweise; app.js sagt, ob dieser Take jetzt vergleichbar ist.
+    var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(take) : '';
     var intents = [''].concat(V.CENTROIDS.map(function (c) { return c.cls; }));
     el.innerHTML = '<div class="panel"><a href="#/chronik">← Chronik</a>' +
       '<h2>' + esc(take.code) + ' <span id="d-label-view">' + esc(take.label) + '</span></h2>' +
@@ -288,7 +326,8 @@
       '<div class="panel">' + summaryGrid(s, take) + '</div>' +
       '<div class="panel"><canvas id="d-lanes" height="420"></canvas><div id="d-hover" class="mono small muted hover-zeile">Maus über die Spuren bewegen.</div></div>' +
       '<div class="panel actions"><button id="d-frames">Rahmen-CSV</button><button id="d-row">CSV-Zeile</button>' + (hasAudio ? '<button id="d-wav">WAV</button><button id="d-re">Neu analysieren (Kern ' + esc(D.VERSION) + ')</button>' : '<span class="small muted">kein Audio gespeichert — Neu-Analyse nicht möglich</span> ') +
-      Object.keys(s.perVowel || {}).map(function (k) { return s.perVowel[k].bestSegment ? '<button data-pin="' + esc(k) + '">Als Referenz für /' + esc(k) + '/ anpinnen</button>' : ''; }).join('') +
+      (uv ? '<span class="small muted">Nicht als Referenz wählbar — anders gerechnet als jetzt eingestellt: ' + esc(uv) + '.</span> '
+        : Object.keys(s.perVowel || {}).map(function (k) { return s.perVowel[k].bestSegment ? '<button data-pin="' + esc(k) + '">Als Referenz für /' + esc(k) + '/ anpinnen</button>' : ''; }).join('')) +
       '<button id="d-del" class="danger">Take löschen</button></div>' +
       (take.history && take.history.length ? '<div class="panel small muted">Frühere Auswertungen: ' + take.history.map(historieText).join(', ')
         + (take.reanalysisNote ? ' · bei der letzten Neu-Analyse geändert: ' + esc(take.reanalysisNote) : '') + '</div>' : '');
@@ -315,5 +354,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

@@ -39,9 +39,11 @@ class El {
   click() { this.feuern('click'); }
   setAttribute(k, v) { this['@' + k] = String(v); }
   getAttribute(k) { return this['@' + k] == null ? null : this['@' + k]; }
-  querySelector() { return new El(); }
+  // Je Selektor dasselbe Element und die angehängten Kinder: so erreicht ein Kriterium die Regler,
+  // die renderSettings in einen Rahmen schreibt (U3: Referenzen nach einer Regleränderung).
+  querySelector(sel) { const q = this._q || (this._q = {}); return q[sel] || (q[sel] = new El()); }
   querySelectorAll() { return []; }
-  appendChild(c) { return c; }
+  appendChild(c) { (this.kinder || (this.kinder = [])).push(c); return c; }
   insertBefore(c) { return c; }
   remove() { }
   focus() { }
@@ -600,7 +602,8 @@ module.exports = async function (H) {
     const take = { id: 'u3-nan', code: 'N', label: 'N 310 Hz', createdAt: new Date(T0).toISOString(), durationS: 1.5, sampleRate: SR, analysis: { kernelVersion: D.VERSION, gate: { f3MinHz: 2500 } },
       summary, history: [{ analysis: { kernelVersion: '2.9.0', analysedAt: new Date(T0 - 864e5).toISOString() }, summary: { snrDb: NaN, F: [{ med: NaN, n: 0 }] } }] };
     const series = res.series;
-    series.sfr[0] = Infinity; series.sfr[1] = -Infinity;
+    // Nicht nur, was die Analyse gerade liefert: NaN und ±Infinity auch ausdrücklich setzen.
+    series.sfr[0] = Infinity; series.sfr[1] = -Infinity; series.f2[2] = NaN;
     const nanVorher = [];
     for (let i = 0; i < series.f2.length; i++) if (Number.isNaN(series.f2[i])) nanVorher.push(i);
     const text = C.serializeBackup({ takes: [take], series: { [take.id]: series }, refs: { o: { d34: NaN, takeId: 'x', pinned: true } }, calibrations: [{ id: 'c', floorDb: -Infinity, F: [NaN, 700] }], settings: { x: NaN }, kernelVersion: D.VERSION });
@@ -746,6 +749,151 @@ module.exports = async function (H) {
       'erwartet „' + erwartet + ' …“ | angezeigt „' + txt2 + '“');
     p.schliessen();
   } catch (e) { check('U3.14', 'Ablauf Historie läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U3 · Referenzen nur aus gleich gerechneten Takes (Vertrag mit analysis.js) ---------- */
+  // Den Regler so bewegen, wie es die Hand tut: input-Ereignis am Schieber, den renderSettings angelegt hat.
+  function regler(p, key, wert) {
+    const wrap = (p.el('settings').kinder || []).filter(w => new RegExp('id="s-' + key + '"').test(w.innerHTML)).pop();
+    if (!wrap) throw new Error('Regler ' + key + ' nicht gefunden');
+    const inp = wrap.querySelector('input'); inp.value = String(wert); inp.feuern('input');
+  }
+  /* Nachbau des Vertrags computeRefs(takes, previous, aktuell) und unvergleichbar(take, aktuell), wie
+     ihn analysis.js auf dem Auswertungs-Zweig erfüllt — hier nur mit dem F3-Mindestwert als Rechenweise.
+     So prüft das Kriterium die Verdrahtung in app.js, unabhängig davon, welche analysis.js daneben liegt. */
+  function vertragNachbauen(sb) {
+    const A2 = sb.VAREANALYSIS, echt = A2.computeRefs;
+    A2.unvergleichbar = (t, akt) => { const g = t && t.analysis && t.analysis.gate; return akt && g && g.f3MinHz !== akt.gate.f3MinHz ? 'F3-Mindestwert ' + g.f3MinHz + ' statt ' + akt.gate.f3MinHz + ' Hz' : ''; };
+    A2.computeRefs = (takes, prev, akt) => {
+      const refs = {};
+      for (const c in (prev || {})) {
+        const pr = prev[c]; if (!pr || !pr.pinned) continue;
+        const host = takes.find(t => t.id === pr.takeId), uv = host ? A2.unvergleichbar(host, akt) : '';
+        const b = host && host.summary && host.summary.perVowel && host.summary.perVowel[c] && host.summary.perVowel[c].bestSegment;
+        refs[c] = host && !uv && b ? { d34: b.d34Med, takeId: host.id, code: host.code, date: host.createdAt, startS: b.startS, lenS: b.lenS, pinned: true }
+          : { takeId: pr.takeId, code: pr.code, date: pr.date, startS: pr.startS, lenS: pr.lenS, pinned: true, verwaist: true,
+            grund: !host ? 'Take ' + pr.code + ' ist gelöscht.' : 'Take ' + host.code + ' ist anders gerechnet als jetzt eingestellt: ' + uv + '.', d34Zuletzt: isFinite(pr.d34) && pr.d34 !== null ? pr.d34 : pr.d34Zuletzt };
+      }
+      const auto = echt(takes.filter(t => !A2.unvergleichbar(t, akt)), null);
+      for (const c in auto) if (!refs[c]) refs[c] = auto[c];
+      return refs;
+    };
+  }
+  try {
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 13 * 86400e3);
+    let p = await seiteOeffnen(sp, uhr, SIG, SR);
+    const aufrufe = [], echt = p.sb.VAREANALYSIS.computeRefs;
+    p.sb.VAREANALYSIS.computeRefs = function (t, prev, akt) { aufrufe.push(akt === undefined ? 'fehlt' : JSON.parse(JSON.stringify(akt))); return echt.apply(this, arguments); };
+    p.kalibriert('cal-R'); await p.mikrofon();
+    const A1 = await p.take();
+    await p.ruhe(20);
+    const nachTake = aufrufe[aufrufe.length - 1];
+    const soll = { kernelVersion: D.VERSION, gate: { windowS: 0.3, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.8, f3MinHz: 2500 }, spreadMaxHz: 130, hopS: 0.05 };
+    aufrufe.length = 0;
+    regler(p, 'f3MinHz', 2650);
+    await p.warte(() => aufrufe.length > 0, 2000);
+    const nachRegler = aufrufe[aufrufe.length - 1];
+    check('U3.16', 'Referenzen werden mit der jetzigen Rechenweise bestimmt (Kern, Gatter, Streuungsgrenze, Rahmenabstand), nach dem Take und nach einer Regleränderung',
+      abweichung(soll, nachTake) === '' && !!nachRegler && nachRegler.gate && nachRegler.gate.f3MinHz === 2650,
+      'nach dem Take ' + JSON.stringify(nachTake) + ' | nach dem Regler ' + JSON.stringify(nachRegler));
+    p.schliessen();
+    // Gespeicherte Referenz einer früheren Fassung: beim Öffnen neu bestimmt, nicht übernommen.
+    sp.d.meta.set('refs', { a: { d34: 600, takeId: 'gibt-es-nicht', code: 'Z', pinned: false } });
+    // Regler zurück auf 2500; der Rahmenabstand bleibt der, mit dem A gerechnet ist.
+    sp.d.meta.set('settings', Object.assign({}, sp.d.meta.get('settings'), { f3MinHz: 2500 }));
+    p = await seiteOeffnen(sp, uhr, SIG, SR);
+    await p.warte(() => p.st().refs.a && p.st().refs.a.takeId === A1.id, 2000);
+    const gesp = sp.d.meta.get('refs');
+    check('U3.17', 'Beim Öffnen: gespeicherte Referenzen werden mit der jetzigen Rechenweise neu bestimmt, eine veraltete Zielmarke bleibt nicht stehen',
+      !!p.st().refs.a && p.st().refs.a.takeId === A1.id && gesp.a && gesp.a.takeId === A1.id && Math.abs(gesp.a.d34 - 600) > 50,
+      'live ' + JSON.stringify(p.st().refs.a && { takeId: p.st().refs.a.takeId === A1.id ? 'A' : p.st().refs.a.takeId, d34: Math.round(p.st().refs.a.d34) }) + ' | gespeichert ' + (gesp.a ? Math.round(gesp.a.d34) : '–'));
+    // Vertrag nachgebaut: ein Take, der mit anderem F3-Mindestwert gerechnet ist, zählt nicht.
+    vertragNachbauen(p.sb);
+    regler(p, 'f3MinHz', 2600);
+    await p.warte(() => !p.st().refs.a, 2000);
+    const ohne = { refs: Object.keys(p.st().refs).join(','), ueb: JSON.stringify(p.st().refsUebergangen), zeile: p.sb.VARECHRONIK.refZeile('a', p.st().refs.a, NaN, p.st().refsUebergangen.a || 0) };
+    if (p.st().statusEl) p.st().statusEl.textContent = '';
+    p.sb.VAREAPP.handlers.pinRef('a', sp.d.takes.get(A1.id));
+    await p.ruhe(30);
+    const abgewiesen = { meldung: p.st().statusEl ? p.st().statusEl.textContent : '', gesp: sp.d.meta.get('refs').a };
+    p.sb.location.hash = '#/chronik'; p.sb.VAREAPP.refreshChronik();
+    await p.warte(() => /anders gerechnet/.test(p.el('refs-table').innerHTML), 2000);
+    const tabelle = p.el('refs-table').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    check('U3.18', 'Regler auf 2600 Hz: der mit 2500 Hz gerechnete Take ist keine Referenz mehr, das wird gesagt; Anpinnen wird abgewiesen',
+      ohne.refs === '' && /"a":1/.test(ohne.ueb) && /1 Take ist anders gerechnet/.test(ohne.zeile) && /Nicht angepinnt/.test(abgewiesen.meldung) && !abgewiesen.gesp && /\/a\/ 1 Take/.test(tabelle),
+      JSON.stringify(ohne) + ' | Anpinnen: „' + abgewiesen.meldung + '“ | Tabelle „' + tabelle.trim() + '“');
+    // Zurück auf 2500, anpinnen, dann wieder 2600: der Pin bleibt sichtbar, verwaist, ohne Zielmarke.
+    regler(p, 'f3MinHz', 2500);
+    await p.warte(() => p.st().refs.a && !p.st().refs.a.pinned, 2000);
+    p.sb.VAREAPP.handlers.pinRef('a', sp.d.takes.get(A1.id));
+    await p.warte(() => p.st().refs.a && p.st().refs.a.pinned, 2000);
+    regler(p, 'f3MinHz', 2600);
+    await p.warte(() => p.st().refs.a && p.st().refs.a.verwaist, 2000);
+    p.sb.VAREAPP.refreshChronik();
+    await p.warte(() => /verwaist:/.test(p.el('refs-table').innerHTML), 2000);
+    const r = p.st().refs.a || {}, zeile = p.sb.VARECHRONIK.refZeile('a', r, 700, 0), tab2 = p.el('refs-table').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    check('U3.19', 'Angepinnte Referenz, deren Take jetzt anders gerechnet ist: verwaist mit Grund in Tabelle und Live-Zeile, ohne Wert und ohne Differenz',
+      r.verwaist === true && !p.sb.VARECHRONIK.zahl(r.d34) && /verwaist: Take A ist anders gerechnet/.test(tab2) && /Lösen/.test(tab2) && /verwaist/.test(zeile) && !/live/.test(zeile),
+      'Live „' + zeile + '“ | Tabelle „' + tab2.trim() + '“');
+    p.schliessen();
+  } catch (e) { check('U3.16', 'Ablauf Referenzen mit Rechenweise läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+  try {
+    // Sicherung mit angepinnter Referenz auf einen Take, der weder in der Sicherung noch hier liegt.
+    const sp = speicherNeu(), uhr = uhrNeu(T0 + 14 * 86400e3);
+    const p = await seiteOeffnen(sp, uhr, SIG, SR);
+    const fremdTake = befundTake(2500, t => { t.id = 'imp-1'; t.code = 'K'; });
+    const json = C.serializeBackup({ takes: [fremdTake], series: {}, refs: { u: { d34: 600, takeId: 'fehlt-1', code: 'X', date: new Date(T0).toISOString(), pinned: true } }, calibrations: [], settings: null, kernelVersion: D.VERSION });
+    if (p.st().statusEl) p.st().statusEl.textContent = '';
+    p.el('file-import').files = [{ text: () => Promise.resolve(json) }];
+    p.el('file-import').feuern('change');
+    await p.warte(() => /Import/.test(p.st().statusEl ? p.st().statusEl.textContent : ''), 10000);
+    const ru = (sp.d.meta.get('refs') || {}).u, meldung = p.st().statusEl.textContent;
+    check('U3.20', 'Import: eine angepinnte Referenz der Sicherung wird geprüft wie jede andere; ohne ihren Take wird sie keine Zielmarke, und die Meldung sagt es',
+      !(ru && p.sb.VARECHRONIK.zahl(ru.d34)) && (!ru || ru.verwaist === true) && /angepinnte Referenz/.test(meldung) && /(nicht übernommen|verwaist)/.test(meldung),
+      'gespeichert ' + JSON.stringify(ru || null) + ' | „' + meldung + '“');
+    p.schliessen();
+  } catch (e) { check('U3.20', 'Ablauf Import mit angepinnter Referenz läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+  try {
+    // Anzeige mit nachgebauten Einträgen, wie analysis.js sie nach dem Vertrag liefert.
+    const sb = chronikNeu(), CHR = sb.VARECHRONIK;
+    const refs = {
+      a: { takeId: 't-c', code: 'C', date: new Date(T0).toISOString(), startS: 1, lenS: 0.8, pinned: true, verwaist: true, grund: 'Take C ist gelöscht.', d34Zuletzt: 612.4 },
+      i: { takeId: 't-d', code: '<img src=x>', date: new Date(T0).toISOString(), pinned: true, verwaist: true, grund: 'Take <img src=x> ist gelöscht.' },
+      o: { d34: 700.2, takeId: 't-e', code: 'E', date: new Date(T0).toISOString(), startS: 2, lenS: 0.9, pinned: false, ambiguousShare: 0.3 }
+    };
+    const div = new El(); CHR.renderRefs(div, refs, {}, { e: 2 });
+    const zeilen = div.innerHTML.split('<tr>').slice(2), za = zeilen.find(z => /\/a\//.test(z)) || '', zo = zeilen.find(z => /\/o\//.test(z)) || '';
+    const zellenA = za.split('</td>');
+    check('U3.21', 'Referenztabelle: verwaist mit Grund, „zuletzt“-Wert nur als Text, kein Wert in der ΔF3–4-Spalte, Lösen-Knopf; zweideutiger Anteil sichtbar; Fremdtext maskiert; übergangene Takes genannt',
+      /^–$/.test((zellenA[1] || '').replace(/<[^>]+>/g, '')) && /verwaist: Take C ist gelöscht\./.test(za) && /zuletzt 612 Hz/.test(za) && /data-act="unpin"/.test(za)
+      && /700/.test(zo) && /zweideutig 30 %/.test(zo) && !/<img/.test(div.innerHTML) && /\/e\/ 2 Takes/.test(div.innerHTML),
+      div.innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    const zv = CHR.refZeile('a', refs.a, 650, 0), zn = CHR.refZeile('a', undefined, 650, 2), zr = CHR.refZeile('o', refs.o, 650, 0), z0 = CHR.refZeile('a', undefined, NaN, 0);
+    check('U3.22', 'Live-Zeile: verwaist ohne Wert und Differenz, mit Grund; ohne Referenz die Zahl der anders gerechneten Takes; sonst Wert und Differenz',
+      /verwaist: Take C ist gelöscht\./.test(zv) && /zuletzt 612 Hz/.test(zv) && !/live|−|\+/.test(zv) && /2 Takes sind anders gerechnet/.test(zn) && /700 Hz/.test(zr) && /live 650 \(-50\)/.test(zr) && /erste stabile Aufnahme/.test(z0),
+      [zv, zn, zr, z0].join(' | '));
+    // Spur ΔF3–4: keine Referenzlinie für einen verwaisten Eintrag oder einen null-Wert aus einer älteren Sicherung.
+    const n = 20, ser = { t: new Float32Array(n), f0: new Float32Array(n).fill(196), flags: new Uint8Array(n), valid: new Uint8Array(n), gate: new Uint8Array(n).fill(2), cls: new Int8Array(n), d34: new Float32Array(n).fill(NaN), score: new Float32Array(n).fill(NaN) };
+    for (let i = 0; i < n; i++) ser.t[i] = i * 0.05;
+    for (let k = 1; k <= 5; k++) ser['f' + k] = new Float32Array(n).fill(NaN);
+    const aIdx = sb.VAREVOWEL.CENTROIDS.findIndex(c => c.cls === 'a'); ser.cls.fill(aIdx);
+    const linie = r => { const l = leinwand(); CHR.drawLanes(l.cv, ser, { a: r }, null); return l.ops.filter(o => o[0] === 'fillText' && /^\/a\//.test(o[1][0])).map(o => o[1][0]); };
+    const lv = linie(refs.a), ln = linie({ d34: null, code: 'Z', pinned: true }), lw = linie({ d34: 700.2, code: 'E' });
+    check('U3.23', 'Zeitspur: keine Referenzlinie für verwaiste oder leere Einträge, wohl aber für eine gültige',
+      lv.length === 0 && ln.length === 0 && lw.length === 1 && /700/.test(lw[0]), 'verwaist ' + JSON.stringify(lv) + ' | null ' + JSON.stringify(ln) + ' | gültig ' + JSON.stringify(lw));
+    // Detail: zweideutige Zuordnung sichtbar; Anpinnen nur, wenn der Take jetzt vergleichbar ist.
+    const t = befundTake(2500, x => {
+      x.summary.perVowel = { a: { segments: 1, segmentsAmbiguous: 0, bestSegment: { d34Med: 712.4, startS: 0.5, lenS: 1, n: 90, ambiguousShare: 0.3 } }, o: { segments: 2, segmentsAmbiguous: 2, bestSegment: null } };
+      x.summary.vowelAmbiguousShare = 0.35;
+    });
+    const dv = new El(); CHR.renderDetail(dv, t, null, {}, false, { unvergleichbar: () => '' });
+    const dn = new El(); CHR.renderDetail(dn, t, null, {}, false, { unvergleichbar: () => 'Kern 2.9.0 statt 3.0.0' });
+    const kb = kacheln(dv.innerHTML), best = kb.find(x => /Bestes Segment/.test(x.k)) || {}, va = kb.find(x => /Vokal zweideutig/.test(x.k)) || {};
+    const ln2 = new El(); CHR.renderList(ln2, [t], {}, { unvergleichbar: () => 'Kern 2.9.0 statt 3.0.0' });
+    check('U3.24', 'Detail: Anteil zweideutiger Rahmen am Bestsegment und im Take sichtbar, „nur zweideutige Segmente“ benannt; Anpinnen nur bei gleicher Rechenweise, sonst der Grund (auch in der Liste)',
+      /\/a\/ 712 zweideutig 30 %/.test(best.v || '') && /\/o\/ – \(nur zweideutig zugeordnete Segmente\)/.test(best.v || '') && /35 %/.test(va.v || '')
+      && /data-pin="a"/.test(dv.innerHTML) && !/data-pin/.test(dn.innerHTML) && /Nicht als Referenz wählbar.*Kern 2\.9\.0 statt 3\.0\.0/.test(dn.innerHTML) && /title="Kern 2\.9\.0 statt 3\.0\.0">anders gerechnet/.test(ln2.innerHTML),
+      'Bestes Segment „' + best.v + '“ | „' + va.k + '“ = „' + va.v + '“ | Pin-Knopf vergleichbar ' + /data-pin="a"/.test(dv.innerHTML) + ', unvergleichbar ' + /data-pin/.test(dn.innerHTML));
+  } catch (e) { check('U3.21', 'Ablauf Anzeige Referenzen läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);

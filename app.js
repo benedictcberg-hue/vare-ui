@@ -27,7 +27,7 @@
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
   ];
 
-  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null };
+  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -57,6 +57,12 @@
   }
   function bytesText(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' kB'; }
   function gateOpts() { var s = st.settings; return { windowS: s.windowS, sdF1Max: s.sdF1Max, sdF2Max: s.sdF2Max, minValidShare: s.minValidShare, f3MinHz: s.f3MinHz }; }
+  /* Rechenweise, mit der ein Take JETZT analysiert würde. Eine Referenz ist die Zielmarke für das,
+     was jetzt gemessen wird, und stammt deshalb nur aus Takes, die genauso gerechnet sind (Manual:
+     „Vergleiche nur bei gleicher Rechenweise“; analysis.js computeRefs und unvergleichbar). */
+  function rechenweise() { var s = st.settings; return { kernelVersion: D.VERSION, gate: gateOpts(), spreadMaxHz: s.spreadMaxHz, hopS: s.hopS }; }
+  // '' = vergleichbar; sonst die Abweichungen als Text. Ein Rechenkern ohne diese Prüfung meldet nichts.
+  function unvergleichbar(take, akt) { return typeof A.unvergleichbar === 'function' ? A.unvergleichbar(take, akt || rechenweise()) : ''; }
   function b64FromBuffer(buf) { var u = new Uint8Array(buf), s = ''; for (var i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); }
   function blobFromB64(b64, type) { var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Blob([u], { type: type || 'audio/wav' }); }
 
@@ -92,11 +98,22 @@
         wrap.innerHTML = '<label for="s-' + d.key + '">' + d.label + '</label><output id="o-' + d.key + '">' + Number(v).toFixed(d.dec || 0) + '</output><input type="range" id="s-' + d.key + '" min="' + d.min + '" max="' + d.max + '" step="' + d.step + '" value="' + v + '" class="voll">';
         wrap.querySelector('input').addEventListener('input', function (e) {
           st.settings[d.key] = parseFloat(e.target.value); st.touched[d.key] = true; wrap.querySelector('output').textContent = Number(st.settings[d.key]).toFixed(d.dec || 0);
-          st.gate = V.createGate(gateOpts()); saveSettings(); $('live-hints').textContent = hintText();
+          st.gate = V.createGate(gateOpts()); saveSettings(); $('live-hints').textContent = hintText(); refsSpaeter();
         });
       }
       el.appendChild(wrap);
     });
+  }
+
+  /* Welche Takes als Referenz zählen, hängt an den Reglern. Nach einer Änderung neu bestimmen, sonst
+     bliebe die Zielmarke eines jetzt anders gerechneten Takes stehen. Verzögert wie saveSettings. */
+  var refsTimer = 0;
+  function refsSpaeter() {
+    clearTimeout(refsTimer);
+    refsTimer = setTimeout(function () {
+      if (!st.takesGeladen) return;
+      recomputeRefs().then(function () { if (location.hash === '#/chronik') refreshChronik(); }).catch(function () { });
+    }, 300);
   }
 
   /* ---------- Routen ---------- */
@@ -279,8 +296,8 @@
     var tl = D.tubeLength(fr.F, fr.valid);
     setStat('tube', isFinite(tl.cm) ? fmt(tl.cm, 1) + ' cm (ΔF ' + fmt(tl.dF) + ')' : '– (zu wenig stabile Formanten)', !isFinite(tl.cm));
     var ref = cls ? st.refs[cls] : null;
-    if (cls) $('live-ref').textContent = ref ? 'Referenz /' + cls + '/: ' + fmt(ref.d34) + ' Hz (' + ref.code + ', ' + CH.dateShort(ref.date) + ')' + (isFinite(gs.score) ? ' — live ' + fmt(gs.score) + ' (' + (gs.score - ref.d34 >= 0 ? '+' : '') + fmt(gs.score - ref.d34) + ')' : '') : 'keine Referenz für /' + cls + '/ — die erste stabile Aufnahme setzt sie';
-    else $('live-ref').textContent = '';
+    // Eine verwaiste Referenz hat keinen Wert: keine Zielmarke, keine Differenz, dafür der Grund.
+    $('live-ref').textContent = CH.refZeile(cls, ref, gs.score, cls ? (st.refsUebergangen[cls] || 0) : 0);
     drawD34(gs, ref); drawSpec(fr, disp); drawHist();
   }
   function drawLevel(rms, floor) {
@@ -296,7 +313,7 @@
     ctx.fillStyle = COL.line; ctx.fillRect(0, 26, w, 6);
     ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'center';
     (st.korpus && st.korpus.marken || []).forEach(function (m) { ctx.fillRect(x(m.hz) - 1, 20, 2, 18); ctx.fillText(String(m.hz), x(m.hz), 52); });
-    if (ref && isFinite(ref.d34)) { ctx.fillStyle = COL.gold; ctx.beginPath(); ctx.moveTo(x(ref.d34), 18); ctx.lineTo(x(ref.d34) - 6, 8); ctx.lineTo(x(ref.d34) + 6, 8); ctx.closePath(); ctx.fill(); ctx.textAlign = x(ref.d34) < 60 ? 'left' : 'right'; ctx.fillText('Ref ' + fmt(ref.d34) + ' ', x(ref.d34) + (x(ref.d34) < 60 ? 8 : -8), 12); }
+    if (ref && !ref.verwaist && CH.zahl(ref.d34)) { ctx.fillStyle = COL.gold; ctx.beginPath(); ctx.moveTo(x(ref.d34), 18); ctx.lineTo(x(ref.d34) - 6, 8); ctx.lineTo(x(ref.d34) + 6, 8); ctx.closePath(); ctx.fill(); ctx.textAlign = x(ref.d34) < 60 ? 'left' : 'right'; ctx.fillText('Ref ' + fmt(ref.d34) + ' ', x(ref.d34) + (x(ref.d34) < 60 ? 8 : -8), 12); }
     if (isFinite(gs.score)) { ctx.fillStyle = COL.gold; ctx.fillRect(x(gs.score) - 2, 14, 4, 30); ctx.textAlign = x(gs.score) > w - 70 ? 'right' : 'left'; ctx.fillText(fmt(gs.score) + ' Hz', x(gs.score) + (x(gs.score) > w - 70 ? -8 : 8), 12); }
     else { ctx.fillStyle = gs.state === 'pause' ? COL.muted : COL.rust; ctx.textAlign = 'left'; ctx.fillText(gs.state === 'pause' ? 'Pause' : (gs.state === 'uebergang' ? 'Übergang — keine Wertung' : 'stabil, aber ' + gs.reason), 4, 14); }
   }
@@ -661,14 +678,25 @@
   function recomputeRefs() {
     // Wer die Takes neu liest, zeigt auch Schritt 0 neu: sonst stünde nach Take, Löschen oder
     // Import bis zur nächsten halben Minute die alte Nummer da.
-    return S.allTakes().then(function (takes) { st.takes = takes; renderKontext(); return S.getMeta('refs', {}); }).then(function (prev) { st.refs = A.computeRefs(st.takes, prev); return S.setMeta('refs', st.refs); });
+    return S.allTakes().then(function (takes) { st.takes = takes; renderKontext(); return S.getMeta('refs', {}); }).then(function (prev) {
+      var akt = rechenweise(), ueb = {};
+      st.refs = A.computeRefs(st.takes, prev, akt);
+      // Je Vokal: wie viele Takes mit Bestsegment übergangen sind, weil sie anders gerechnet sind.
+      st.takes.forEach(function (t) {
+        var per = t.summary && t.summary.perVowel;
+        if (!per || !unvergleichbar(t, akt)) return;
+        for (var c in per) if (per[c] && per[c].bestSegment) ueb[c] = (ueb[c] || 0) + 1;
+      });
+      st.refsUebergangen = ueb;
+      return S.setMeta('refs', st.refs);
+    });
   }
   function refreshChronik() {
     Promise.all([S.allTakes(), S.audioIds(), S.getMeta('refs', {}), S.estimate(), S.persisted()]).then(function (r) {
       st.takes = r[0]; st.audioIds = {}; (r[1] || []).forEach(function (id) { st.audioIds[id] = true; }); st.refs = r[2] || {};
       var est = r[3];
       $('chronik-storage').textContent = (est ? 'Belegt ' + bytesText(est.usage || 0) + ' von ' + bytesText(est.quota || 0) : '') + (r[4] ? ' · dauerhaft' : ' · Speicher nicht als dauerhaft markiert (Browser darf bei Platznot löschen — JSON-Sicherung anlegen)') + ' · ' + st.takes.length + ' Takes';
-      CH.renderRefs($('refs-table'), st.refs, handlers);
+      CH.renderRefs($('refs-table'), st.refs, handlers, st.refsUebergangen);
       CH.renderList($('takes-list'), st.takes, st.audioIds, handlers);
       renderKontext();
     }).catch(function (e) { $('takes-list').innerHTML = '<p class="rust">Chronik nicht lesbar: ' + CH.esc(e && e.message || e) + '</p>'; });
@@ -704,12 +732,21 @@
       if (!window.confirm('Take ' + take.code + ' „' + take.label + '“ endgültig löschen?')) return;
       S.deleteTake(take.id).then(recomputeRefs).then(function () { if (/^#\/take\//.test(location.hash)) location.hash = '#/chronik'; else refreshChronik(); });
     },
+    unvergleichbar: function (take) { return unvergleichbar(take); },
     unpinRef: function (cls) { if (st.refs[cls]) { st.refs[cls].pinned = false; } S.setMeta('refs', st.refs).then(recomputeRefs).then(refreshChronik); },
     pinRef: function (cls, take) {
       var b = take.summary && take.summary.perVowel && take.summary.perVowel[cls] && take.summary.perVowel[cls].bestSegment;
       if (!b) return;
+      var uv = unvergleichbar(take);
+      if (uv) { status('Nicht angepinnt: Take ' + take.code + ' ist anders gerechnet als jetzt eingestellt (' + uv + '). Erst neu analysieren.', true); return; }
       st.refs[cls] = { d34: b.d34Med, takeId: take.id, code: take.code, label: take.label, date: take.createdAt, startS: b.startS, lenS: b.lenS, pinned: true };
-      S.setMeta('refs', st.refs).then(function () { status('Referenz /' + cls + '/ angepinnt: ' + fmt(b.d34Med) + ' Hz aus ' + take.code); route(); });
+      // Gleich neu bestimmen: computeRefs prüft den Pin wie jeden anderen (z. B. zweideutiges Bestsegment).
+      S.setMeta('refs', st.refs).then(recomputeRefs).then(function () {
+        var r = st.refs[cls];
+        if (r && r.verwaist) status('Referenz /' + cls + '/ angepinnt, aber verwaist: ' + r.grund, true);
+        else status('Referenz /' + cls + '/ angepinnt: ' + fmt(r ? r.d34 : b.d34Med) + ' Hz aus ' + take.code);
+        route();
+      });
     },
     saveEdit: function (take, edit) {
       take.label = edit.label || take.label; take.vowelIntent = edit.vowelIntent; take.comment = edit.comment;
@@ -783,19 +820,26 @@
       }).then(recomputeRefs).then(function () {
         // Angepinnte Referenzen der Sicherung NACH recomputeRefs einmischen — vorher wären sie
         // sofort wieder vom automatischen Minimum überschrieben.
-        if (!b.refs) return 0;
+        if (!b.refs) return '';
         return S.getMeta('refs', {}).then(function (local) {
-          var pin = 0;
+          var gemischt = [];
           for (var cls in b.refs) {
             if (!b.refs[cls] || !b.refs[cls].pinned) continue;
             if (local[cls] && local[cls].pinned) continue;
-            local[cls] = b.refs[cls]; pin++;
+            local[cls] = b.refs[cls]; gemischt.push(cls);
           }
-          st.refs = local;
-          return S.setMeta('refs', local).then(function () { return pin; });
+          /* Und dann prüfen wie jede andere: Ein Pin aus der Sicherung, dessen Take fehlt oder anders
+             gerechnet ist, darf nicht ungeprüft Zielmarke werden. */
+          st.refs = A.computeRefs(st.takes, local, rechenweise());
+          var pin = 0, verw = 0, weg = 0;
+          gemischt.forEach(function (c) { var r = st.refs[c]; if (r && r.pinned) { pin++; if (r.verwaist) verw++; } else weg++; });
+          return S.setMeta('refs', st.refs).then(function () {
+            return (pin ? ', ' + pin + ' angepinnte Referenz(en) übernommen' + (verw ? ' (' + verw + ' davon verwaist, Grund in der Chronik)' : '') : '')
+              + (weg ? ', ' + weg + ' angepinnte Referenz(en) nicht übernommen (ihr Take oder sein Bestsegment fehlt)' : '');
+          });
         });
-      }).then(function (pin) {
-        status('Import: ' + added + ' Takes übernommen, ' + skipped + ' schon vorhanden (übersprungen)' + (pin ? ', ' + pin + ' angepinnte Referenz(en) übernommen' : '') + '.'
+      }).then(function (pinText) {
+        status('Import: ' + added + ' Takes übernommen, ' + skipped + ' schon vorhanden (übersprungen)' + pinText + '.'
           + (doppelt.length ? ' Achtung: ' + (doppelt.length === 1 ? '1 übernommener Take trägt' : doppelt.length + ' übernommene Takes tragen') + ' einen Code, den es hier schon gibt (' + doppelt.join(', ') + ') — die Sicherung stammt wohl aus einem anderen Browser oder von einer anderen Adresse. Die Codes bleiben, wie sie sind; diese Takes über Datum und Bezeichnung unterscheiden.' : ''),
           doppelt.length > 0);
         refreshChronik();
@@ -820,7 +864,7 @@
       if (st.sitzung) behalten.sitzung = st.sitzung;
       return S.clearAll(behalten);
     }).then(function () {
-      st.refs = {}; st.cal = null; st.calSession = false; renderCalStatus([]);
+      st.refs = {}; st.refsUebergangen = {}; st.cal = null; st.calSession = false; renderCalStatus([]);
       // Die Kalibrierung ist mitgelöscht. Ohne diesen Aufruf bliebe der Take-Knopf frei, während
       // daneben „Ohne Kalibrierung ist kein Take möglich“ steht.
       updateTakeButton();
@@ -869,7 +913,7 @@
         else st.settings[k] = korpus.gatter[k];
       }
       st.gate = V.createGate(gateOpts());
-      saveSettings(); renderSettings();
+      saveSettings(); renderSettings(); refsSpaeter();
       stand.textContent = ''; zeigeApp(true);
       $('korpus-stand').textContent = 'Korpus vom ' + (korpus.stand || '?') + ' · ' + korpus.marken.length + ' Marken'
         + (abweichend.length ? ' · hier abweichend eingestellt: ' + abweichend.join(', ') : '');
@@ -946,6 +990,9 @@
         st.takes = alle; st.takesGeladen = true;
         $('ctx-warmup').value = si.warmup || '';
         renderKontext(); updateTakeButton();
+        /* Gespeicherte Referenzen können von einer früheren Fassung oder anderen Einstellungen stammen.
+           Live gilt erst, was mit der jetzigen Rechenweise bestimmt ist. */
+        recomputeRefs().catch(function () { });
         /* Die Pause läuft weiter, während die Seite offen steht. Sie wird deshalb jede halbe
            Minute neu angezeigt — festgehalten wird sie erst beim Take-Start. */
         st.ctxTimer = setInterval(renderKontext, 30000);
@@ -959,7 +1006,7 @@
     $('btn-settings-reset').addEventListener('click', function () {
       st.settings = Object.assign({}, SETTINGS_DEFAULT); st.touched = {};
       if (st.korpus) for (var k in st.korpus.gatter) if (st.settings[k] != null) st.settings[k] = st.korpus.gatter[k];
-      st.gate = V.createGate(gateOpts()); saveSettings(); renderSettings(); updateTakeButton(); $('live-hints').textContent = hintText();
+      st.gate = V.createGate(gateOpts()); saveSettings(); renderSettings(); updateTakeButton(); $('live-hints').textContent = hintText(); refsSpaeter();
     });
     $('btn-export-csv').addEventListener('click', exportCsv);
     $('btn-export-json').addEventListener('click', exportJson);
