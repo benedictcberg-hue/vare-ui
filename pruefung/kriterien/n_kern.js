@@ -8,7 +8,7 @@
    A3: Formanten nach dem Teiltonabstand (analyseAt: teiltonPruefen) —
      A3a ΔF3–4/ΔF4–5 über 250 Hz, A3b Slots über 375 Hz und Nummernrutsch, A3c Gipfelpaare, A3d unsicherer
      Grundton (2·F0), A3e Takes in hoher Lage, A3f Gegenprobe unter 250 Hz und Vertrag, A3g tiefes enges
-     Cluster, das nur eine LPC-Ordnung trennt.
+     Cluster, das nur eine LPC-Ordnung trennt, A3h Vokalwechsel im Fenster.
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -873,5 +873,48 @@ module.exports = async function (H) {
     }
     check('A3g', 'tiefes enges Cluster F3 1700/2000, ΔF3–4 300 Hz (98–196 Hz, Rauschen weiß/rosa 30/40 dB): ein Paar, das nur die Referenzordnung trennt, ist nicht gültig (mind. 20 entscheidende Slots); kein gültiges ΔF3–4 über 120 Hz falsch',
       verletzt === 0 && entsch >= 20 && d34f === 0, n + ' Rahmen, entscheidend ' + entsch + ', trotzdem gültig ' + verletzt + '; ΔF3–4 gültig ' + d34 + ', davon falsch ' + d34f + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
+  }
+
+  /* ---------- A3h: Vokalwechsel im Fenster ----------
+     Enthält schon das kürzeste Fenster einen Vokalwechsel, sind alle Gipfel Mischwerte, und alle Fenster
+     sind sich einig: /a/ → /i/ bei 98 Hz ergab gültig F3 2281 (F2 des /i/), F4 2893, F5 3461. (1) Wechsel ohne
+     Pause (neun Vokalpaare, 98–247 Hz, Rahmen alle 10 ms um die Grenze): kein gültiger Slot, der weder zum
+     gleichnamigen Formanten des alten noch des neuen Vokals passt (± 130 Hz), kein solches ΔF3–4 (± 120 Hz).
+     (2) Vertrag: huellAbstandDb = huellAbstand des kürzesten Fensters; über HUELL_WECHSEL_DB kein Slot
+     gültig. (3) Gegenprobe: stehende Vokale (Impuls/Rosenberg, Jitter, Vibrato, Rauschen 30/40 dB) nie
+     'wechsel'. */
+  {
+    const BW5 = [80, 90, 120, 150, 200];
+    const VW = { a: [[700, 1200, 2500, 3300, 4200], BW5], i: [[300, 2200, 2900, 3500, 4300], [60, 100, 130, 160, 200]], u: [[320, 800, 2400, 3300, 4200], [60, 90, 120, 150, 200]],
+      weit: [[500, 1500, 2300, 3350, 4300], [70, 90, 130, 170, 220]], o: [[450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200]], e: [[400, 1900, 2600, 3400, 4300], [60, 100, 130, 160, 200]] };
+    const hatH = typeof D.huellAbstand === 'function', grenze = D.HUELL_WECHSEL_DB;
+    let n = 0, falsch = 0, d34f = 0, wechsel = 0, vertrag = 0; const bsp = [];
+    for (const [x, y] of [['a', 'i'], ['u', 'e'], ['o', 'a'], ['i', 'u'], ['weit', 'i'], ['e', 'o'], ['a', 'u'], ['i', 'e'], ['u', 'a']]) for (const f0 of [98, 110, 147, 196, 247]) {
+      const ds = D.resample(H.concat([D.synthVowel(f0, VW[x][0], VW[x][1], 0.5, SR), D.synthVowel(f0, VW[y][0], VW[y][1], 0.5, SR)]), SR, TSR);
+      for (let t = 0.40; t <= 0.60 + 1e-9; t += 0.01) {
+        const c = Math.round(t * TSR), r = D.analyseAt(ds, TSR, c, { floorDb: -70 }); if (!r.voiced) continue; n++;
+        const A = VW[x][0], B = VW[y][0];
+        for (let k = 0; k < 5; k++) if (r.valid[k] && Math.abs(r.F[k] - A[k]) > 130 && Math.abs(r.F[k] - B[k]) > 130) { falsch++; if (bsp.length < 3) bsp.push(x + '→' + y + ' ' + f0 + ' Hz t ' + t.toFixed(2) + ' F' + (k + 1) + ' ' + Math.round(r.F[k])); }
+        if (r.d34valid && Math.abs(r.d34 - (A[3] - A[2])) > 120 && Math.abs(r.d34 - (B[3] - B[2])) > 120) d34f++;
+        if (r.slotGrund.indexOf('wechsel') >= 0) wechsel++;
+        const m = Math.round(D.WINDOWS[0] * TSR), st = c - (m >> 1);
+        const soll = hatH ? D.huellAbstand(ds.subarray(st, st + m), TSR) : NaN;
+        if (!(Math.abs(r.huellAbstandDb - soll) < 1e-9) || (r.huellAbstandDb > grenze && r.valid.some(Boolean))) vertrag++;
+      }
+    }
+    check('A3h', 'Vokalwechsel ohne Pause (neun Paare, 98–247 Hz): kein gültiger Slot, der zu keinem der beiden Vokale passt, kein solches ΔF3–4; Hüllkurvenabstand der Fensterhälften über der Grenze → kein Slot gültig (mind. 20 Rahmen mit Grund \'wechsel\')',
+      falsch === 0 && d34f === 0 && vertrag === 0 && wechsel >= 20, n + ' Rahmen, falsch-gültig ' + falsch + ', ΔF3–4 ' + d34f + ', mit Grund wechsel ' + wechsel + ', Vertrag verletzt ' + vertrag + (bsp.length ? ' — ' + bsp.join(' | ') : ''));
+    let m = 0, fehl = 0, mx = 0; const bspG = [];
+    for (const v of ['a', 'e', 'i', 'o', 'u']) for (const art of ['impuls', 'rosenberg']) for (const f0 of [98, 147, 196, 247]) for (const vib of [false, true]) for (const snr of [30, 40]) {
+      const fz = vib ? vibrato(() => f0, 6, 50, f0) : () => f0;
+      const y = D.resample(mitRauschen(stimme(fz, 0.3, v, { art, FB: VW[v], jit: 0.01, shim: 0.02, seed: 300 + f0 }), snr, 301 + f0), SR, TSR);
+      for (const t of [0.1, 0.15, 0.2]) {
+        const r = D.analyseAt(y, TSR, Math.round(t * TSR), {}); if (!r.voiced) continue; m++;
+        if (r.huellAbstandDb > mx) mx = r.huellAbstandDb;
+        if (r.slotGrund.indexOf('wechsel') >= 0) { fehl++; if (bspG.length < 3) bspG.push('/' + v + '/ ' + f0 + ' ' + art + ' ' + snr + ' dB: ' + r1(r.huellAbstandDb) + ' dB'); }
+      }
+    }
+    check('A3h', 'Gegenprobe: stehende Vokale (a/e/i/o/u 98–247 Hz, Impuls/Rosenberg, Jitter 1 %, Shimmer 2 %, Vibrato ±50 Cent, Rauschen 30/40 dB) nie \'wechsel\'',
+      m >= 300 && fehl === 0, m + ' Rahmen, größter Hüllkurvenabstand ' + r1(mx) + ' dB, mit wechsel ' + fehl + (bspG.length ? ' — ' + bspG.join(' | ') : ''));
   }
 };

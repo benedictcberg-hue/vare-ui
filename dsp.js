@@ -545,6 +545,30 @@
     return uns;
   }
 
+  /* ---------- Vokalwechsel im Fenster ---------- */
+
+  /* Ein Formant gehört zu einem Ansatzrohr. Liegt im Fenster ein Vokalwechsel, sind die Gipfel eine
+     Mischung zweier Hüllkurven, und ihre Nummer kann die eines dritten, nicht gesungenen Vokals sein
+     (/a/ → /i/ bei 98 Hz: F3 2281 = F2 des /i/, F4 2893 = F3, F5 3461 = F4, alle gültig). Alle Fenster
+     sind sich einig, weil jedes den Wechsel enthält, sobald das kürzeste ihn enthält. Probe: LPC-
+     Hüllkurven (Ordnung 12) der beiden Hälften des kürzesten Fensters (je 30 ms), Pegel ausgeglichen,
+     Effektivwert der Differenz 300–4000 Hz. Gemessen: stehende Vokale (Impuls/Rosenberg, Vibrato ±50 Cent,
+     Gleiten 4 HT in 0,4 s, Jitter 1 %, Rauschen 20–40 dB, 98–370 Hz) bis 2,7 dB, stark behauchte Stimme
+     (Hauch 0,5–0,8, Jitter, Shimmer 3 %, rosa Rauschen 30 dB) bis 4,0 dB; Rahmen am Vokalwechsel mit falsch
+     nummerierten gültigen Slots ab 6,5 dB. Darüber ist kein Slot gültig (slotGrund 'wechsel'). Wechsel ohne
+     Pause (neun Vokalpaare, 98–247 Hz, Rahmen alle 5 ms um die Grenze, 1845 Rahmen): gültige Slots, die zu
+     keinem der beiden Vokale passen, 159 → 0; gültige Slots 5682 → 5184. Stehende Sätze unverändert. */
+  var HUELL_WECHSEL_DB = 5;
+  function huellAbstand(seg, sr) {
+    var h = seg.length >> 1, nB = 513, df = (sr / 2) / (nB - 1), i0 = Math.round(300 / df), i1 = Math.round(4000 / df), i;
+    var a = lpcEnvelope(burg(hann(preemph(seg.subarray(0, h), 0.97)), 12), sr, nB), b = lpcEnvelope(burg(hann(preemph(seg.subarray(h, 2 * h), 0.97)), 12), sr, nB);
+    var ma = 0, mb = 0, q = 0;
+    for (i = i0; i <= i1; i++) { ma += a[i]; mb += b[i]; }
+    ma /= (i1 - i0 + 1); mb /= (i1 - i0 + 1);
+    for (i = i0; i <= i1; i++) { var d = (a[i] - ma) - (b[i] - mb); q += d * d; }
+    return Math.sqrt(q / (i1 - i0 + 1));
+  }
+
   /* ---------- Teiltonabstand: wo die Hüllkurve nicht abgetastet ist ---------- */
 
   /* Die LPC-Hüllkurve sieht die Resonanzen nur an den Teiltönen k·g (g = Teiltonabstand = F0). Ist eine
@@ -1209,7 +1233,7 @@
       nOrders: [0, 0, 0, 0, 0], nWin: [0, 0, 0, 0, 0], valid: [false, false, false, false, false], merged: [false, false, false, false, false],
       slotUnsure: [false, false, false, false, false], slotGrund: ['', '', '', '', ''], rauschBoden: [false, false, false, false, false], bwArtifact: [false, false, false, false, false], nPeaksRef: 0,
       audible: false, tonalButAperiodic: false,
-      d34: NaN, d45: NaN, d34valid: false, d45valid: false, d34Grund: '', d45Grund: '', teiltonHz: NaN, f1f0: NaN, nearestHarmonic: NaN,
+      d34: NaN, d45: NaN, d34valid: false, d45valid: false, d34Grund: '', d45Grund: '', teiltonHz: NaN, huellAbstandDb: NaN, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, shrBoden: NaN,
       fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
@@ -1297,6 +1321,12 @@
       out.valid[k] = isFinite(out.F[k]) && out.nWin[k] >= 3 && out.sdWin[k] < smax && out.nOrders[k] >= 2 && out.sdOrder[k] < smax && !out.slotUnsure[k] && !out.rauschBoden[k];
     }
     out.d34 = out.F[3] - out.F[2]; out.d45 = out.F[4] - out.F[3];
+    // Vokalwechsel im kürzesten Fenster: jeder Gipfel ist ein Mischwert zweier Hüllkurven (huellAbstand)
+    out.huellAbstandDb = huellAbstand(shortest.seg, sr);
+    if (out.huellAbstandDb > HUELL_WECHSEL_DB) for (k = 0; k < 5; k++) if (isFinite(out.F[k])) {
+      out.valid[k] = false;
+      if (!out.slotUnsure[k]) { out.slotUnsure[k] = true; out.slotGrund[k] = 'wechsel'; }
+    }
     out.d34valid = out.valid[2] && out.valid[3]; out.d45valid = out.valid[3] && out.valid[4];
 
     // Steht im längsten Fenster (Spektrum für SHR und Gegenprobe) ein einziger Ton? Rand oder Tonwechsel?
@@ -1817,7 +1847,7 @@
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
     octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe, f0Korrektur: f0Korrektur, reihenKontrast: reihenKontrast, F0_KORR_KONTRAST_DB: F0_KORR_KONTRAST_DB,
-    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, teiltonFraglich: teiltonFraglich, TEILTON_DIFF_HZ: TEILTON_DIFF_HZ, TEILTON_SLOT_HZ: TEILTON_SLOT_HZ, TEILTON_PAAR: TEILTON_PAAR, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
+    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, teiltonFraglich: teiltonFraglich, huellAbstand: huellAbstand, HUELL_WECHSEL_DB: HUELL_WECHSEL_DB, TEILTON_DIFF_HZ: TEILTON_DIFF_HZ, TEILTON_SLOT_HZ: TEILTON_SLOT_HZ, TEILTON_PAAR: TEILTON_PAAR, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
     SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG,
     shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, fensterProbe: fensterProbe, fensterMischwert: fensterMischwert,
     FENSTER_BLOCK_S: FENSTER_BLOCK_S, FENSTER_RAND_DB: FENSTER_RAND_DB, FENSTER_KANTE_S: FENSTER_KANTE_S, FENSTER_TON_HT: FENSTER_TON_HT, FENSTER_F0_HT: FENSTER_F0_HT, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
