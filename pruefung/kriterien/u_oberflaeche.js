@@ -6,7 +6,10 @@
    Uhr, die weiterläuft, Gerätewechsel, An- und Abmelden. Geprüft wird, was gespeichert und angezeigt
    wird. Dieselben Abläufe spielt pruefung/browser-test.js im echten Chromium.
    U1: Schritt 0 (Position, Pause, Einsing-Angaben), Angaben beim Stopp. U2: Kalibrierung und Kette,
-   „Alles löschen“ und Code-Zähler, Token. */
+   „Alles löschen“ und Code-Zähler, Token. U3: Sicherung mit NaN und Infinity, Rost nur für Unsicheres
+   (Befund in Gold), Beschriftung der Sprünge, Historie, Referenzen nur aus gleich gerechneten Takes und
+   verwaiste Referenzen. Für reine Anzeige läuft chronik.js zusätzlich allein in einer vm-Umgebung
+   (chronikNeu); leinwand() schreibt Zeichenaufrufe mit, kacheln() und listenZellen() lesen das HTML. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto'), v8 = require('v8');
 // Blob aus dem buffer-Modul: global erst ab Node 18, so läuft es auch mit älterem Node unter Windows.
