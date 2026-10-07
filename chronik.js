@@ -98,6 +98,40 @@
     }
     return t.length ? t.join(', ') : 'Grund unbekannt';
   }
+  /* Warum ein Formant nicht gültig ist, in kurzen Worten — live (app.js) und im Hover gleich, damit dieselbe
+     Ursache überall gleich heißt. dsp.js analyseAt gibt einen Formanten nur frei mit Wert, in mindestens 3
+     Fenstern und 2 Ordnungen, Streuung über Fenster und über Ordnungen unter der Grenze, eindeutiger Nummer
+     (slotGrund leer) und Gipfel über dem Rauschboden. Genannt wird jeder zutreffende Grund, nicht nur der
+     erste: am tiefen engen Cluster im Rauschen trifft oft „Nummer mehrdeutig“ und „im Rauschboden“ zugleich.
+     g = { F, grund ('', 'nummer', 'verschmolzen', '?'), rauschBoden, sdWin, sdOrder, smax, nWin, nOrders };
+     null heißt nicht gespeichert. Die Serie kennt nWin und nOrders nicht: Unter 2 Werten ist die Streuung
+     NaN, daraus folgt „nur in einem Fenster“ bzw. „in weniger als 2 Ordnungen“; „nur in 2 Fenstern“ ist das,
+     was übrig bleibt, wenn sonst nichts die Ungültigkeit erklärt. Ältere Serien kennen rauschBoden und den
+     Unterschied nummer/verschmolzen nicht: dann „Grund nicht gespeichert“, kein erfundener. */
+  function formantGruende(g) {
+    if (!zahl(g.F)) return ['nicht gefunden'];
+    var t = [], smax = zahl(g.smax) ? g.smax : NaN;
+    if (g.grund === 'nummer') t.push('Nummer mehrdeutig');
+    else if (g.grund === 'verschmolzen') t.push('zwei Resonanzen in einem Gipfel möglich');
+    else if (g.grund) t.push('Zuordnung unsicher, Grund nicht gespeichert');
+    if (g.rauschBoden === true) t.push('im Rauschboden');
+    if (zahl(g.sdWin) && g.sdWin >= smax) t.push('Streuung über Fenster ' + fmt(g.sdWin) + ' Hz');
+    if (zahl(g.sdOrder) && g.sdOrder >= smax) t.push('Streuung über Ordnungen ' + fmt(g.sdOrder) + ' Hz');
+    var nWin = zahl(g.nWin) ? g.nWin : (zahl(g.sdWin) ? null : 1);
+    if (nWin === 1) t.push('nur in einem Fenster'); else if (nWin === 2) t.push('nur in 2 Fenstern');
+    var nOrd = zahl(g.nOrders) ? g.nOrders : (zahl(g.sdOrder) ? null : 0);
+    if (nOrd !== null && nOrd < 2) t.push('in weniger als 2 Ordnungen');
+    if (!t.length) {
+      var bekannt = g.rauschBoden != null && zahl(smax);
+      t.push(g.nWin == null ? (bekannt ? 'nur in 2 Fenstern' : 'Grund nicht gespeichert') : 'Grund unbekannt');
+    }
+    return t;
+  }
+  /* LPC-Bandbreiten unter 40 Hz sind Artefakt, keine Messung (physik.md 2.4). Das macht die Frequenz nicht
+     ungültig und ist darum kein Grund oben, steht aber neutral dabei: Die Bandbreite geht in H1*−H2* ein. */
+  var BW_ARTEFAKT_HZ = (D && D.BW_ARTIFACT_HZ) || 40;
+  var BANDBREITE_TEXT = 'Bandbreite unter ' + BW_ARTEFAKT_HZ + ' Hz';
+
   // Anteil in Prozent; ein kleiner, aber vorhandener Anteil heißt „< 1“, nicht „0“. Ins HTML nur maskiert.
   function prozent(x) { return (x > 0 && x < 0.01) ? '< 1' : fmt(x * 100); }
   function prozentHtml(x) { return esc(prozent(x)); }
@@ -273,9 +307,10 @@
   }
 
   /* Ablesung unter dem Cursor als HTML: Unsicheres in Rost mit Grund (Grundton, SHR, H1−H2 bei
-     unsicherem Grundton), Korrigiertes mit altem Wert ohne Rost. Fehlt ein Feld (ältere Serie), steht
-     „–“. Jeder Text geht durch esc(). */
-  function hoverText(series, i) {
+     unsicherem Grundton, ungültige Formanten und ΔF3–4), Korrigiertes mit altem Wert ohne Rost. Fehlt ein
+     Feld (ältere Serie), steht „–“. Jeder Text geht durch esc(). smax: Streuungsgrenze, mit der der Take
+     gerechnet wurde (take.analysis.spreadMaxHz); ohne sie lässt sich Streuung nicht als Grund nennen. */
+  function hoverText(series, i, smax) {
     var wert = function (col) { var a = series[col]; return a ? a[i] : NaN; };
     var v = function (col, dec) { return fmt(wert(col), dec); }, valid = function (k) { return (series.valid[i] & (1 << k)) ? '' : '?'; };
     var fl = series.flags[i], F = A.FLAG, rost = function (t) { return '<span class="rust">' + esc(t) + '</span>'; };
@@ -293,9 +328,25 @@
     } else shr = esc(shr);
     var h12 = 'H1−H2 ' + v('h1h2', 1) + ((fl & F.H1H2UNSURE) ? ' (filtergetrieben)' : '');
     h12 = (fl & F.F0UNSURE) ? rost(h12 + ' (Grundton unsicher)') : esc(h12);
+    /* Formanten: ein ungültiger Wert in Rost mit seinen Gründen (formantGruende, wie live). Der Grund je
+       Slot kommt aus den Masken der Serie (slotUnsure, slotVerschmolzen, rauschBoden); in Pausen gibt es
+       keinen Wert und keinen Grund. */
+    var stimmhaft = !!(fl & F.VOICED);
+    var formant = function (k) {
+      var txt = 'F' + (k + 1) + ' ' + v('f' + (k + 1));
+      if (!stimmhaft) return esc(txt + valid(k));
+      var bw = wert('bw' + (k + 1)), bwT = (zahl(bw) && bw < BW_ARTEFAKT_HZ) ? esc(' (' + BANDBREITE_TEXT + ')') : '';
+      if (series.valid[i] & (1 << k)) return esc(txt) + bwT;
+      var b = 1 << k, uns = series.slotUnsure ? (series.slotUnsure[i] & b) : 0;
+      var grund = !uns ? '' : (series.slotVerschmolzen ? ((series.slotVerschmolzen[i] & b) ? 'verschmolzen' : 'nummer') : '?');
+      var gr = formantGruende({ F: wert('f' + (k + 1)), grund: grund, rauschBoden: series.rauschBoden ? !!(series.rauschBoden[i] & b) : null,
+        sdWin: wert('sdw' + (k + 1)), sdOrder: wert('sdo' + (k + 1)), smax: smax, nWin: null, nOrders: null });
+      return rost(txt + '? (' + gr.join(', ') + ')') + bwT;
+    };
+    var d34 = 'ΔF3–4 ' + v('d34') + (isFinite(series.score[i]) ? ' (gewertet)' : '');
+    d34 = (stimmhaft && !(fl & F.D34VALID)) ? rost(d34 + '?') : esc(d34);
     return esc('t ' + v('t', 2) + ' s · ' + ['Pause', 'Übergang', 'stabil'][series.gate[i]] + (series.cls[i] >= 0 ? ' /' + V.CENTROIDS[series.cls[i]].cls + '/' : '')) + ' · ' + f0 +
-      esc(' · F1 ' + v('f1') + valid(0) + ' F2 ' + v('f2') + valid(1) + ' F3 ' + v('f3') + valid(2) + ' F4 ' + v('f4') + valid(3) + ' F5 ' + v('f5') + valid(4) +
-      ' · ΔF3–4 ' + v('d34') + (isFinite(series.score[i]) ? ' (gewertet)' : '') + (series.slotUnsure && series.slotUnsure[i] ? ' [Zuordnung unsicher, ' + (series.nPeaks ? series.nPeaks[i] : '?') + ' Resonanzen]' : '') + ' · SFR ' + v('sfr', 1)) +
+      ' · ' + [0, 1, 2, 3, 4].map(formant).join(' ') + ' · ' + d34 + esc(' · SFR ' + v('sfr', 1)) +
       ' · ' + shr + esc(' · CPP ' + v('cpp', 1)) + ' · ' + h12 + esc(' · ' + v('rms', 1) + ' dBFS');
   }
 
@@ -413,7 +464,7 @@
     if (series) cv.addEventListener('mousemove', function (ev) {
       var rect = cv.getBoundingClientRect(), t = (ev.clientX - rect.left - geo.L) / geo.pw * geo.T, n = series.t.length;
       var idx = Math.max(0, Math.min(n - 1, Math.round(t / Math.max(geo.T, 1e-6) * (n - 1))));
-      hover.innerHTML = hoverText(series, idx); redraw(idx);
+      hover.innerHTML = hoverText(series, idx, take.analysis && take.analysis.spreadMaxHz); redraw(idx);
     });
     el.querySelector('#d-save').addEventListener('click', function () {
       var wm = el.querySelector('#d-warmup-min').value.trim(), n = wm === '' ? null : Number(wm);
@@ -430,5 +481,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

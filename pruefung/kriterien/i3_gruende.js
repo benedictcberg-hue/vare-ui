@@ -121,4 +121,168 @@ module.exports = async function (H) {
     check('I3a', 'Ältere Serie ohne die Masken: unsichere Slots mit Grund „?“ (nie still „nummer“), Rauschboden −99, übrige Spalten unverändert, kein Absturz',
       !bad.length && fragen > 0, fragen + ' unsichere Slots' + (bad.length ? ' — ' + bad.slice(0, 4).join('; ') : ''));
   }
+
+  /* ---------- I3b: Gründe live und im Hover ---------- */
+  const vm = require('vm'), fs = require('fs');
+  const ROOT = path.join(__dirname, '..', '..'), quelle = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const SMAX = D.SPREAD_MAX_HZ;
+  /* Sollgründe, hier unabhängig von chronik.js aus den Feldern eines analyseAt-Rahmens gebildet (dsp.js:
+     valid verlangt Wert, ≥ 3 Fenster, ≥ 2 Ordnungen, beide Streuungen unter der Grenze, slotGrund leer,
+     kein Rauschboden). Die Serie kennt nWin nicht: Dort steht „nur in 2 Fenstern“ nur, wenn sonst nichts
+     die Ungültigkeit erklärt (ohneZaehlung). */
+  const fmt0 = v => { const t = v.toFixed(0); return t === '-0' ? '0' : t; };
+  function sollGruende(r, k, ohneZaehlung, sdw, sdo) {
+    if (!isFinite(r.F[k])) return ['nicht gefunden'];
+    sdw = sdw === undefined ? r.sdWin[k] : sdw; sdo = sdo === undefined ? r.sdOrder[k] : sdo;
+    const t = [];
+    if (r.slotGrund[k] === 'nummer') t.push('Nummer mehrdeutig');
+    if (r.slotGrund[k] === 'verschmolzen') t.push('zwei Resonanzen in einem Gipfel möglich');
+    if (r.rauschBoden[k]) t.push('im Rauschboden');
+    if (sdw >= SMAX) t.push('Streuung über Fenster ' + fmt0(sdw) + ' Hz');
+    if (sdo >= SMAX) t.push('Streuung über Ordnungen ' + fmt0(sdo) + ' Hz');
+    if (r.nWin[k] === 1) t.push('nur in einem Fenster');
+    if (r.nWin[k] === 2 && (!ohneZaehlung || !t.length)) t.push('nur in 2 Fenstern');
+    if (r.nOrders[k] < 2) t.push('in weniger als 2 Ordnungen');
+    return t;
+  }
+  // Zeichenfläche, die Aufrufe mitschreibt (wie in i2_durchreichen.js).
+  function leinwand() {
+    const ops = [];
+    const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => { ops.push([k, a]); }), set: (t, k, v) => { t[k] = v; ops.push(['set', k, v]); return true; } });
+    return { cv: { clientWidth: 450, style: {}, getContext: () => ctx }, ops };
+  }
+  /* app.js unverändert in einer vm-Umgebung: Speicher und Mikrofon nachgestellt. Das Mikrofon liefert die
+     letzten s Sekunden von quelle.sig bis zur Stelle quelle.pos (Abtastwerte bei 48 kHz). */
+  async function appSeite() {
+    const els = {}, canv = {}, intervalle = [];
+    class El {
+      constructor(id) { this.id = id || ''; this._t = ''; this.kinder = []; this.className = ''; this.hidden = false; this.disabled = false; this.value = ''; this.style = {}; this.clientWidth = 600; this._on = {}; this.innerHTML = ''; this.checked = false; this.files = []; }
+      get textContent() { return this._t + this.kinder.map(k => k.textContent).join(''); }
+      set textContent(v) { this._t = String(v); this.kinder = []; }
+      addEventListener(t, f) { (this._on[t] = this._on[t] || []).push(f); }
+      removeEventListener() { }
+      click() { (this._on.click || []).forEach(f => f({ target: this, preventDefault() { } })); }
+      setAttribute(k, v) { this['@' + k] = String(v); }
+      getAttribute(k) { return this['@' + k] == null ? null : this['@' + k]; }
+      querySelector() { return new El(); }
+      querySelectorAll() { return []; }
+      appendChild(c) { this.kinder.push(c); return c; }
+      insertBefore(c) { return c; }
+      remove() { } focus() { }
+      getContext() { const l = leinwand(); canv[this.id] = l.ops; return l.cv.getContext(); }
+      getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: 600, height: 100 }; }
+    }
+    const el = id => els[id] || (els[id] = new El(id));
+    const seite = { el, canv, raf: null, quelle: { sig: new Float64Array(48000), pos: 48000 } };
+    const meta = new Map(), P = v => Promise.resolve(v);
+    const store = { open: () => P(), putTake: () => P(), getTake: () => P(null), allTakes: () => P([]), deleteTake: () => P(), putSeries: () => P(), getSeries: () => P(null), putAudio: () => P(), getAudio: () => P(null),
+      deleteAudio: () => P(), hasAudio: () => P(false), audioIds: () => P([]), putCalibration: () => P(), allCalibrations: () => P([]), deleteCalibration: () => P(),
+      getMeta: (k, fb) => P(meta.has(k) ? meta.get(k) : fb), setMeta: (k, v) => { meta.set(k, v); return P(); }, clearAll: () => P(), estimate: () => P(null), persist: () => P(false), persisted: () => P(false) };
+    const rec = { active: false, info: null, sampleRate: 48000, samplesSeen: 0, recordedSeconds: 0,
+      start() { rec.active = true; rec.info = { deviceLabel: 'Testmikrofon', deviceId: 'standard', sampleRate: 48000, trackSampleRate: 48000, capture: 'worklet', echoCancellation: false, noiseSuppression: false, autoGainControl: false }; return P(rec.info); },
+      stop() { rec.active = false; return P(); }, beginTake() { }, endTake() { return { samples: new Float32Array(0), sampleRate: 48000, durationS: 0 }; },
+      latest: s => { const q = seite.quelle, n = Math.round(s * 48000), a = Math.max(0, q.pos - n); return Float32Array.from(q.sig.subarray(a, q.pos)); } };
+    const leer = () => ({ getItem: () => null, setItem() { }, removeItem() { } });
+    const doc = { readyState: 'complete', activeElement: null, body: new El('body'), getElementById: el, createElement: () => new El(), querySelector: () => el('main'), querySelectorAll: () => [], addEventListener() { } };
+    const ab = { document: doc, console: { log() { }, warn() { }, error() { } }, navigator: {}, location: { hash: '#/aufnahme', protocol: 'http:', origin: 'http://localhost' },
+      addEventListener() { }, removeEventListener() { }, requestAnimationFrame: f => { seite.raf = f; return 1; }, cancelAnimationFrame() { }, performance: { now: () => Date.now() },
+      setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: h => clearTimeout(h),
+      setInterval: (f, ms) => { const h = setInterval(f, ms); if (h.unref) h.unref(); intervalle.push(h); return h; }, clearInterval: h => clearInterval(h),
+      confirm: () => true, alert() { }, crypto: { randomUUID: () => require('crypto').randomUUID() }, Blob: require('buffer').Blob, URL, btoa, atob, Date, devicePixelRatio: 1,
+      localStorage: leer(), sessionStorage: leer(), fetch: () => Promise.reject(new Error('kein Netz')), TextDecoder };
+    ab.window = ab; ab.self = ab;
+    vm.createContext(ab);
+    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
+    ab.VARESTORE = store; ab.VARERECORDER = { createRecorder: () => rec, listDevices: () => P([]) };
+    vm.runInContext(quelle('app.js'), ab, { filename: 'app.js' });
+    const st = ab.VAREAPP.state;
+    for (let w = 0; w < 500 && !st.settings; w++) await new Promise(r => setTimeout(r, 2));
+    el('btn-mic').click();
+    for (let w = 0; w < 500 && !(rec.active && seite.raf); w++) await new Promise(r => setTimeout(r, 2));
+    let jetzt = 1000;
+    // Ein Takt der Live-Schleife: neue Abtastwerte melden, 41 ms weiter, tick() aufrufen.
+    seite.takt = () => { rec.samplesSeen += 1000; jetzt += 41; for (const k in canv) delete canv[k]; seite.raf(jetzt); };
+    seite.kachel = id => ({ klasse: el('st-' + id).className, text: el('v-' + id).textContent });
+    Object.assign(seite, { ab, st, rec, ende: () => intervalle.forEach(h => clearInterval(h)) });
+    return seite;
+  }
+  {
+    /* Live: echte Rahmen des Prüftakes (alle stimmhaften) und gezielte Abwandlungen eines sauberen /a/, an
+       denen genau ein Grund vorliegt. analyseAt liefert für die Dauer der Prüfung den jeweiligen Rahmen. */
+    const bad = [], zaehl = {}, belege = [];
+    let seite = null;
+    try {
+      seite = await appSeite();
+      const DD = seite.ab.VAREDSP, echt = DD.analyseAt;
+      const sig = DD.resample(DD.synthVowel(196, AV[0], AV[1], 0.4, 48000), 48000, DD.TARGET_SR);
+      const basis = echt(sig, DD.TARGET_SR, sig.length - 1, { align: 'end', floorDb: -70 });
+      if (!(basis.voiced && basis.valid.every(Boolean))) bad.push('Grundrahmen nicht sauber');
+      const kopie = r => JSON.parse(JSON.stringify(r), (k, v) => v === null ? NaN : v);
+      const ab5 = (r, k, feld, wert) => { const x = kopie(r); x[feld][k] = wert; x.valid[k] = false; x.slotUnsure[k] = !!x.slotGrund[k]; x.d34valid = x.valid[2] && x.valid[3]; x.d45valid = x.valid[3] && x.valid[4]; return x; };
+      const faelle = R.filter(r => r.voiced).map((r, j) => ['Prüftake ' + j, r]);
+      faelle.push(['nur Rauschboden F3', ab5(basis, 2, 'rauschBoden', true)]);
+      faelle.push(['nur verschmolzen F4, fünf Gipfel', ab5(basis, 3, 'slotGrund', 'verschmolzen')]);
+      faelle.push(['nur Nummer F2, fünf Gipfel', ab5(basis, 1, 'slotGrund', 'nummer')]);
+      faelle.push(['Streuung Fenster F5', ab5(basis, 4, 'sdWin', 150)]);
+      faelle.push(['Streuung Ordnungen F1', ab5(basis, 0, 'sdOrder', 140)]);
+      faelle.push(['zwei Fenster F3', ab5(basis, 2, 'nWin', 2)]);
+      faelle.push(['eine Ordnung F2', ab5(basis, 1, 'nOrders', 1)]);
+      faelle.push(['Bandbreite F2 gültig', Object.assign(kopie(basis), { bwArtifact: [false, true, false, false, false] })]);
+      for (const [name, fr] of faelle) {
+        DD.analyseAt = () => fr;
+        seite.takt();
+        for (let k = 0; k < 5; k++) {
+          const kach = seite.kachel('f' + (k + 1)), unsure = /\bunsure\b/.test(kach.klasse);
+          const m = / — (.*?)(?: · |$)/.exec(kach.text), ist = m ? m[1] : '';
+          const soll = fr.valid[k] ? '' : sollGruende(fr, k, false).join(', ');
+          const bw = !!(fr.bwArtifact && fr.bwArtifact[k]), bwIst = /· Bandbreite unter 40 Hz/.test(kach.text);
+          if (ist !== soll || unsure === !!fr.valid[k] || bw !== bwIst || /nur \d+ Resonanzen|Grund unbekannt/.test(kach.text)) {
+            if (bad.length < 6) bad.push(name + ' F' + (k + 1) + ': „' + kach.text + '“ (' + kach.klasse + ') statt Gründe „' + soll + '“' + (bw ? ' mit Bandbreite' : ''));
+          }
+          if (!fr.valid[k]) for (const g of soll.split(', ')) { const key = g.replace(/ \d+ Hz$/, ''); zaehl[key] = (zaehl[key] || 0) + 1; }
+          if (fr.slotUnsure[k] && fr.nPeaksRef === 5) zaehl['unsicher bei fünf Gipfeln'] = (zaehl['unsicher bei fünf Gipfeln'] || 0) + 1;
+        }
+        if (/^nur|^Streuung|^zwei|^eine|^Bandbreite/.test(name)) belege.push(name + ': ' + ['f1', 'f2', 'f3', 'f4', 'f5'].map(seite.kachel).filter(x => / — | · Bandbreite/.test(x.text)).map(x => x.text).join(' | '));
+      }
+      DD.analyseAt = echt;
+    } catch (e) { bad.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    if (seite) seite.ende();
+    const genug = ['Nummer mehrdeutig', 'zwei Resonanzen in einem Gipfel möglich', 'im Rauschboden', 'Streuung über Fenster', 'Streuung über Ordnungen', 'nur in 2 Fenstern', 'in weniger als 2 Ordnungen', 'unsicher bei fünf Gipfeln'].filter(g => !(zaehl[g] >= 1));
+    check('I3b', 'Live: jeder ungültige Formant nennt alle zutreffenden Gründe („Nummer mehrdeutig“, „zwei Resonanzen in einem Gipfel möglich“, „im Rauschboden“, „Streuung über Fenster/Ordnungen N Hz“, „nur in 2 Fenstern“, „in weniger als 2 Ordnungen“) und bleibt in Rost; nie „nur N Resonanzen“; Bandbreite unter 40 Hz als Zusatz, gültig bleibt gültig',
+      !bad.length && !genug.length, (bad.length ? bad.join(' | ') : JSON.stringify(zaehl) + ' | ' + belege.join(' | ').slice(0, 600)) + (genug.length ? ' | nicht abgedeckt: ' + genug.join(', ') : ''));
+  }
+  {
+    // Hover im Detail: dieselben Gründe aus den Masken der Serie, ungültige Formanten und ΔF3–4 in Rost.
+    const sb = { console: { log() { }, warn() { }, error() { } }, devicePixelRatio: 1 };
+    sb.self = sb; sb.window = sb; vm.createContext(sb);
+    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+    const CHR = sb.VARECHRONIK, bad = [], zaehl = {};
+    let geprueft = 0;
+    for (let i = 0; i < Math.min(n, R.length); i++) {
+      if (!R[i].voiced) continue;
+      let h = '';
+      try { h = CHR.hoverText(ser, i, SMAX); } catch (e) { bad.push('Ausnahme ' + e.message); break; }
+      const rost = (h.match(/<span class="rust">[^<]*<\/span>/g) || []).map(x => x.replace(/<[^>]+>/g, '').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&'));
+      for (let k = 0; k < 5; k++) {
+        const kopf = 'F' + (k + 1) + ' ', teil = rost.find(x => x.startsWith(kopf));
+        if (R[i].valid[k]) { if (teil) bad.push('t ' + i + ' F' + (k + 1) + ' gültig, aber Rost „' + teil + '“'); continue; }
+        const soll = kopf + CHR.fmt(ser['f' + (k + 1)][i]) + '? (' + sollGruende(R[i], k, true, ser['sdw' + (k + 1)][i], ser['sdo' + (k + 1)][i]).join(', ') + ')';
+        if (teil !== soll) { if (bad.length < 6) bad.push('t ' + i + ': „' + teil + '“ statt „' + soll + '“'); } else geprueft++;
+        for (const g of sollGruende(R[i], k, true)) zaehl[g.replace(/ \d+ Hz$/, '')] = (zaehl[g.replace(/ \d+ Hz$/, '')] || 0) + 1;
+      }
+      const d34 = rost.find(x => x.startsWith('ΔF3–4 '));
+      if (!!d34 !== !R[i].d34valid) bad.push('t ' + i + ': ΔF3–4 ' + (d34 ? 'in Rost, obwohl gültig' : 'ungültig ohne Rost'));
+      if (/Resonanzen\]/.test(h)) bad.push('t ' + i + ': alter Zusatz „Resonanzen“');
+    }
+    // Ältere Serie ohne Masken: Grund nicht erfunden.
+    const alt = {};
+    for (const k in ser) if (k !== 'slotVerschmolzen' && k !== 'rauschBoden') alt[k] = ser[k];
+    const iU = R.findIndex(r => r.voiced && r.slotUnsure.some(Boolean));
+    let altText = '';
+    try { altText = iU >= 0 ? CHR.hoverText(alt, iU, SMAX) : ''; } catch (e) { bad.push('ältere Serie: Ausnahme ' + e.message); }
+    if (iU < 0 || !/Zuordnung unsicher, Grund nicht gespeichert/.test(altText) || /Nummer mehrdeutig|zwei Resonanzen/.test(altText)) bad.push('ältere Serie: „' + altText.replace(/<[^>]+>/g, '').slice(0, 160) + '“');
+    check('I3b', 'Hover (Detail): ungültige Formanten in Rost mit denselben Gründen wie live, aus den Masken der Serie; ΔF3–4 ungültig in Rost; ältere Serie „Grund nicht gespeichert“ statt eines erfundenen',
+      !bad.length && geprueft >= 100 && zaehl['Nummer mehrdeutig'] > 0 && zaehl['zwei Resonanzen in einem Gipfel möglich'] > 0 && zaehl['im Rauschboden'] > 0,
+      geprueft + ' ungültige Formanten geprüft, Gründe ' + JSON.stringify(zaehl) + (bad.length ? ' — ' + bad.join(' | ') : ''));
+  }
 };

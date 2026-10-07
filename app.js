@@ -8,7 +8,7 @@
 
   function hintText() {
     return 'Gestrichelt in Rost = Messwert unsicher: Streuung über Ordnungen oder Fensterlängen ≥ '
-      + (st.settings ? st.settings.spreadMaxHz : 130) + ' Hz, oder Zuordnung unsicher. Gold ohne Strich = sicher gemessen, aber Befund. '
+      + (st.settings ? st.settings.spreadMaxHz : 130) + ' Hz, Nummer mehrdeutig, zwei Resonanzen in einem Gipfel möglich oder Formant im Rauschboden — der Grund steht neben der Zahl. Gold ohne Strich = sicher gemessen, aber Befund. '
       + 'H1−H2 ist bei F1 ≈ F0 filtergetrieben und erlaubt keine Quellaussage.';
   }
   var SETTINGS_DEFAULT = { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500, smooth: 0.35, spreadMaxHz: 130, hopS: 0.010, storeAudio: true, audioFormat: 'i16', csvDialect: 'standard', requireCal: true, minTakeS: 1.0 };
@@ -283,9 +283,16 @@
     if (fr.f0Korrektur) f0z.push(CH.f0KorrText(fr.f0Korrektur, fr.f0Yin));
     else if (fr.octaveCorrected) f0z.push('Teiler ' + fr.subFactor + ' aus Teiltonreihe');
     setStat('f0', fmt(fr.f0, 1) + ' Hz ' + fr.note + (f0z.length ? ' (' + f0z.join('; ') + ')' : ''), f0Uns);
-    // Warum ein Formant unsicher ist, gehört neben die Zahl — „Zuordnung unsicher“ heißt etwas
-    // anderes als „Streuung zu groß“: im ersten Fall ist womöglich der falsche Formant gemeint.
-    function why(k) { return fr.slotUnsure[k] ? ' — Zuordnung unsicher, nur ' + fr.nPeaksRef + ' Resonanzen' : (fr.valid[k] ? '' : ' — Streuung'); }
+    /* Warum ein Formant ungültig ist, gehört neben die Zahl — „Nummer mehrdeutig“ heißt etwas anderes als
+       „Streuung“: im ersten Fall ist womöglich der falsche Formant gemeint. Früher stand hier „Zuordnung
+       unsicher, nur N Resonanzen“, auch bei fünf Gipfeln und bei einem verschmolzenen Gipfel, und ein Formant
+       im Rauschboden hieß „Streuung“. Jetzt alle zutreffenden Gründe aus denselben Feldern, aus denen dsp.js
+       valid bildet, mit denselben Worten wie im Hover (CH.formantGruende). Rost bleibt über !valid. */
+    function why(k) {
+      var g = fr.valid[k] ? [] : CH.formantGruende({ F: fr.F[k], grund: fr.slotGrund ? fr.slotGrund[k] : (fr.slotUnsure[k] ? '?' : ''), rauschBoden: fr.rauschBoden ? !!fr.rauschBoden[k] : null,
+        sdWin: fr.sdWin[k], sdOrder: fr.sdOrder[k], smax: st.settings.spreadMaxHz, nWin: fr.nWin[k], nOrders: fr.nOrders[k] });
+      return (g.length ? ' — ' + g.join(', ') : '') + (fr.bwArtifact && fr.bwArtifact[k] ? ' · ' + CH.BANDBREITE_TEXT : '');
+    }
     // F1 kommt aus der LPC und trägt für sich; F1/F0 und der nächste Teilton hängen am Grundton.
     var f1f0 = fmt(fr.f1f0, 2) + ' (H' + fmt(fr.nearestHarmonic) + ')';
     if (fr.f0Unsure) setStat('f1', fmt(fr.F[0]) + ' Hz' + why(0) + ' · ', !fr.valid[0], false, false, f1f0 + ' Grundton unsicher');
