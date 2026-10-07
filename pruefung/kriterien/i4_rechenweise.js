@@ -218,7 +218,7 @@ module.exports = async function (H) {
     let zeilen = 0;
     for (const d of ['standard', 'excelde']) {
       const a = C.framesToCsv(ser, d, V), z = C.framesToCsv(back, d, V);
-      if (a !== z) { const la = a.split('\r\n'), lz = z.split('\r\n'); const j = la.findIndex((x, i) => x !== lz[i]); bad.push(d + ': ' + la.filter((x, i) => x !== lz[i]).length + ' Zeilen anders, erste ' + j); }
+      if (a !== z) { const la = a.split('\r\n'), lz = z.split('\r\n'); const j = la.findIndex((x, i) => x !== lz[i]); bad.unshift('Rahmen-CSV ' + d + ': ' + la.filter((x, i) => x !== lz[i]).length + ' von ' + (la.length - 2) + ' Zeilen anders, erste Zeile ' + j); }
       else zeilen = a.split('\r\n').length - 2;
     }
     check('I4d', 'Sicherung → Import: Rahmen-CSV byte-gleich (beide Dialekte), jedes typisierte Serienfeld bitgleich mit Typ (auch NaN, ±Infinity, −0, Werte auf der Rundungskante)',
@@ -233,12 +233,14 @@ module.exports = async function (H) {
     const lesbar = s1.f1 instanceof Float32Array && s1.f1[0] === Math.fround(700.123) && Number.isNaN(s1.f1[1]) && s1.f1[2] === 3300 && b1.takes[0].summary.snrDb === null
       && s2.f1[2] === Infinity && Number.isNaN(b2.takes[0].summary.snrDb) && s2.flags instanceof Uint16Array && s2.flags[2] === 65 && s2.cls instanceof Int8Array && s2.cls[0] === -1;
     // Beschädigt: eine Serie mit fehlenden Bytes darf nicht still kürzer oder verschoben ankommen.
-    const o = JSON.parse(text), k0 = Object.keys(o.takes[0].series).find(k => o.takes[0].series[k].$type === 'Float32Array');
-    o.takes[0].series[k0].b64 = o.takes[0].series[k0].b64.slice(4);
+    // Fehlt die Base64-Ablage ganz (ältere csv.js), reißt das Kriterium, statt mit einer Ausnahme die übrigen zu verdecken.
+    const o = JSON.parse(text), k0 = Object.keys(o.takes[0].series).find(k => o.takes[0].series[k] && typeof o.takes[0].series[k].b64 === 'string');
     const wirft = t => { try { C.parseBackup(t); return ''; } catch (e) { return e.message; } };
-    const kaputt = wirft(JSON.stringify(o)), v4 = wirft(JSON.stringify(Object.assign(JSON.parse(text), { version: 4 })));
+    let kaputt = 'keine Serie als Base64 geschrieben';
+    if (k0) { o.takes[0].series[k0].b64 = o.takes[0].series[k0].b64.slice(4); kaputt = wirft(JSON.stringify(o)); }
+    const v4 = wirft(JSON.stringify(Object.assign(JSON.parse(text), { version: 4 })));
     check('I4d', 'Sicherung schreibt Version 3; Versionen 1 und 2 bleiben lesbar (null → NaN, $nf, Typen); fehlende Bytes und eine unbekannte Version werden abgelehnt, nicht still übernommen',
-      C.BACKUP_VERSION === 3 && lesbar && new RegExp('Serie ' + k0 + ':').test(kaputt) && /Sicherungsversion 4 unbekannt/.test(v4),
+      C.BACKUP_VERSION === 3 && lesbar && !!k0 && new RegExp('Serie ' + k0 + ':').test(kaputt) && /Sicherungsversion 4 unbekannt/.test(v4),
       'Version ' + C.BACKUP_VERSION + ', alt lesbar ' + lesbar + ', beschädigt „' + kaputt + '“, Version 4 „' + v4 + '“');
   }
 };
