@@ -1027,7 +1027,8 @@ async function kriterienB2(H) {
     // 3. Take-CSV
     const z = C.takesToCsv([{ code: 'I', summary: res.summary }], 'standard').split('\r\n'), kopf = z[0].split(','), c = kopf.indexOf('h1h2c_bw_artifact_share');
     const csv = c >= 0 ? z[1].split(',')[c] : '(Spalte fehlt)';
-    if (csv !== anteil.toFixed(3)) bad.push('CSV ' + csv + ' statt ' + anteil.toFixed(3));
+    const csvSoll = typeof anteil === 'number' ? anteil.toFixed(3) : '(kein Anteil in der Zusammenfassung)';
+    if (csv !== csvSoll) bad.push('CSV ' + csv + ' statt ' + csvSoll);
     // 4. Detail über die Seite, dazu ein älterer Take ohne den Anteil; 5. live über die Live-Schleife der Seite.
     const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(SIGi), sampleRate: SR, durationS: SIGi.length / SR }), SR);
     let tick = null;
