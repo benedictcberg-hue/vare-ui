@@ -784,8 +784,9 @@
     return out;
   }
 
-  /* Korrektur nach gerissener Gegenprobe. Kandidaten: m·f0, wenn die eigene Teiltonreihe gerissen ist
-     (Oktavfehler nach unten), und der YIN-Dip an der Cepstrum-Periode (Nebendip gewählt). Ein Kandidat
+  /* Korrektur nach gerissener Gegenprobe. Kandidaten: m·f0 (m = 2 oder 3), wenn die eigene Teiltonreihe
+     für dieses m gerissen ist (art 'teiltonreihe': YIN lag eine Oktave oder Duodezime zu tief), und der
+     YIN-Dip an der Cepstrum-Periode (art 'cepstrum': YIN hatte einen Nebendip gewählt). Ein Kandidat
      ersetzt den YIN-Wert nur, wenn alles zusammenpasst:
      - das Cepstrum bestätigt ihn direkt (±0,5 HT), er besteht die Gegenprobe selbst, und die
        Teilerkontrolle teilt ihn nicht und meldet keine Unsicherheit;
@@ -808,7 +809,7 @@
 
   function f0Korrektur(spec, f0, fCep, gp, p, sr, fmax) {
     var cand = [], i;
-    if (gp.aufM) cand.push({ f: gp.aufM * f0, art: 'oktave' });
+    if (gp.aufM) cand.push({ f: gp.aufM * f0, art: 'teiltonreihe' });
     if (isFinite(fCep) && p.dn) {
       var tc = sr / fCep, bi = naechsterDip(p.dips, tc);
       if (bi >= 0 && Math.abs(p.dips[bi].tau - tc) <= 0.03 * tc + 1 && p.dips[bi].dn < 0.45) {

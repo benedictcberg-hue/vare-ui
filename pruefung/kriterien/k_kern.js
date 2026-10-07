@@ -661,5 +661,10 @@ module.exports = async function (H) {
       korrFalsch.length === 0 && korrOhneNot.length === 0 && korr.length > 0 && ALLE.filter(x => x.r.f0Korrektur && (x.r.f0Unsure || !isFinite(x.r.f0Yin))).length === 0,
       'Rahmen ' + ALLE.length + ', YIN falsch ' + yinFalsch + ', korrigiert ' + korr.length + ' (' + art(ALLE) + '), danach falsch ' + nachher + ' (alle markiert, siehe K3b); falsch korrigiert ' + korrFalsch.length + ', ohne Not ' + korrOhneNot.length +
       korrFalsch.concat(korrOhneNot).slice(0, 3).map(x => ' — ' + x.name + ' ' + r1(x.r.f0Yin) + ' → ' + r1(x.r.f0)).join(''));
+    // Die Art benennt die Probe, die den Ausschlag gab; bei 'teiltonreihe' ist der neue Wert genau 2·f0Yin oder 3·f0Yin
+    const artBad = korr.filter(x => !(x.r.f0Korrektur === 'cepstrum' || (x.r.f0Korrektur === 'teiltonreihe' && [2, 3].some(m => Math.abs(x.r.f0 / (m * x.r.f0Yin) - 1) < 1e-9))));
+    const faktor = {}; for (const x of korr) if (x.r.f0Korrektur === 'teiltonreihe') { const k = '×' + Math.round(x.r.f0 / x.r.f0Yin); faktor[k] = (faktor[k] || 0) + 1; }
+    check('K3c', 'f0Korrektur ist \'teiltonreihe\' (neuer Wert genau 2× oder 3× f0Yin) oder \'cepstrum\' (YIN-Dip an der Cepstrum-Periode), nichts anderes',
+      artBad.length === 0 && korr.length > 0, korr.length + ' Korrekturen, Art ' + art(ALLE) + ', Faktor ' + JSON.stringify(faktor) + (artBad.length ? ' — ' + artBad.slice(0, 3).map(x => x.name + ' ' + x.r.f0Korrektur + ' ' + r1(x.r.f0Yin) + ' → ' + r1(x.r.f0)).join(' | ') : ''));
   }
 };
