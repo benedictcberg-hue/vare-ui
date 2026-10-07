@@ -1266,10 +1266,10 @@
      auseinander (ein Wechsel ist im Gang) und der Rahmen um mehr als mischTolSt außerhalb ihrer Spanne,
      ist er ein Mischwert und gilt als stimmlos. Ein Gleiten bleibt innerhalb der Spanne.
      Kiekser bleiben: Mitten im Ton liegen beide Kontexte auf dem Grundton; Vibrato 6 Hz ±50 Cent trennt
-     sie höchstens um knapp 1 HT (mit 0,7 HT fielen 38 von 288 Ausflügen im Vibrato weg). Ein Kiekser beim
+     sie höchstens um knapp 1 HT (mit 0,7 HT fielen von 288 Ausflügen im Vibrato 26 weitere weg). Ein Kiekser beim
      Ankommen auf dem neuen Ton liegt auf 2·R oder 3·R (R = Kontext danach) und sieht im Wechsel aus wie
      ein Oktavfehler des neuen Tons; diese Werte bleiben stehen (mischSchutzSt). Gemessen trugen die
-     Restkanten fast nur 2·L und 3·L, den Oktavfehler des alten Tons. Ohne den Schutz fielen 61 von 84
+     Restkanten fast nur 2·L und 3·L, den Oktavfehler des alten Tons. Ohne den Schutz fielen 62 von 84
      Kieksern am Tonwechsel weg. */
   function mischRahmen(track, periodisch, opts) {
     var n = track.t.length, out = new Uint8Array(n);
