@@ -428,7 +428,11 @@ const WAV = path.join(SP, 'fake.wav');
     const A = require(path.join(ROOT, 'analysis.js')), F = A.FLAG, nG = 60, gs = A.makeSeries(nG);
     for (let i = 0; i < nG; i++) {
       gs.t[i] = 0.01 * i; gs.f0[i] = 196; gs.f0Yin[i] = 196; gs.f0Cep[i] = 196; gs.rms[i] = -20; gs.ap[i] = 0.1; gs.flags[i] = F.VOICED; gs.cls[i] = -1; gs.gate[i] = 1; gs.score[i] = NaN;
-      [700, 1200, 2500, 3300, 4200].forEach((f, k) => { gs['f' + (k + 1)][i] = f; }); gs.valid[i] = 31;
+      // Alle fünf Formanten gültig, also auch ΔF3–4 und ΔF4–5 (dsp.js: d34valid = valid3 ∧ valid4). Vorher fehlten
+      // D34VALID und d34 (0) — ein Rahmen, den der Kern nie liefert; seit der Hover ungültiges ΔF3–4 in Rost zeigt,
+      // stand dieser Widerspruch im korrigierten Rahmen in Rost.
+      [700, 1200, 2500, 3300, 4200].forEach((f, k) => { gs['f' + (k + 1)][i] = f; gs['bw' + (k + 1)][i] = [80, 90, 120, 150, 200][k]; }); gs.valid[i] = 31;
+      gs.flags[i] |= F.D34VALID | F.D45VALID; gs.d34[i] = 800; gs.d45[i] = 900;
       gs.shr[i] = -30; gs.shrGrid[i] = 196; gs.shrOther[i] = NaN; gs.shrKamm[i] = -1; gs.shrZweitpuls[i] = 0.1; gs.h1h2[i] = 2; gs.h1h2c[i] = 3;
       if (i >= 20 && i < 30) { gs.flags[i] |= F.F0UNSURE | F.SHRUNSURE; gs.f0Grund[i] = A.codeAus('f0Grund', 'cepstrum'); gs.f0Cep[i] = 98; gs.shrGrund[i] = A.codeAus('shrGrund', 'grundton'); }
       if (i >= 35 && i < 45) { gs.flags[i] |= F.F0KORR; gs.f0Korrektur[i] = A.codeAus('f0Korrektur', 'teiltonreihe'); gs.f0Yin[i] = 98; }
