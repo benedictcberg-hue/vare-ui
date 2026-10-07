@@ -285,9 +285,16 @@
     for (var i = 0; i < u8.length; i += bpe) for (var j = 0; j < bpe; j++) o[i + j] = u8[i + bpe - 1 - j];
     return o;
   }
+  // Stücke zu 3·8192 Bytes: jedes ergibt ganze Base64-Vierer, die Stücke lassen sich also aneinanderhängen.
   function base64Aus(u8) {
-    var teile = [], STUECK = 3 * 8192, n = u8.length, codes = new Uint16Array(STUECK / 3 * 4);
-    for (var a = 0; a < n; a += STUECK) {
+    var teile = [], STUECK = 3 * 8192, n = u8.length, a;
+    // btoa ist eingebaut und in Chromium gut doppelt so schnell; ohne btoa (ältere Umgebung) dieselbe Kodierung in JS.
+    if (typeof btoa === 'function') {
+      for (a = 0; a < n; a += STUECK) teile.push(btoa(String.fromCharCode.apply(null, u8.subarray(a, Math.min(n, a + STUECK)))));
+      return teile.join('');
+    }
+    var codes = new Uint16Array(STUECK / 3 * 4);
+    for (a = 0; a < n; a += STUECK) {
       var e = Math.min(n, a + STUECK), j = a, c = 0, x;
       for (; j + 2 < e; j += 3) {
         x = (u8[j] << 16) | (u8[j + 1] << 8) | u8[j + 2];

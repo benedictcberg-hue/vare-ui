@@ -315,6 +315,20 @@ module.exports = async function (H) {
     check('I4d', 'Sicherung schreibt Version 3; Versionen 1 und 2 bleiben lesbar (null → NaN, $nf, Typen); fehlende Bytes und eine unbekannte Version werden abgelehnt, nicht still übernommen',
       C.BACKUP_VERSION === 3 && lesbar && !!k0 && new RegExp('Serie ' + k0 + ':').test(kaputt) && /Sicherungsversion 4 unbekannt/.test(v4),
       'Version ' + C.BACKUP_VERSION + ', alt lesbar ' + lesbar + ', beschädigt „' + kaputt + '“, Version 4 „' + v4 + '“');
+
+    /* Zwei Wege zur selben Kodierung: mit eingebautem btoa (Browser, Node) — in Chromium gemessen 1,8–2,0 s statt
+       3,1–4,2 s Schreiben für 20 Takes × 30 000 Rahmen — und ohne btoa reines JS. Beide müssen dieselben Zeichen
+       liefern; der JS-Weg läuft hier in einer Umgebung ohne btoa. */
+    const vm = require('vm'), fs = require('fs'), quelle = fs.readFileSync(path.join(__dirname, '..', '..', 'csv.js'), 'utf8');
+    const csvIn = extra => { const sb = Object.assign({}, extra); sb.self = sb; vm.createContext(sb); vm.runInContext(quelle, sb, { filename: 'csv.js' }); return sb.VARECSV; };
+    let aufrufe = 0;
+    const ohneBtoa = csvIn({}), mitBtoa = csvIn({ btoa: x => { aufrufe++; return btoa(x); } });
+    const pJs = ohneBtoa.packSeries(ser), pNat = mitBtoa.packSeries(ser), andersWeg = Object.keys(pJs).filter(k => pJs[k] && pJs[k].b64 !== (pNat[k] && pNat[k].b64));
+    const rundJs = ohneBtoa.unpackSeries(JSON.parse(JSON.stringify(pJs)));
+    const jsExakt = Object.keys(ser).every(k => !ArrayBuffer.isView(ser[k]) || Buffer.compare(Buffer.from(ser[k].buffer, ser[k].byteOffset, ser[k].byteLength), Buffer.from(rundJs[k].buffer, rundJs[k].byteOffset, rundJs[k].byteLength)) === 0);
+    check('I4d', 'Sicherung: Base64 über das eingebaute btoa, wo es das gibt (Laufzeit); ohne btoa dieselben Zeichen aus reinem JS, ebenfalls exakt zurückgelesen',
+      aufrufe > 0 && typeof (pJs.f0 && pJs.f0.b64) === 'string' && !andersWeg.length && jsExakt,
+      'btoa-Aufrufe ' + aufrufe + ', Felder mit anderem Ergebnis ' + (andersWeg.join(',') || 'keine') + ', JS-Weg exakt ' + jsExakt);
   }
 };
 module.exports.fingerabdruck = fingerabdruck;
