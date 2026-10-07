@@ -33,7 +33,7 @@ TAKE_SOLL.push(
   ['shr_med_db', 'summary.shr.med', 2], ['shr_max_db', 'summary.shr.max', 2],
   ['shr_unsure_share', 'summary.shrUnsureShare', 3], ['shr_unsure_max_db', 'summary.shrUnsureMax', 2], ['shr_other_max_db', 'summary.shrOtherMax', 2],
   ['cpp_med_db', 'summary.cpp.med', 2],
-  ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3],
+  ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3], ['h1h2c_bw_artifact_share', 'summary.h1h2c.bwArtefaktShare', 3],
   ['rms_med_dbfs', 'summary.rms.med', 2], ['rms_max_dbfs', 'summary.rms.max', 2], ['floor_dbfs', 'summary.floorDb', 2],
   ['floor_source', 'summary.floorSource', 'text'], ['voicing_floor_dbfs', 'summary.voicingFloorDb', 2], ['snr_db', 'summary.snrDb', 2],
   ['tube_cm', 'summary.tubeCm', 1], ['tube_q1', 'summary.tube.q1', 1], ['tube_q3', 'summary.tube.q3', 1], ['tube_n', 'summary.tube.n', 0],

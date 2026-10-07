@@ -692,7 +692,8 @@ module.exports = async function (H) {
    B2e: README und pages.yml nennen dieselbe Pages-Quelle „GitHub Actions“ (N24).
    B2f: Ohne Grundton steht „–“ statt der Note „--“.
    B2g: Die Take-CSV nennt die Streuungsgrenze des Takes (spread_max_hz).
-   B2h: Die Serie trägt die Fensterzahl je Formant: „nur in 2 Fenstern“ auch neben anderen Gründen (Hover, CSV). */
+   B2h: Die Serie trägt die Fensterzahl je Formant: „nur in 2 Fenstern“ auch neben anderen Gründen (Hover, CSV).
+   B2i: H1*−H2* mit einer Artefakt-Bandbreite (unter 40 Hz) steht live, im Hover, im Detail und in der CSV da. */
 async function kriterienB2(H) {
   const { D, SR, noise } = H;
   const check = (id, name, ok, detail) => H.check(id, (id.length >= 5 ? ' ' : '') + name, ok, detail);
@@ -999,6 +1000,62 @@ async function kriterienB2(H) {
       !bad.length && zweiMitAnderem >= 1 && zellen === 5 * n,
       (bad.length ? bad.slice(0, 5).join(' | ') + ' || ' : '') + n + ' Rahmen, ungültig in 2 Fenstern ' + zweiGeprueft + ' (davon mit anderem Grund ' + zweiMitAnderem + '), CSV-Zellen ' + zellen + '/' + 5 * n);
   } catch (e) { check('B2h', 'Ablauf Fensterzahl läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B2i · H1*−H2* mit Artefakt-Bandbreite: live, Hover, Detail und CSV sagen es ---------- */
+  try {
+    const A = H.A, C = H.C, TSR = D.TARGET_SR, F = A.FLAG;
+    // /a/ auf D3 mit LPC-Bandbreiten um 30 Hz (Artefakt, physik.md 2.4) und dasselbe /a/ mit üblichen Bandbreiten.
+    const schmal = D.synthVowel(147, [700, 1200, 2500, 3300, 4200], [30, 30, 30, 150, 200], 0.6, SR, { gain: 0.3 });
+    const normal = D.synthVowel(147, [700, 1200, 2500, 3300, 4200], H.BW5, 0.6, SR, { gain: 0.3 });
+    const SIGi = H.concat([noise(Math.round(0.2 * SR), 2e-4, 111), schmal, normal, noise(Math.round(0.2 * SR), 2e-4, 112)]);
+    const bad = [];
+    // 1. Zusammenfassung: Anteil über dieselben Rahmen wie der H1*−H2*-Median, hier unabhängig gezählt.
+    const res = await A.analyseTake(SIGi, SR, { hopS: 0.02 }), ser = res.series;
+    let n = 0, art = 0;
+    const artefakt = i => isFinite(ser.h1h2c[i]) && (ser.bw1[i] < 40 || ser.bw2[i] < 40 || ser.bw3[i] < 40);
+    for (let i = 0; i < ser.t.length; i++) { if (!(ser.flags[i] & F.VOICED) || (ser.flags[i] & F.F0UNSURE) || !isFinite(ser.h1h2c[i])) continue; n++; if (artefakt(i)) art++; }
+    const anteil = res.summary.h1h2c.bwArtefaktShare;
+    if (!(n > 0 && art > 0 && art < n && Math.abs(anteil - art / n) < 1e-12)) bad.push('Anteil ' + anteil + ' statt ' + art + '/' + n);
+    // 2. Hover: jeder Rahmen mit Artefakt-Bandbreite sagt es bei H1*−H2*, kein anderer.
+    const CHR = U.chronikNeu().VARECHRONIK;
+    let hMit = 0, hOhne = 0;
+    for (let i = 0; i < ser.t.length; i++) {
+      if (!(ser.flags[i] & F.VOICED)) continue;
+      const h = CHR.hoverText(ser, i, 130).replace(/<[^>]+>/g, ''), sagt = /H1\*−H2\* -?[\d.]+ \(Bandbreite unter 40 Hz, auf 40 Hz begrenzt\)/.test(h);
+      if (sagt !== artefakt(i)) { if (bad.length < 5) bad.push('Hover t ' + i + ': „' + h.slice(h.indexOf('H1−H2'), h.indexOf('H1−H2') + 90) + '“'); } else if (sagt) hMit++; else hOhne++;
+    }
+    // 3. Take-CSV
+    const z = C.takesToCsv([{ code: 'I', summary: res.summary }], 'standard').split('\r\n'), kopf = z[0].split(','), c = kopf.indexOf('h1h2c_bw_artifact_share');
+    const csv = c >= 0 ? z[1].split(',')[c] : '(Spalte fehlt)';
+    if (csv !== anteil.toFixed(3)) bad.push('CSV ' + csv + ' statt ' + anteil.toFixed(3));
+    // 4. Detail über die Seite, dazu ein älterer Take ohne den Anteil; 5. live über die Live-Schleife der Seite.
+    const br = idbNeu(), p = await seiteNeu(br, () => ({ samples: Float32Array.from(SIGi), sampleRate: SR, durationS: SIGi.length / SR }), SR);
+    let tick = null;
+    p.sb.requestAnimationFrame = f => { tick = f; return 1; };
+    p.kalibriert('cal-i'); await p.mikrofon();
+    const T = await p.take();
+    const kachel = async id => { p.geheZu('#/take/' + id); await p.warte(() => /H1−H2/.test(p.el('take-detail').innerHTML) && p.el('take-detail').innerHTML.indexOf(id) >= 0, 3000); return (U.kacheln(p.el('take-detail').innerHTML).find(k => /^H1−H2/.test(k.k)) || {}).v || '?'; };
+    const dNeu = await kachel(T.id);
+    const alt = Object.assign(await p.S.getTake(T.id), { id: 'b2i-alt', code: 'Q' }); delete alt.summary.h1h2c.bwArtefaktShare; await p.S.putTake(alt);
+    const dAlt = await kachel('b2i-alt');
+    const pz = x => (x > 0 && x < 0.01) ? '< 1' : String(Math.round(x * 100));
+    if (!new RegExp('H1\\*−H2\\* in ' + pz(T.summary.h1h2c.bwArtefaktShare) + ' % der Rahmen mit Bandbreite unter 40 Hz gerechnet').test(dNeu)) bad.push('Detail „' + dNeu + '“');
+    if (!/Bandbreite unter 40 Hz nicht gespeichert/.test(dAlt)) bad.push('Detail älterer Take „' + dAlt + '“');
+    p.geheZu('#/aufnahme');
+    const ds = D.resample(Float32Array.from(schmal), SR, TSR), dsN = D.resample(Float32Array.from(normal), SR, TSR);
+    const frA = D.analyseAt(ds, TSR, ds.length - 1, { align: 'end', floorDb: -72 }), frN = D.analyseAt(dsN, TSR, dsN.length - 1, { align: 'end', floorDb: -72 });
+    const DD = p.sb.VAREDSP, echt = DD.analyseAt, rec = p.st().rec, live = [];
+    rec.latest = s => new Float32Array(Math.round(s * SR));
+    let jetzt = 1000;
+    for (const fr of [frA, frN]) { DD.analyseAt = () => fr; rec.samplesSeen += 1000; jetzt += 50; if (tick) tick(jetzt); live.push(p.el('v-h1h2').textContent); }
+    DD.analyseAt = echt;
+    const liveOk = frA.h1h2cArtifact === true && frN.h1h2cArtifact === false && /H1\*−H2\* mit Bandbreite unter 40 Hz gerechnet \(auf 40 Hz begrenzt\)/.test(live[0]) && !/Bandbreite/.test(live[1]);
+    if (!liveOk) bad.push('live „' + live.join('“ / „') + '“');
+    check('B2i', 'H1*−H2* mit einer LPC-Bandbreite unter 40 Hz (auf 40 Hz begrenzt) ist sichtbar: live, im Hover je Rahmen, im Detail als Anteil (ältere Auswertung: nicht gespeichert), in der Take-CSV h1h2c_bw_artifact_share',
+      !bad.length && hMit > 0 && hOhne > 0,
+      (bad.length ? bad.join(' | ') + ' || ' : '') + 'Anteil ' + art + '/' + n + ', Hover mit/ohne ' + hMit + '/' + hOhne + ', CSV ' + csv + ' | Detail „' + dNeu.slice(dNeu.indexOf(')') + 1).trim() + '“ | live „' + (live[0] || '').slice(0, 120) + '“');
+    p.schliessen();
+  } catch (e) { check('B2i', 'Ablauf H1*−H2*-Bandbreite läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B2z', 'Keine Ausnahme in der Seite während der B2-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));

@@ -103,6 +103,8 @@
       { key: 'h1h2_med_db', get: g('summary.h1h2.med'), dec: 2 },
       { key: 'h1h2c_med_db', get: g('summary.h1h2c.med'), dec: 2 },
       { key: 'h1h2_unsure_share', get: g('summary.h1h2.unsureShare'), dec: 3 },
+      // Anteil der Rahmen im H1*−H2*-Median mit einer LPC-Bandbreite unter 40 Hz (auf 40 Hz begrenzt); ältere −99.
+      { key: 'h1h2c_bw_artifact_share', get: g('summary.h1h2c.bwArtefaktShare'), dec: 3 },
       { key: 'rms_med_dbfs', get: g('summary.rms.med'), dec: 2 },
       { key: 'rms_max_dbfs', get: g('summary.rms.max'), dec: 2 },
       /* floor_dbfs: nur ein gemessener Boden (Kalibrierung oder Stille im Take), sonst −99 — auch bei älteren

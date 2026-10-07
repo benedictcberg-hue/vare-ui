@@ -340,7 +340,8 @@
     } else setStat('shr', fmt(fr.shr, 1) + ' dB' + (fr.shrGrid > fr.f0 * 1.5 ? ' (Raster ' + fmt(fr.shrGrid) + ' Hz = ' + D.hzToNote(fr.shrGrid) + ')' : ''), false, false, fr.shr > -15);
     setStat('cpp', fmt(fr.cpp, 1) + ' dB', false);
     // H1−H2 und H1*−H2* lesen die Linien bei F0 und 2·F0: mit dem Grundton unsicher.
-    setStat('h1h2', fmt(fr.h1h2, 1) + ' · ' + fmt(fr.h1h2c, 1) + ' dB' + (fr.h1h2unsure ? ' (filtergetrieben)' : '') + (fr.f0Unsure ? ' (Grundton unsicher)' : ''), fr.h1h2unsure || fr.f0Unsure);
+    // H1*−H2* mit einer Artefakt-Bandbreite (dsp.js h1h2cArtifact): neutral dabei, wie am Formanten (CH.H1C_BW_TEXT).
+    setStat('h1h2', fmt(fr.h1h2, 1) + ' · ' + fmt(fr.h1h2c, 1) + ' dB' + (fr.h1h2unsure ? ' (filtergetrieben)' : '') + (fr.f0Unsure ? ' (Grundton unsicher)' : '') + (fr.h1h2cArtifact ? ' · ' + CH.H1C_BW_TEXT : ''), fr.h1h2unsure || fr.f0Unsure);
     var hint = $('live-hints'), hinweis = fr.sparseHarmonics ? 'Grundton über 250 Hz: zwischen den Teiltönen liegt kein Messpunkt, ein Formant kann bis zu ±' + fmt(fr.harmonicPullHz) + ' Hz auf dem nächsten Teilton einrasten. Die Streuung der Sweeps zeigt das nicht an.' : hintText();
     hint.textContent = (fr.f0Unsure ? 'Grundton unsicher (' + CH.f0GrundText(fr.f0Grund, fr.f0Cep) + '): Note, F1/F0, Teiltonleiter, SHR und H1−H2 hängen an ihm. ' : '') + hinweis;
     var tl = D.tubeLength(fr.F, fr.valid);

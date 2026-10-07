@@ -142,6 +142,21 @@
      ungültig und ist darum kein Grund oben, steht aber neutral dabei: Die Bandbreite geht in H1*−H2* ein. */
   var BW_ARTEFAKT_HZ = (D && D.BW_ARTIFACT_HZ) || 40;
   var BANDBREITE_TEXT = 'Bandbreite unter ' + BW_ARTEFAKT_HZ + ' Hz';
+  /* H1*−H2* rechnet mit den Bandbreiten von F1–F3. War eine davon Artefakt, ging sie auf 40 Hz begrenzt ein (physik.md
+     7.2). Neutral dabei, wie die Bandbreite am Formanten: die Begrenzung ist die festgelegte Rechenweise; liegt F1
+     nahe H1 oder H2, wo die Bandbreite stark wirkt, ist H1−H2 ohnehin als filtergetrieben markiert. */
+  var H1C_BW_TEXT = 'H1*−H2* mit ' + BANDBREITE_TEXT + ' gerechnet (auf ' + BW_ARTEFAKT_HZ + ' Hz begrenzt)';
+  function h1cBwArtefakt(series, i) {
+    var w = function (c) { var a = series[c]; return a ? a[i] : NaN; };
+    return zahl(w('h1h2c')) && (w('bw1') < BW_ARTEFAKT_HZ || w('bw2') < BW_ARTEFAKT_HZ || w('bw3') < BW_ARTEFAKT_HZ);
+  }
+  // Anteil der Rahmen im H1*−H2*-Median, die eine Artefakt-Bandbreite enthielten; ältere Auswertungen kennen ihn nicht.
+  function h1cBwZusatz(s) {
+    var h = s && s.h1h2c;
+    if (!h || !zahl(h.med)) return '';
+    if (!Object.prototype.hasOwnProperty.call(h, 'bwArtefaktShare')) return ' <span class="small muted">(ältere Auswertung: Anteil mit Bandbreite unter ' + BW_ARTEFAKT_HZ + ' Hz nicht gespeichert)</span>';
+    return zahl(h.bwArtefaktShare) && h.bwArtefaktShare > 0 ? ' · H1*−H2* in ' + prozentHtml(h.bwArtefaktShare) + ' % der Rahmen mit ' + BANDBREITE_TEXT + ' gerechnet (auf ' + BW_ARTEFAKT_HZ + ' Hz begrenzt)' : '';
+  }
 
   // Anteil in Prozent; ein kleiner, aber vorhandener Anteil heißt „< 1“, nicht „0“. Ins HTML nur maskiert.
   function prozent(x) { return (x > 0 && x < 0.01) ? '< 1' : fmt(x * 100); }
@@ -338,7 +353,7 @@
       var g = wert('shrGrid'), f0v = wert('f0'), anders = (zahl(g) && g > 1.5 * f0v) ? f0v : 2 * f0v;
       shr = rost(shr + ' (Raster ' + fmt(g) + ' Hz)' + (zahl(wert('shrOther')) ? ' / ' + v('shrOther', 1) + ' (Raster ' + fmt(anders) + ' Hz)' : '') + ', unsicher: ' + shrGrundText(grund('shrGrund'), wert('shrKamm'), wert('shrZweitpuls')));
     } else shr = esc(shr);
-    var h12 = 'H1−H2 ' + v('h1h2', 1) + ((fl & F.H1H2UNSURE) ? ' (filtergetrieben)' : '');
+    var h12 = 'H1−H2 ' + v('h1h2', 1) + ((fl & F.H1H2UNSURE) ? ' (filtergetrieben)' : '') + ' · H1*−H2* ' + v('h1h2c', 1) + (h1cBwArtefakt(series, i) ? ' (' + BANDBREITE_TEXT + ', auf ' + BW_ARTEFAKT_HZ + ' Hz begrenzt)' : '');
     h12 = (fl & F.F0UNSURE) ? rost(h12 + ' (Grundton unsicher)') : esc(h12);
     /* Formanten: ein ungültiger Wert in Rost mit seinen Gründen (formantGruende, wie live). Der Grund je
        Slot kommt aus den Masken der Serie (slotUnsure, slotVerschmolzen, rauschBoden); in Pausen gibt es
@@ -411,7 +426,7 @@
       // SHR: Median und Maximum aus Rahmen ohne Rasterzweifel; Warnung (Gold) nur daraus, nie aus einem unsicheren Wert.
       cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–') + shrZusatz(s), shrUnsicher(s), shrBefund(s)) +
       cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben'
-        + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozentHtml(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')', s.h1h2 && s.h1h2.unsureShare > 0.5) +
+        + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozentHtml(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')' + h1cBwZusatz(s), s.h1h2 && s.h1h2.unsureShare > 0.5) +
       cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorSource === 'unknown' ? NaN : s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
       (s.floorSource === 'unknown' ? cell('Stimmschwelle', 'angenommen: ' + fmt(stimmBoden(s) + 12, 1) + ' dBFS (Boden unbekannt, kein Messwert)') : '') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
@@ -518,5 +533,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, H1C_BW_TEXT: H1C_BW_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

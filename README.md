@@ -315,7 +315,7 @@ die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`
 Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
 (nicht gemessen, als Pause geführt).
 
-Stand Kern 4.0.0: 101 Spalten je Take, 74 je Rahmen. Neu mit Kern 4.0.0:
+Stand Kern 4.0.0: 102 Spalten je Take, 74 je Rahmen. Neu mit Kern 4.0.0:
 
 - **Take:** `f0_unsure_share`, `f0_korrektur_share`, `shr_unsure_share`, `shr_unsure_max_db`,
   `shr_other_max_db`, `voicing_floor_dbfs`. F0, Note, SHR und H1−H2 kommen nur aus sicheren Rahmen; die
@@ -386,7 +386,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
 - Die Glättung wirkt nur auf die Anzeige, beginnt nach jeder Lücke neu und ist per Regler
   veränderbar. Messwerte werden nie geglättet gespeichert.
 - H1−H2 ist bei F1 ≈ F0 filtergetrieben und wird so beschriftet. Bandbreiten unter 40 Hz
-  sind laut Physik Artefakt und werden als solche gekennzeichnet.
+  sind laut Physik Artefakt und werden als solche gekennzeichnet — am Formanten und bei H1*−H2*, das mit den
+  Bandbreiten von F1–F3 rechnet und eine solche auf 40 Hz begrenzt (live, im Hover, im Detail als Anteil, in der
+  CSV als `h1h2c_bw_artifact_share`).
 - CPP auf eigener Skala, nicht Praat-CPPS. Rohrlänge ist eine Modellgröße, keine Messung.
 - Tonsprünge heißen „Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms“ und „kurze Kanten unter 90 ms“, nicht
   „Registerwechsel“ (siehe „Tonsprünge: zwei Spuren“).

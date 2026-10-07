@@ -277,6 +277,17 @@
     s.h1h2 = stats(pick('h1h2', voicedIdx, function (j) { return !(series.flags[j] & FLAG.H1H2UNSURE) && f0sicher(j); }));
     s.h1h2.unsureShare = anteil(FLAG.H1H2UNSURE);   // filtergetrieben (F1 nahe H1/H2), nicht Grundton
     s.h1h2c = stats(pick('h1h2c', voicedIdx, f0sicher));
+    /* H1*−H2* rechnet mit den Bandbreiten von F1–F3; eine LPC-Bandbreite unter 40 Hz ist Artefakt und geht auf 40 Hz
+       begrenzt ein (physik.md 7.2, dsp.js h1h2cArtifact). Der Wert bleibt im Median, der Anteil steht daneben — über
+       dieselben Rahmen wie der Median, aus bw1…bw3 der Serie (dsp.js: bwArtifact = Bandbreite < BW_ARTIFACT_HZ). */
+    var bwGrenze = D.BW_ARTIFACT_HZ || 40, h1cN = 0, h1cArt = 0;
+    for (i = 0; i < voicedIdx.length; i++) {
+      var hj = voicedIdx[i];
+      if (!f0sicher(hj) || !isFinite(series.h1h2c[hj])) continue;
+      h1cN++;
+      if (series.bw1[hj] < bwGrenze || series.bw2[hj] < bwGrenze || series.bw3[hj] < bwGrenze) h1cArt++;
+    }
+    s.h1h2c.bwArtefaktShare = h1cN ? h1cArt / h1cN : NaN;
     var rmsAll = []; for (i = 0; i < n; i++) rmsAll.push(series.rms[i]);
     s.rms = stats(rmsAll, true);
     var lvl = D.median(pick('rms', voicedIdx));
