@@ -189,6 +189,13 @@
     return 20 * Math.log10(Math.sqrt(s / Math.max(1, x.length)) + 1e-12);
   }
 
+  // Pegel des Hann-gewichteten Ausschnitts (mittlere Leistung, auf das Fenster normiert): was das Spektrum davon sieht
+  function hannPegelDb(x) {
+    var w = hannWindow(x.length), a = 0, b = 0;
+    for (var i = 0; i < x.length; i++) { a += x[i] * x[i] * w[i] * w[i]; b += w[i] * w[i]; }
+    return 10 * Math.log10(a / Math.max(b, 1e-20) + 1e-20);
+  }
+
   // Linearphasiger FIR-Tiefpass (Fenstermethode, Hamming), gebaut je Eingangsrate.
   function makeLowpass(cutoffNorm, taps) {
     var h = new Float64Array(taps), mid = (taps - 1) / 2, sum = 0;
@@ -945,7 +952,30 @@
        Glissandi, in denen ein Teil keine stehende Periode hat, bleiben unerkannt — ihr SHR fängt der
        Zwischenpegel (shrBoden), denn ihre Linien liegen auch auf den Viertelpositionen.
      Ein Wechsel in den äußeren gut 20 ms des Fensters bleibt unerkannt; dort ist das Hann-Gewicht unter
-     0,2 und der Einfluss auf das Spektrum gering. */
+     0,2 und der Einfluss auf das Spektrum gering.
+     - Rauschanteil (Befund N16): SFR und CPP rechnen auf demselben Fenster, die Stimmhaftigkeit auf dem
+       Hauptfenster. Reicht ein Frikativ oder Hauchlaut in das Fenster, hebt er das Band 2,4–3,2 kHz (der
+       Vokal liegt dort 25 dB unter 0–2 kHz) und senkt CPP: gemessen SFR bis +25 dB, CPP bis −16 dB, im
+       Gatter „Übergang“, aber am Rahmen ohne Marke. Geprüft werden die drei kurzen Teile (die äußeren 45 ms
+       und die mittleren 45 ms — ein kurzer Konsonant zwischen zwei Vokalen liegt in der Mitte, die Ränder
+       sind dann Vokal): Ein Teil, der hörbar ist (Hann-gewichteter Pegel, wie ihn das Spektrum sieht, 12 dB
+       über dem Boden wie die Stimmhaftigkeit), nicht deutlich periodisch (YIN ohne Dip unter seiner
+       Schwelle) und dessen Hochtonanteil (2,4–3,2 kHz und 2,4–5,5 kHz, je gegen 0–2 kHz) mindestens
+       FENSTER_RAUSCH_HOCH_DB über dem des periodischsten Teils liegt, macht SFR und CPP unsicher.
+       - Pegelgewichtung: Ungewichtet galt der Rand eines Einsatzes aus der Stille als hörbar und rauschend
+         (12 von 216 sauberen Rahmen markiert), gewichtet keiner.
+       - Vergleich des Hochtonanteils: Behauchte Stimme ist an den Rändern so aperiodisch wie in der Mitte;
+         nur nach der Aperiodizität waren bei HNR 5 dB 23 % der stehenden Rahmen markiert, so 3,5 % (HNR 8 dB
+         1,3 %, HNR 12 dB und klar keiner).
+       - 2,4–5,5 kHz zusätzlich zum SFR-Band: /s/ liegt bei 4–5 kHz und senkt CPP, ohne die SFR viel zu
+         heben (/s/ 50 ms: 62 statt 71 von 71 Rahmen markiert).
+       Gemessen (/ʃ/ /s/ /f/ /h/ −6…−24 dB, 50–100 ms, 98–330 Hz): jeder Rahmen mit SFR mehr als 6 dB über der
+       Fassung ohne Frikativ markiert. Es bleiben einzelne Rahmen mit CPP 3–5,5 dB darunter bei unveränderter
+       SFR (höchstens 1 von 77–86 Rahmen, bei /s/ auf 330 Hz 5 von 83), wenn der Frikativ nur schwach oder
+       überblendet ins Fenster reicht. Ein harter Vokalwechsel ohne Übergang markiert 6 % der Rahmen um die
+       Naht, ein legato Wechsel (50 ms) keinen. Kosten: eine YIN-Messung und fünf FFT zu 1024 Punkten, rund
+       0,4 ms je stimmhaftem Rahmen (+8 %). */
+  var FENSTER_RAUSCH_HOCH_DB = 6;   // wie die Verseuchungsgrenze im Befund N16 (SFR mehr als 6 dB über dem Vokal)
   var FENSTER_BLOCK_S = 0.02, FENSTER_RAND_DB = 12, FENSTER_KANTE_S = 0.045, FENSTER_TON_HT = 1.5, FENSTER_F0_HT = 1;
   var AP_STIMMHAFT = 0.45;        // wie die Stimmhaftigkeit in analyseAt
   /* Kreuzprüfung bei ganzzahligem Periodenverhältnis (YIN nahm in einem Teil ein Vielfaches): Der Teil mit
@@ -993,7 +1023,7 @@
   }
   function fensterProbe(seg, sr, fmin, fmax, thresh) {
     var n = seg.length, B = Math.round(FENSTER_BLOCK_S * sr), nb = Math.floor(n / B), off = (n - nb * B) >> 1, lo = Infinity, hi = -Infinity, k;
-    var out = { pegelDb: NaN, rand: false, wechsel: false, f0Lo: NaN, f0Hi: NaN, toene: [] };
+    var out = { pegelDb: NaN, rand: false, wechsel: false, f0Lo: NaN, f0Hi: NaN, toene: [], kurz: [] };
     for (k = 0; k < nb; k++) { var L = rmsDb(seg.subarray(off + k * B, off + (k + 1) * B)); if (L < lo) lo = L; if (L > hi) hi = L; }
     if (nb >= 2) out.pegelDb = hi - lo;
     out.rand = out.pegelDb >= FENSTER_RAND_DB;
@@ -1002,6 +1032,16 @@
     if (n >= 2 * q) {
       var hL = teil(0, h), hR = teil(n - h, n), eL = teil(0, q), eR = teil(n - q, n);
       out.wechsel = teileVertraeglich(hL, hR) === false || teileVertraeglich(eL, eR) === false;
+      // Rauschanteil: die drei kurzen Teile (Ränder und Mitte, je 45 ms) gegen den periodischsten aller Teile
+      var m0 = h - (q >> 1), eM = detectF0(seg.subarray(m0, m0 + q), sr, fmin, fmax, thresh);
+      var alle = [hL, hR, eL, eR, eM], bereiche = [[0, h], [n - h, n], [0, q], [n - q, n], [m0, m0 + q]], sf = [], iMin = 0;
+      var hf = [];
+      for (k = 0; k < 5; k++) {
+        var spk = spectrum(seg.subarray(bereiche[k][0], bereiche[k][1]), sr, 1024);
+        sf.push(sfr(spk)); hf.push(bandDb(spk, 2400, 5500) - bandDb(spk, 0, 2000));
+        if (alle[k].ap < alle[iMin].ap) iMin = k;
+      }
+      for (k = 2; k < 5; k++) out.kurz.push({ ap: alle[k].ap, pegelDb: hannPegelDb(seg.subarray(bereiche[k][0], bereiche[k][1])), hochDb: Math.max(sf[k] - sf[iMin], hf[k] - hf[iMin]) });
     }
     /* Tonhöhen der Teile, die einen Ton tragen: periodisch und nicht viel leiser als der lauteste (ein leiser
        Teil am Rand trägt Rauschen oder Ausklang). Vorrang haben die äußeren 45 ms: Liegt der Wechsel nahe
@@ -1299,7 +1339,7 @@
       audible: false, tonalButAperiodic: false,
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, d34Grund: '', d45Grund: '', teiltonHz: NaN, huellAbstandDb: NaN, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, shrUnsure: false, shrOther: NaN, shrGrund: '', shrKamm: NaN, shrZweitpuls: NaN, shrBoden: NaN,
-      fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, fensterRauschAp: NaN, fensterRauschHochDb: NaN, sfrUnsure: false, sfrGrund: '', cppUnsure: false, cppGrund: '', cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
       f0Unsure: false, f0Grund: '', f0Cep: NaN, f0Yin: NaN, f0Korrektur: '',
       harmonicPullHz: NaN, sparseHarmonics: false,
@@ -1396,6 +1436,16 @@
     // Steht im längsten Fenster (Spektrum für SHR und Gegenprobe) ein einziger Ton? Rand oder Tonwechsel?
     var fp = fensterProbe(longest.seg, sr, opts.fmin || 60, opts.fmax || 500, opts.yinThresh);
     out.fensterPegelDb = fp.pegelDb; out.fensterF0Lo = fp.f0Lo; out.fensterF0Hi = fp.f0Hi;
+    // Rauschanteil: hörbarer, nicht periodischer kurzer Teil mit deutlich mehr Hochtonanteil als der periodischste (SFR und CPP unsicher)
+    var apSchwelle = (opts.yinThresh == null) ? 0.15 : opts.yinThresh, rauschanteil = false;
+    for (k = 0; k < fp.kurz.length; k++) {
+      var ku = fp.kurz[k];
+      if (!(ku.pegelDb > floorDb + 12)) continue;
+      if (!(out.fensterRauschAp >= ku.ap)) out.fensterRauschAp = ku.ap;
+      if (!(out.fensterRauschHochDb >= ku.hochDb)) out.fensterRauschHochDb = ku.hochDb;
+      if (ku.ap >= apSchwelle && ku.hochDb >= FENSTER_RAUSCH_HOCH_DB) rauschanteil = true;
+    }
+    if (rauschanteil) { out.sfrUnsure = out.cppUnsure = true; out.sfrGrund = out.cppGrund = 'rauschanteil'; }
 
     var f0 = p.f0;
     var sub = subMultipleInfo(spec, f0);
@@ -1914,7 +1964,7 @@
     F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, teiltonFraglich: teiltonFraglich, huellAbstand: huellAbstand, HUELL_WECHSEL_DB: HUELL_WECHSEL_DB, TEILTON_DIFF_HZ: TEILTON_DIFF_HZ, TEILTON_SLOT_HZ: TEILTON_SLOT_HZ, TEILTON_PAAR: TEILTON_PAAR, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, kammKontrast: kammKontrast, zweitpuls: zweitpuls,
     SHR_KAMM_ZWEIFEL_DB: SHR_KAMM_ZWEIFEL_DB, SHR_KAMM_RASTER_DB: SHR_KAMM_RASTER_DB, SHR_ZWEITPULS_MIN: SHR_ZWEITPULS_MIN, SHR_REST_ORDNUNG: SHR_REST_ORDNUNG,
     shrBoden: shrBoden, SHR_UNAUFFAELLIG_DB: SHR_UNAUFFAELLIG_DB, SHR_RAUSCH_ABSTAND_DB: SHR_RAUSCH_ABSTAND_DB, fensterProbe: fensterProbe, fensterMischwert: fensterMischwert,
-    FENSTER_BLOCK_S: FENSTER_BLOCK_S, FENSTER_RAND_DB: FENSTER_RAND_DB, FENSTER_KANTE_S: FENSTER_KANTE_S, FENSTER_TON_HT: FENSTER_TON_HT, FENSTER_F0_HT: FENSTER_F0_HT, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    FENSTER_BLOCK_S: FENSTER_BLOCK_S, FENSTER_RAND_DB: FENSTER_RAND_DB, FENSTER_KANTE_S: FENSTER_KANTE_S, FENSTER_TON_HT: FENSTER_TON_HT, FENSTER_F0_HT: FENSTER_F0_HT, FENSTER_RAUSCH_HOCH_DB: FENSTER_RAUSCH_HOCH_DB, hannPegelDb: hannPegelDb, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,

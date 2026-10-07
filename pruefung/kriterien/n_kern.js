@@ -11,6 +11,7 @@
      Cluster, das nur eine LPC-Ordnung trennt, A3h Vokalwechsel im Fenster.
    A4: Grundton bei starkem Hauch (analyseAt: Gegenprobe und Teilerkontrolle im Rauschen) —
      A4a hohe Lage (Befund N17), A4b Unterton in behauchter Stimme, A4c Oktave darüber bei teilweise belegter Reihe.
+   A4d: SFR und CPP neben Frikativen (Befund N16, analyseAt: Rauschanteil im Fenster).
    Testsignale: allgemeine Baritonlage, synthetische Vokale mit bekannter Wahrheit. Zwei Quellen:
    Impulse (wie synthVowel) und Rosenberg-Puls mit Lippenabstrahlung, dazu Jitter, Shimmer und Rauschen.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
@@ -986,5 +987,90 @@ module.exports = async function (H) {
       R.length >= 1000 && hoch.length >= 30 && ohne.length === 0 && korr.length === 0,
       R.length + ' Rahmen, Oktave zu hoch ' + hoch.length + ', ohne Marke ' + ohne.length + ', dorthin korrigiert ' + korr.length + (ohne.length + korr.length ? ' — ' + ohne.concat(korr).slice(0, 4).map(r => r.nm).join(' | ') : '') +
       '; Bericht: richtige Grundtöne mit „Oktave offen“ ' + amb.length + ' von ' + richtig.length);
+  }
+
+  /* ---------- A4d: SFR und CPP neben Frikativen (Befund N16) ----------
+     SFR und CPP rechnen auf dem 0,14-s-Fenster, die Stimmhaftigkeit auf dem Hauptfenster. Ein Frikativ im Fenster
+     hob die SFR stimmhafter Rahmen bis +25 dB und senkte CPP bis −16 dB, ohne Marke. Signal wie in der Gegenprüfung:
+     sechs Silben Frikativ + Vokal /a/ (Impulsfolge, Quelle −12 dB/Okt, Formanten 700/1150/2500/3300/3900 Hz,
+     Abstrahlung, Vibrato ±7 Cent), Frikativ als gefiltertes Rauschen (/ʃ/ 2,7 + 3,6 kHz, /s/ 4,8 + 3 kHz, /f/ breit,
+     /h/ durch den Trakt), Mikrofonrauschen 40 dB, Boden bekannt. Bezug ist dieselbe Folge mit Stille statt Frikativ.
+     (a) Jeder stimmhafte Rahmen, dessen SFR mehr als 6 dB über dem Bezugsrahmen liegt, trägt sfrUnsure und cppUnsure
+     (Grund 'rauschanteil'); Rahmen mit CPP mehr als 3 dB darunter zu mindestens 95 % (Rest im Bericht, offen).
+     (b) Über die Rahmen ohne Marke liegen SFR q3 und CPP q1 höchstens 1 dB neben denselben Rahmen des Bezugs: Was ohne
+     Marke bleibt, ist nicht verseucht (so rechnet die Zusammenfassung, sobald sie die Marke beachtet; gegen alle
+     Bezugsrahmen verglichen läge CPP q1 wegen der ausgelassenen Übergangsrahmen bis 1,7 dB höher). (c) Einsätze aus der Stille (Bezug) nie markiert; ein gehaltenes /a/
+     (130 Hz, Vibrato 5,5 Hz ±40 Cent, Rauschen 30 dB) innen höchstens zu 2 %. */
+  {
+    const SRf = SR, VOKAL = [[700, 80], [1150, 90], [2500, 120], [3300, 160], [3900, 200]];
+    function rngF(seed) { let z = seed >>> 0 || 1; return () => { z = (z * 1103515245 + 12345) & 0x7fffffff; return z / 0x7fffffff; }; }
+    function gaussF(r) { const u = r() || 1e-9, v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+    function reson(x, F, B) { const rr = Math.exp(-Math.PI * B / SRf), a1 = 2 * rr * Math.cos(2 * Math.PI * F / SRf), a2 = -rr * rr, g = 1 - a1 - a2, y = new Float64Array(x.length); let y1 = 0, y2 = 0; for (let i = 0; i < x.length; i++) { const v = g * x[i] + a1 * y1 + a2 * y2; y[i] = v; y2 = y1; y1 = v; } return y; }
+    function diff(x) { const d = new Float64Array(x.length); for (let i = 1; i < x.length; i++) d[i] = x[i] - x[i - 1]; return d; }
+    function lp1(x, fc) { const a = Math.exp(-2 * Math.PI * fc / SRf), y = new Float64Array(x.length); let yy = 0; for (let j = 0; j < x.length; j++) { yy = a * yy + (1 - a) * x[j]; y[j] = yy; } return y; }
+    const effF = (x, a, b) => { let p = 0; for (let i = a; i < b; i++) p += x[i] * x[i]; return Math.sqrt(p / Math.max(1, b - a)); };
+    // Silbenfolge; liefert Fassung mit Frikativ, Bezug mit Stille, Boden (dBFS) und die Vokalstarts (Abtastwerte bei SRf)
+    function silben(o) {
+      const rnd = rngF(o.seed), nV = Math.round(o.vok * SRf), nF = Math.round(o.frik * SRf), nX = Math.round((o.xf || 0) * SRf), lead = Math.round(0.25 * SRf), total = lead + 6 * (nF + nV) + lead;
+      const src = new Float64Array(total); let ph = 0;
+      for (let i = 0; i < total; i++) { ph += o.f0 * (1 + 0.004 * Math.sin(2 * Math.PI * 5.5 * i / SRf)) / SRf; if (ph >= 1) { ph -= 1; src[i] = 1; } }
+      let vt = lp1(lp1(src, 100), 800); for (const [F, B] of VOKAL) vt = reson(vt, F, B);
+      const vow = diff(vt), wn = new Float64Array(total); for (let i = 0; i < total; i++) wn[i] = gaussF(rnd);
+      let fr;
+      if (o.art === 'sch') { const a = reson(diff(wn), 2700, 700), b = reson(diff(wn), 3600, 1200); fr = a.map((v, i) => v + 0.6 * b[i]); }
+      else if (o.art === 's') { const a = reson(diff(wn), 4800, 1500), b = reson(diff(wn), 3000, 1500); fr = a.map((v, i) => v + 0.3 * b[i]); }
+      else if (o.art === 'f') fr = reson(diff(wn), 3000, 4000);
+      else { let hv = wn; for (const [F, B] of VOKAL) hv = reson(hv, F, 1.5 * B); fr = diff(hv); }
+      const envV = new Float64Array(total), envF = new Float64Array(total), vStarts = [], nR = Math.round(0.005 * SRf);
+      for (let s = 0; s < 6; s++) {
+        const p0 = lead + s * (nF + nV);
+        for (let i = 0; i < nF; i++) envF[p0 + i] = 1;
+        vStarts.push(p0 + nF);
+        for (let i = 0; i < nV; i++) envV[p0 + nF + i] = 1;
+        for (let i = 0; i < nX; i++) { const w = i / nX; envF[p0 + nF + i] = 1 - w; if (s > 0) envF[p0 - nX + i] = w; }
+        for (let i = 0; i < nR; i++) { envV[p0 + nF + i] *= i / nR; envV[p0 + nF + nV - 1 - i] *= i / nR; }
+      }
+      const vs = vow.map((v, i) => v * envV[i]), gV = 0.1 / effF(vs, vStarts[0] + 1000, vStarts[0] + nV - 1000), gF = 0.1 * Math.pow(10, o.db / 20) / effF(fr, lead, lead + nF);
+      const mit = new Float64Array(total), ohne = new Float64Array(total);
+      for (let i = 0; i < total; i++) { const v = vs[i] * gV + gaussF(rnd) * 0.001; ohne[i] = v; mit[i] = v + fr[i] * gF * envF[i]; }
+      return { mit, ohne, floorDb: -60, vStarts, nV };
+    }
+    const rahmenF = (x, floorDb) => { const ds = D.resample(x, SRf, TSR), out = []; for (let c = Math.round(0.07 * TSR); c + Math.round(0.07 * TSR) < ds.length; c += Math.round(0.01 * TSR)) out.push(D.analyseAt(ds, TSR, c, { align: 'centre', floorDb, orders: [14] })); return out; };
+    const FAELLE = [{ f0: 130, db: -12, art: 'sch', vok: 0.3, frik: 0.1 }, { f0: 98, db: -12, art: 'sch', vok: 0.3, frik: 0.1 }, { f0: 200, db: -12, art: 's', vok: 0.3, frik: 0.1 },
+      { f0: 130, db: -12, art: 'h', vok: 0.8, frik: 0.1 }, { f0: 130, db: -18, art: 'sch', vok: 0.4, frik: 0.1, xf: 0.03 }, { f0: 130, db: -24, art: 'sch', vok: 0.3, frik: 0.1 },
+      { f0: 147, db: -6, art: 'sch', vok: 0.25, frik: 0.08 }, { f0: 200, db: -12, art: 'f', vok: 0.3, frik: 0.1 }, { f0: 247, db: -12, art: 's', vok: 0.3, frik: 0.08 }, { f0: 130, db: -12, art: 's', vok: 0.3, frik: 0.05 }];
+    let nS = 0, nSm = 0, nC = 0, nCm = 0, nRef = 0, nRefM = 0, quart = []; const bspS = [], bspC = [];
+    for (let k = 0; k < FAELLE.length; k++) {
+      const o = Object.assign({ seed: 12345 + k }, FAELLE[k]), sig = silben(o), A = rahmenF(sig.mit, sig.floorDb), B = rahmenF(sig.ohne, sig.floorDb);
+      const nm = o.f0 + ' Hz /' + o.art + '/ ' + o.db + ' dB ' + Math.round(o.frik * 1000) + ' ms' + (o.xf ? ' Überblendung' : '');
+      const sOhne = [], cOhne = [], sB = [], cB = [];   // Rahmen ohne Marke und dieselben Rahmen im Bezug
+      for (let i = 0; i < A.length; i++) {
+        const a = A[i], b = B[i];
+        if (b.voiced) { nRef++; if (b.sfrUnsure || b.cppUnsure) nRefM++; }
+        if (!a.voiced || !b.voiced) continue;
+        if (!a.sfrUnsure) { sOhne.push(a.sfr); sB.push(b.sfr); }
+        if (!a.cppUnsure) { cOhne.push(a.cpp); cB.push(b.cpp); }
+        const marke = a.sfrUnsure && a.cppUnsure && a.sfrGrund === 'rauschanteil' && a.cppGrund === 'rauschanteil';
+        if (a.sfr - b.sfr > 6) { nS++; if (marke) nSm++; else if (bspS.length < 3) bspS.push(nm + ' Rahmen ' + i + ': SFR +' + r1(a.sfr - b.sfr) + ' dB'); }
+        if (a.cpp - b.cpp < -3) { nC++; if (marke) nCm++; else if (bspC.length < 4) bspC.push(nm + ' Rahmen ' + i + ': CPP ' + r1(a.cpp - b.cpp) + ' dB'); }
+      }
+      quart.push({ nm, dS: D.quantile(sOhne, 0.75) - D.quantile(sB, 0.75), dC: D.quantile(cOhne, 0.25) - D.quantile(cB, 0.25) });
+    }
+    const qSchlecht = quart.filter(q => !(Math.abs(q.dS) <= 1 && Math.abs(q.dC) <= 1));
+    check('A4d', 'Frikativ vor dem Vokal (/ʃ/ /s/ /f/ /h/ −6…−24 dB, 50–100 ms, 98–247 Hz, auch überblendet): jeder stimmhafte Rahmen mit SFR mehr als 6 dB über dem Bezug ohne Frikativ trägt sfrUnsure und cppUnsure (\'rauschanteil\'), Rahmen mit CPP mehr als 3 dB darunter zu mindestens 95 %',
+      nS >= 250 && nSm === nS && nC >= 600 && nCm >= 0.95 * nC,
+      'SFR +6 dB: ' + nSm + '/' + nS + ' markiert, CPP −3 dB: ' + nCm + '/' + nC + ' markiert' + (bspS.length ? ' — ohne Marke: ' + bspS.join(' | ') : '') + (nC - nCm ? '; offen (CPP ohne SFR-Änderung): ' + bspC.join(' | ') : ''));
+    check('A4d', 'dieselben Folgen: SFR q3 und CPP q1 über die Rahmen ohne Marke höchstens 1 dB neben denselben Rahmen des Bezugs; Einsätze aus der Stille im Bezug nie markiert',
+      qSchlecht.length === 0 && nRef >= 1500 && nRefM === 0,
+      quart.map(q => q.nm + ' ' + r1(q.dS) + '/' + r1(q.dC)).join(' | ') + '; Bezug markiert ' + nRefM + ' von ' + nRef);
+    // (c) gehaltenes /a/: Rosenberg-Quelle der Kriterien, Fenster ganz im Ton
+    let nG = 0, nGm = 0;
+    for (const [f0, art] of [[130, 'rosenberg'], [130, 'impuls'], [98, 'rosenberg'], [196, 'impuls']]) {
+      const fz = vibrato(() => f0, 5.5, 40, 0.5), ton = art === 'impuls' ? stimme(fz, 2.0, 'a', { art, jit: 0.01, shim: 0.02, seed: f0 }) : q4({ f0: fz, dur: 2.0, jit: 0.01, shim: 0.02, seed: f0 }, 'a');
+      const x = raum4(rampen4(ton, 0.03, 0.03), 30, f0 + 7);
+      for (const r of rahmen4(x, zeiten4(0.1, 1.9, 0.01), { floorDb: -60 })) if (r.voiced) { nG++; if (r.sfrUnsure || r.cppUnsure) nGm++; }
+    }
+    check('A4d', 'gehaltenes /a/ (98–196 Hz, Impuls und Rosenberg, Vibrato 5,5 Hz ±40 Cent, Raumrauschen 30 dB), Fenster ganz im Ton: höchstens 2 % mit sfrUnsure oder cppUnsure',
+      nG >= 600 && nGm <= 0.02 * nG, nGm + ' von ' + nG + ' markiert');
   }
 };
