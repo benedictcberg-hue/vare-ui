@@ -619,14 +619,14 @@
   var SUB_MULTIPLE_MAX = 5;
   var F0_MIN_HZ = 60;
 
-  function subMultipleTest(spec, f, m, marginDb, oddEvenDb) {
-    var out = { m: m, pass: false, ambiguous: false, unterGrenze: false, newMinusNoise: NaN, newMinusOld: NaN };
-    var g = f / m;
-    if (!(g >= 30)) return out;
+  /* Linien k·g, k = 1..4m: die Vielfachen von m (m·g, 2m·g, 3m·g, 4m·g) sind die bekannten, die übrigen
+     die neuen. Für m = 2 sind die neuen genau die 1·, 3·, 5·, 7· g der Spezifikation. Liefert die
+     mittlere Höhe der neuen Linien über dem Zwischenrauschen und gegen die bekannten (dB) und wie
+     viele neue Linien mehr als marginDb über dem Zwischenrauschen liegen. */
+  function teiltonreihe(spec, g, m, marginDb) {
+    var out = { newMinusNoise: NaN, newMinusOld: NaN, above: 0, nNew: 0 };
     var ref = noiseRefDb(spec, g);
     if (!isFinite(ref)) return out;
-    /* Vier bekannte Linien (m·g, 2m·g, 3m·g, 4m·g = f, 2f, 3f, 4f) gegen die neuen Linien dazwischen.
-       Für m = 2 sind das genau die 1·, 3·, 5·, 7· f/2 der Spezifikation. */
     var sumNew = 0, nNew = 0, above = 0, sumOld = 0, nOld = 0, k, L;
     for (k = 1; k <= 4 * m; k++) {
       L = lineLevelDb(spec, k * g);
@@ -637,7 +637,19 @@
     if (nNew < 3 || nOld < 2) return out;
     out.newMinusNoise = sumNew / nNew - ref;
     out.newMinusOld = sumNew / nNew - sumOld / nOld;
-    if (!(out.newMinusNoise > marginDb && above >= Math.max(3, Math.ceil(0.6 * nNew)))) return out;
+    out.above = above; out.nNew = nNew;
+    return out;
+  }
+
+  function subMultipleTest(spec, f, m, marginDb, oddEvenDb) {
+    var out = { m: m, pass: false, ambiguous: false, unterGrenze: false, newMinusNoise: NaN, newMinusOld: NaN };
+    var g = f / m;
+    if (!(g >= 30)) return out;
+    var t = teiltonreihe(spec, g, m, marginDb);
+    if (!isFinite(t.newMinusNoise)) return out;
+    out.newMinusNoise = t.newMinusNoise;
+    out.newMinusOld = t.newMinusOld;
+    if (!(out.newMinusNoise > marginDb && t.above >= Math.max(3, Math.ceil(0.6 * t.nNew)))) return out;
     /* Unsicher ist nur das schmale Band, in dem die Spezifikation die Subharmonische überhaupt für
        nennenswert hält (SHR über −25 dB), sie aber noch nicht zum Teilen reicht. Darunter ist das
        Signal sauber — ein Dauerhinweis „Oktave unsicher“ bei jedem gesunden Ton wäre kein ehrlicher
@@ -696,7 +708,10 @@
   function sfr(spec) { return bandDb(spec, 2400, 3200) - bandDb(spec, 0, 2000); }
 
   /* CPP: Cepstrum des dB-Spektrums; Gipfel in der Quefrenz 1/fmax..1/fmin (2–16,7 ms) über der
-     Regressionsgeraden desselben Bereichs. Eigene Skala (15–34 dB), nicht Praat-CPPS. */
+     Regressionsgeraden desselben Bereichs. Eigene Skala (15–34 dB), nicht Praat-CPPS.
+     f0Fein: Grundton aus demselben Gipfel, parabolisch verfeinert. Ganzzahlige Quefrenz allein ist bei
+     450 Hz auf ±1,5 % genau, zu grob für die Gegenprobe des Grundtons. NaN, wenn der Gipfel am Rand des
+     Suchbereichs liegt: dann gibt es im Bereich keinen Gipfel, nur einen Abhang. */
   function cpp(spec, fmin, fmax) {
     fmin = fmin || 60; fmax = fmax || 500;
     var N = spec.N, re = new Float64Array(N), im = new Float64Array(N), k;
@@ -711,7 +726,62 @@
       if (c > peak) { peak = c; qp = q; }
     }
     var b = (n * sxy - sx * sy) / (n * sxx - sx * sx), a = (sy - b * sx) / n;
-    return { cpp: peak - (a + b * qp), f0: spec.sr / qp };
+    var f0Fein = NaN;
+    if (qp > qmin && qp < qmax) {
+      var kp = qp - qmin, A = cdb[kp - 1], B = cdb[kp], C = cdb[kp + 1], den = A - 2 * B + C;
+      f0Fein = spec.sr / (qp + ((Math.abs(den) > 1e-12) ? Math.max(-0.5, Math.min(0.5, 0.5 * (A - C) / den)) : 0));
+    }
+    return { cpp: peak - (a + b * qp), f0: spec.sr / qp, f0Fein: f0Fein };
+  }
+
+  /* ---------- Gegenprobe des Grundtons ---------- */
+
+  /* YIN nimmt den ersten Dip unter der Schwelle, und nur an ganzzahligen Verzögerungen. Ein enger
+     Formantcluster oder ein schmaler F1 auf einem Teilton erzeugt Nebendips im Abstand einer
+     Formantschwingung; liegt die Periode zwischen zwei Abtastwerten, steigt dn(T) über die Schwelle,
+     und dn(2T) bleibt darunter. Gemessen: 348 Hz mit engem F3–F5 → 174 Hz, 192 Hz mit F2–F4-Cluster →
+     210 Hz, 97 Hz mit F1 = 5·F0 → 244 Hz, jeweils in allen Rahmen und ohne Marke. Wiederholbar, aber
+     falsch. Die Teilerkontrolle kann nur nach unten und nur ganzzahlig zurückrechnen.
+     Deshalb zwei Gegenproben, beide nötig (einzeln abgeschaltet: ohne Cepstrum bleiben die
+     nicht ganzzahligen Fehler unmarkiert, ohne Teiltonreihe die Fälle, in denen YIN und Cepstrum
+     denselben Unterton liefern, und Jitter-Fälle):
+     (1) Teiltonreihe des gemeldeten Werts selbst: Liegen die Linien bei k·f0, k kein Vielfaches von
+         m (m = 2, 3), im Mittel 20 dB oder mehr unter den Vielfachen von m, ist f0 ein Unterton —
+         dieselbe Grenze, die die Teilerkontrolle für eine neue Reihe verlangt (OCTAVE_ODD_EVEN_DB).
+     (2) Cepstrum (unabhängige Periodenschätzung auf dem 0,14-s-Fenster): Es muss auf dieselbe Periode
+         zeigen (±0,5 HT) oder auf ein Vielfaches q·T (q bis 5, Rahmonik). Bei einem Vielfachen
+         entscheidet die Teiltonreihe bei f0Cep: steht dort eine echte Reihe (nicht mehr als 20 dB unter
+         den bekannten Linien), ist der YIN-Wert ein Vielfaches des Grundtons. Zwischen 0,5 und 1 HT
+         (Vibrato: YIN misst auf etwa vier Perioden, das Cepstrum auf 0,14 s; bei ±50 Cent bis
+         0,46 HT Abstand gemessen) zählt, ob das Cepstrum auf denselben YIN-Dip zeigt.
+     Was davon reißt, steht in grund: 'teiltonreihe', 'cepstrum' oder 'kein cepstrum' (kein Gipfel
+     im Suchbereich, also keine Gegenprobe möglich). */
+  var F0_CEP_TOL_HT = 0.5, F0_CEP_GRAU_HT = 1.0, F0_RAHMONIK_MAX = 5;
+
+  function naechsterDip(dips, tau) {
+    var bi = -1, bd = Infinity;
+    for (var i = 0; i < dips.length; i++) { var d = Math.abs(dips[i].tau - tau); if (d < bd) { bd = d; bi = i; } }
+    return bi;
+  }
+
+  // tauY: Periode des gemeldeten Werts in Abtastwerten (subFactor · YIN-Verzögerung), dips: YIN-Dips
+  function f0Gegenprobe(spec, f0, fCep, tauY, dips, sr) {
+    var out = { unsure: false, grund: '', aufM: 0 };
+    for (var m = 2; m <= 3 && !out.aufM; m++) {
+      var t = teiltonreihe(spec, f0, m, 8);
+      if (isFinite(t.newMinusOld) && t.newMinusOld <= OCTAVE_ODD_EVEN_DB) { out.unsure = true; out.grund = 'teiltonreihe'; out.aufM = m; }
+    }
+    if (!isFinite(fCep)) { out.unsure = true; if (!out.grund) out.grund = 'kein cepstrum'; return out; }
+    var q, bq = 1, bd = Infinity;
+    for (q = 1; q <= F0_RAHMONIK_MAX; q++) { var d = Math.abs(12 * Math.log2(q * fCep / f0)); if (d < bd) { bd = d; bq = q; } }
+    var passt = bd <= F0_CEP_TOL_HT;
+    if (!passt && bd <= F0_CEP_GRAU_HT && dips && dips.length) passt = naechsterDip(dips, sr / (bq * fCep)) === naechsterDip(dips, tauY);
+    if (passt && bq > 1) {
+      var r = teiltonreihe(spec, fCep, bq, 8);
+      passt = !(isFinite(r.newMinusOld) && r.newMinusOld > OCTAVE_ODD_EVEN_DB);
+    }
+    if (!passt) { out.unsure = true; if (!out.grund) out.grund = 'cepstrum'; }
+    return out;
   }
 
   function h1h2(spec, f0) { return lineLevelDb(spec, f0) - lineLevelDb(spec, 2 * f0); }
@@ -783,6 +853,7 @@
       d34: NaN, d45: NaN, d34valid: false, d45valid: false, f1f0: NaN, nearestHarmonic: NaN,
       sfr: NaN, shr: NaN, shrGrid: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, octaveOddEvenDb: NaN, subFactor: 1, h1h2cArtifact: false,
+      f0Unsure: false, f0Grund: '', f0Cep: NaN,
       harmonicPullHz: NaN, sparseHarmonics: false,
       dips: [], fminEff: NaN, nWindows: 0, spectrumDb: null
     };
@@ -873,6 +944,10 @@
     out.octaveCorrected = sub.halve; out.octaveAmbiguous = sub.ambiguous; out.octaveUnterGrenze = sub.unterGrenze; out.octaveOddEvenDb = sub.newMinusOld;
     out.subFactor = sub.halve ? sub.m : 1;
     if (sub.halve) f0 = f0 / sub.m;
+    var cp = cpp(spec, opts.fmin || 60, opts.fmax || 500);
+    out.f0Cep = cp.f0Fein;
+    var gp = f0Gegenprobe(spec, f0, out.f0Cep, out.subFactor * p.tau, p.dips, sr);
+    out.f0Unsure = gp.unsure; out.f0Grund = gp.grund;
     out.f0 = f0; out.note = hzToNote(f0);
     // Bei hohem Grundton rastet ein LPC-Gipfel auf dem nächsten Teilton ein: die Lage eines
     // Formanten ist dann nur bis auf etwa ±F0/2 bestimmt, egal wie einig die Sweeps sind.
@@ -881,7 +956,7 @@
     var sh = shr(spec, f0, out.subFactor);
     out.shr = sh.shr; out.shrGrid = sh.grid;
     out.sfr = sfr(spec);
-    out.cpp = cpp(spec, opts.fmin || 60, opts.fmax || 500).cpp;
+    out.cpp = cp.cpp;
     out.h1h2 = h1h2(spec, f0);
     if (isFinite(out.F[0])) {
       out.f1f0 = out.F[0] / f0; out.nearestHarmonic = Math.max(1, Math.round(out.f1f0));
@@ -1159,7 +1234,8 @@
     analyse: analyse, analyseAt: analyseAt, analyseWindow: analyseWindow,
     detectF0: detectF0, resample: resample, burg: burg, lpcEnvelope: lpcEnvelope, peaksFromEnvelope: peaksFromEnvelope,
     formantsFromLPC: formantsFromLPC, fft: fft, spectrum: spectrum, lineLevelDb: lineLevelDb, noiseRefDb: noiseRefDb,
-    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
+    octaveCheck: octaveCheck, octaveInfo: octaveInfo, subMultipleInfo: subMultipleInfo, subMultipleTest: subMultipleTest, teiltonreihe: teiltonreihe, f0Gegenprobe: f0Gegenprobe,
+    F0_CEP_TOL_HT: F0_CEP_TOL_HT, F0_CEP_GRAU_HT: F0_CEP_GRAU_HT, F0_RAHMONIK_MAX: F0_RAHMONIK_MAX, slotGapUnsure: slotGapUnsure, slotNumberUnsure: slotNumberUnsure, slotMergeUnsure: slotMergeUnsure, F_PEAK_MAX_HZ: F_PEAK_MAX_HZ, SLOT_LO: SLOT_LO, SLOT_HI: SLOT_HI, DROP_MIN_DB: DROP_MIN_DB, shr: shr, shrAgainst: shrAgainst, sfr: sfr, bandDb: bandDb, cpp: cpp, h1h2: h1h2,
     h1h2Corrected: h1h2Corrected, polePairGainDb: polePairGainDb, formantGain: formantGain, tubeLength: tubeLength,
     decayRate: decayRate, alternation: alternation, rmsDb: rmsDb, hann: hann, hannWindow: hannWindow, preemph: preemph,
     median: median, spread: spread, quantile: quantile, mad: mad, sentinel: sentinel, hzToNote: hzToNote, hzToMidi: hzToMidi, cents: cents,

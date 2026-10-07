@@ -1,6 +1,6 @@
 /* Kriterien K1: zweite Tonhöhenspur (pitchTrackFine) und Sprungerkennung (detectJumps).
    Kriterien K2: Formant-Nummerierung und Gültigkeit im Fenstersweep (analyseAt).
-   Kriterien K3: Grundton im Fenstersweep (analyseAt): Untergrenze der Teilerkontrolle.
+   Kriterien K3: Grundton im Fenstersweep (analyseAt): Untergrenze der Teilerkontrolle, Gegenprobe.
    Testsignale: allgemeine Baritonlage 75–470 Hz, synthetische Vokale mit bekannter Wahrheit.
    Reißt ein Kriterium, ist das ein Befund — Schwelle nicht anheben. */
 'use strict';
@@ -481,12 +481,166 @@ module.exports = async function (H) {
         okPd + '/12' + (badPd.length ? ' — ' + badPd.slice(0, 4).join(' | ') : ''));
       let nB = 0, unterB = 0; const badB = [];
       for (const [v, F, B] of VOK6.slice(0, 4)) for (let f0 = 90; f0 <= 130; f0 += 1.7) for (const db of [-25, -20]) {
-        const r = D.analyseAt(D.resample(mitBrumm(D.synthVowel(f0, F, B, 0.35, SR), db), SR, TSR), TSR, 2100, {});
+        const r = D.analyseAt(D.resample(mitBrumm(D.synthVowel(f0, F, B, 0.35, SR), db), SR, TSR), TSR, 2100, { orders: [14] });
         if (!r.voiced) continue; nB++;
         if (!(r.f0 >= 60)) { unterB++; badB.push('/' + v + '/ ' + f0.toFixed(1) + ' Brumm ' + db + ' dB: ' + r1(r.f0)); }
       }
       check('K3a', 'Netzbrumm 50 Hz (−25/−20 dB, mit 150/250 Hz) bei Tönen 90–130 Hz, a/i/u/o: kein Grundton unter 60 Hz', nB > 0 && unterB === 0,
         unterB + '/' + nB + (badB.length ? ' — ' + badB.slice(0, 3).join(' | ') : ''));
     }
+
+    /* K3b: Gegenprobe des Grundtons. Jeder falsche Grundton (mehr als 3 % neben der Wahrheit) trägt
+       f0Unsure oder octaveAmbiguous; ein richtiger trägt f0Unsure nie. Die großen Sätze laufen mit nur
+       einer LPC-Ordnung: Grundton, Cepstrum und Gegenprobe hängen nicht vom Ordnungssweep ab (eigenes
+       Kriterium unten), das spart mehr als die Hälfte der Rechenzeit. */
+    const SCHNELL = { orders: [14] };
+    const lcg = seed => { let z = seed >>> 0; return () => { z = (z * 1664525 + 1013904223) >>> 0; return z / 4294967296; }; };
+    const mitSnr = (x, snr, seed, nz) => { nz = nz || noise(x.length, 1, seed); const g = effW(x) * Math.pow(10, -snr / 20) / effW(nz), y = new Float64Array(x.length); for (let i = 0; i < x.length; i++) y[i] = x[i] + g * nz[i]; return y; };
+    function rosa(n, seed) {
+      const w = noise(n, 1, seed), y = new Float64Array(n); let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < n; i++) { const v = w[i]; b0 = 0.99886 * b0 + v * 0.0555179; b1 = 0.99332 * b1 + v * 0.0750759; b2 = 0.96900 * b2 + v * 0.1538520; b3 = 0.86650 * b3 + v * 0.3104856; b4 = 0.55000 * b4 + v * 0.5329522; b5 = -0.7616 * b5 - v * 0.0168980; y[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + v * 0.5362; b6 = v * 0.115926; }
+      return y;
+    }
+    // Impulsfolge aus Zeitpunkten (s) und Amplituden durch die Resonatoren, Impulse auf Bruchteile von Abtastwerten
+    function pulse(times, amps, s, F, B) {
+      const n = Math.round(s * SR), src = new Float64Array(n);
+      for (let k = 0; k < times.length; k++) {
+        const pos = times[k] * SR, i0 = Math.floor(pos), q = pos - i0;
+        for (let j = 0; j < 6; j++) { const w = amps[k] * Math.cos(Math.PI * j / 12); if (i0 + j < n) src[i0 + j] += w * (1 - q); if (i0 + j + 1 < n) src[i0 + j + 1] += w * q; }
+      }
+      let y = src; for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
+      let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+      for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+      return y;
+    }
+    // F0-Verlauf fHz(t), Jitter j (relativ, gleichverteilt je Periode), Samen
+    function verlauf(fHz, s, F, B, j, seed) {
+      const rnd = lcg(seed || 1), times = [], amps = []; let t = 0;
+      while (t < s) { times.push(t); amps.push(1); t += (1 + (j || 0) * (2 * rnd() - 1)) / fHz(t); }
+      return pulse(times, amps, s, F, B);
+    }
+    // Periodenverdopplung (Testprofil): Zyklen alternieren um a (art 'amp': jeder zweite Impuls schwächer,
+    // 'per': Perioden abwechselnd T(1 + a/2), T(1 − a/2)); ab t1 klingt jeder zweite Impuls bis t2 auf 0 aus,
+    // danach exakt f0/2.
+    function verdopplung(f0, a, art, F, B, s, t1, t2) {
+      const T = 1 / f0, times = [], amps = []; let t = 0, k = 0;
+      while (t < s) {
+        let g = 1;
+        if (k % 2) { if (art === 'amp') g = 1 - a; if (t >= t1) g *= Math.max(0, 1 - (t - t1) / (t2 - t1)); }
+        if (g > 0) { times.push(t); amps.push(g); }
+        t += art === 'per' ? T * (k % 2 ? 1 - a / 2 : 1 + a / 2) : T; k++;
+      }
+      return pulse(times, amps, s, F, B);
+    }
+    function rosenberg(f0, F, B, s) {
+      const n = Math.round(s * SR), g = new Float64Array(n), T = SR / f0, Tp = 0.6 * T * 2 / 3, Tn = 0.6 * T / 3;
+      for (let i = 0; i < n; i++) { const t = i % T; g[i] = t < Tp ? 0.5 * (1 - Math.cos(Math.PI * t / Tp)) : (t < Tp + Tn ? Math.cos(Math.PI * (t - Tp) / (2 * Tn)) : 0); }
+      let y = new Float64Array(n); for (let i = 1; i < n; i++) y[i] = g[i] - g[i - 1];
+      for (let m = 0; m < F.length; m++) y = D.resonate(y, F[m], B[m], SR);
+      let mx = 0; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(y[i]));
+      for (let i = 0; i < n; i++) y[i] = 0.3 * y[i] / mx;
+      return y;
+    }
+    /* Auswertung. faelle: { name, sig (48 kHz), frames: [Index bei 12 kHz], wahr(c) → [lo, hi] Hz, ok?(r, c) }.
+       Liefert je Rahmen das Ergebnis, damit spätere Kriterien dieselben Rahmen nutzen. */
+    function rahmen(faelle, opts) {
+      const out = [];
+      for (const f of faelle) {
+        const ds = D.resample(f.sig(), SR, TSR);
+        for (const c of f.frames) {
+          const r = D.analyseAt(ds, TSR, c, opts || {});
+          if (!r.voiced) continue;
+          const [lo, hi] = f.wahr ? f.wahr(c) : [NaN, NaN];
+          out.push({ name: f.name + '@' + (c / TSR).toFixed(2) + ' s', r, ok: f.ok ? f.ok(r, c) : (r.f0 >= 0.97 * lo && r.f0 <= 1.03 * hi), lo, hi });
+        }
+      }
+      return out;
+    }
+    function bilanz(R) {
+      const falsch = R.filter(x => !x.ok), unm = falsch.filter(x => !(x.r.f0Unsure || x.r.octaveAmbiguous)), fehl = R.filter(x => x.ok && x.r.f0Unsure);
+      const bsp = unm.slice(0, 3).map(x => 'unmarkiert ' + x.name + ' ' + r1(x.r.f0) + ' Hz statt ' + r1(x.lo) + ' (Cepstrum ' + r1(x.r.f0Cep) + ')')
+        .concat(fehl.slice(0, 3).map(x => 'fehlmarkiert ' + x.name + ' ' + r1(x.r.f0) + ' Hz (' + x.r.f0Grund + ', Cepstrum ' + r1(x.r.f0Cep) + ')'));
+      return { n: R.length, falsch: falsch.length, unm: unm.length, fehl: fehl.length,
+        txt: 'Rahmen ' + R.length + ', falsch ' + falsch.length + ', davon unmarkiert ' + unm.length + '; richtig als unsicher ' + fehl.length + (bsp.length ? ' — ' + bsp.join(' | ') : '') };
+    }
+    const fest = f0 => () => [f0, f0];
+    const fenster = c => { const a = []; for (let k = c; k + 1200 < Math.round(1.2 * TSR); k += 120) a.push(k); return a; };
+
+    // Befund-Fälle aus Bericht 1: enger Cluster bei 348 Hz, F2–F4-Cluster bei 192 Hz, schmaler F1 auf dem 5. Teilton
+    const BEFUND = [[348.2, [500, 1500, 2450, 2800, 3150], [70, 90, 90, 90, 100]], [192.2, [743, 2072, 2338, 2586, 4161], [49, 102, 110, 199, 224]],
+      [121, [605, 1250, 2500, 3300, 4200], [45, 90, 120, 150, 200]], [97, [485, 1250, 2500, 3300, 4200], [30, 90, 120, 150, 200]]];
+    const R_befund = rahmen(BEFUND.map(([f0, F, B]) => ({ name: f0 + ' Hz', sig: () => D.synthVowel(f0, F, B, 1.2, SR), frames: fenster(1200), wahr: fest(f0) })), SCHNELL);
+    // Zufallssatz: plausible Baritonvokale, F0 75–450 Hz, fester Samen; die ersten 200 zusätzlich mit weißem Rauschen 40 dB
+    const rnd = lcg(4711), U = (a, b) => a + (b - a) * rnd(), ZUF = [];
+    for (let t = 0; t < 600; t++) {
+      const f0 = U(75, 450), F1 = U(280, 800), F2 = U(Math.max(F1 + 250, 750), 2300), F3 = U(Math.max(F2 + 200, 1800), 3000), F4 = F3 + U(150, 1000), F5 = U(F4 + 250, Math.max(F4 + 300, 4500));
+      ZUF.push({ t, f0, F: [F1, F2, F3, F4, F5], B: [U(35, 100), U(50, 130), U(70, 200), U(90, 220), U(120, 300)] });
+    }
+    const R_zuf = rahmen(ZUF.map(z => ({ name: 'Z' + z.t, sig: () => D.synthVowel(z.f0, z.F, z.B, 0.4, SR, { gain: 0.3 }), frames: [2400], wahr: fest(z.f0) })), SCHNELL);
+    const R_zuf40 = rahmen(ZUF.slice(0, 200).map(z => ({ name: 'Z' + z.t + ' SNR 40', sig: () => mitSnr(D.synthVowel(z.f0, z.F, z.B, 0.4, SR, { gain: 0.3 }), 40, 1000 + z.t), frames: [2400], wahr: fest(z.f0) })), SCHNELL);
+    // tiefe Lage: schmaler F1 genau auf dem 3.–6. Teilton
+    const TIEF = [];
+    for (let f0 = 76; f0 <= 133; f0 += 6) for (let k = 3; k <= 6; k++) for (const B1 of [30, 45]) for (const F2 of [1000, 1500]) {
+      if (k * f0 < 250 || k * f0 > 760) continue;
+      TIEF.push({ name: f0 + ' Hz F1 = ' + k + '·F0 B1 ' + B1 + ' F2 ' + F2, sig: () => D.synthVowel(f0, [k * f0, F2, 2500, 3300, 4200], [B1, 90, 120, 150, 200], 0.6, SR, { gain: 0.3 }), frames: [2400, 4200], wahr: fest(f0) });
+    }
+    const R_tief = rahmen(TIEF, SCHNELL);
+    // sechs Vokale 75–450 Hz in Schritten von 2,73 Hz; dazu je Tonhöhe ein Rahmen mit Vibrato, abwechselnd
+    // 6 Hz ±50 Cent und 4 Hz ±30 Cent, die Vibratophase wandert mit der Tonhöhe
+    const VOKF = [], VIB = [];
+    for (const [v, F, B] of VOK6) for (let i = 0, f0 = 75; f0 <= 450.01; i++, f0 += 2.73) {
+      VOKF.push({ name: '/' + v + '/ ' + f0.toFixed(1), sig: () => D.synthVowel(f0, F, B, 0.35, SR), frames: [2100], wahr: fest(f0) });
+      const [rate, cent] = i % 2 ? [4, 30] : [6, 50], ph = 2.1 * i;
+      const fHz = t => f0 * Math.pow(2, cent / 1200 * Math.sin(2 * Math.PI * rate * t + ph));
+      VIB.push({ name: '/' + v + '/ ' + f0.toFixed(1) + ' Vibrato ' + rate + ' Hz ±' + cent + ' c', sig: () => verlauf(fHz, 0.35, F, B), frames: [2100],
+        wahr: c => { let lo = Infinity, hi = 0; for (let t = c / TSR - 0.05; t <= c / TSR + 0.05; t += 0.001) { const f = fHz(t); lo = Math.min(lo, f); hi = Math.max(hi, f); } return [lo, hi]; } });
+    }
+    const R_vok = rahmen(VOKF, SCHNELL), R_vib = rahmen(VIB, SCHNELL);
+    // Periodenverdopplung nach Testprofil: f0 oder f0/2 (Teilung nach der Spezifikation), im Ausklang ab 1,0 s exakt f0/2
+    const PD = [];
+    for (const [v, F, B] of VOK6.slice(0, 4)) for (const f0 of [130, 165, 196, 247]) for (const art of ['amp', 'per']) for (const a of [0.08, 0.11, 0.14])
+      PD.push({ name: '/' + v + '/ ' + f0 + ' Hz ' + art + ' ' + a, sig: () => verdopplung(f0, a, art, F, B, 1.6, 0.6, 1.0), frames: [2400, 4200, 6000, 9600, 14400, 16800],
+        wahr: () => [f0 / 2, f0], ok: (r, c) => c >= 1.0 * TSR + 840 ? Math.abs(r.f0 / (f0 / 2) - 1) < 0.03 : (Math.abs(r.f0 / f0 - 1) < 0.03 || Math.abs(r.f0 / (f0 / 2) - 1) < 0.03) });
+    const R_pd = rahmen(PD, SCHNELL);
+    // Belastung: weißes und rosa Rauschen 30 dB, Rosenberg-Quelle, Jitter 1 %, Netzbrumm −30 dB
+    const LAST = [];
+    for (const [v, F, B] of VOK6) for (let f0 = 77; f0 <= 450; f0 += 19.9) {
+      const sv = () => D.synthVowel(f0, F, B, 0.35, SR), nm = '/' + v + '/ ' + f0.toFixed(1);
+      LAST.push({ name: nm + ' weiß 30 dB', sig: () => mitSnr(sv(), 30, Math.round(f0 * 7)), frames: [2100], wahr: fest(f0) });
+      LAST.push({ name: nm + ' rosa 30 dB', sig: () => { const x = sv(); return mitSnr(x, 30, 0, rosa(x.length, Math.round(f0 * 3))); }, frames: [2100], wahr: fest(f0) });
+      LAST.push({ name: nm + ' Rosenberg', sig: () => rosenberg(f0, F, B, 0.35), frames: [2100], wahr: fest(f0) });
+      LAST.push({ name: nm + ' Jitter 1 %', sig: () => verlauf(() => f0, 0.35, F, B, 0.01, Math.round(f0 * 13)), frames: [2100], wahr: fest(f0) });
+      LAST.push({ name: nm + ' Brumm −30 dB', sig: () => mitBrumm(sv(), -30), frames: [2100], wahr: fest(f0) });
+    }
+    const R_last = rahmen(LAST, SCHNELL);
+
+    const bB = bilanz(R_befund), bZ = bilanz(R_zuf.concat(R_zuf40)), bT = bilanz(R_tief), bV = bilanz(R_vok), bVib = bilanz(R_vib), bP = bilanz(R_pd), bL = bilanz(R_last);
+    check('K3b', 'Befund-Fälle 348/192/121/97 Hz (enger Cluster, F2–F4-Cluster, F1 = 5·F0), je 100 Rahmen: jeder falsche Grundton trägt f0Unsure oder octaveAmbiguous',
+      bB.n === 400 && bB.unm === 0, bB.txt);
+    check('K3b', 'Zufallssatz 600 Baritonvokale (F0 75–450 Hz, Samen 4711), 200 davon mit weißem Rauschen 40 dB: jeder falsche Grundton markiert, kein richtiger als unsicher',
+      bZ.n >= 780 && bZ.unm === 0 && bZ.fehl === 0, bZ.txt);
+    check('K3b', 'tiefe Lage 76–133 Hz, schmaler F1 (30/45 Hz) auf dem 3.–6. Teilton: jeder falsche Grundton markiert, kein richtiger als unsicher',
+      bT.n > 0 && bT.unm === 0 && bT.fehl === 0, bT.txt);
+    check('K3b', 'sechs Vokale 75–450 Hz in Schritten von 2,73 Hz: richtiger Grundton nie als unsicher markiert, falscher immer',
+      bV.n === 828 && bV.fehl === 0 && bV.unm === 0, bV.txt);
+    check('K3b', 'sechs Vokale 75–450 Hz mit Vibrato 6 Hz ±50 Cent und 4 Hz ±30 Cent: richtiger Grundton nie als unsicher markiert, falscher immer',
+      bVib.n >= 800 && bVib.fehl === 0 && bVib.unm === 0, bVib.txt);
+    check('K3b', 'Periodenverdopplung (Amplitude oder Periode 8–14 %) mit Ausklang auf exakt f0/2: Grundton f0 oder f0/2, im Ausklang f0/2, nie f0Unsure',
+      bP.n >= 570 && bP.falsch === 0 && R_pd.every(x => !x.r.f0Unsure), bP.txt);
+    check('K3b', 'Rauschen 30 dB (weiß, rosa), Rosenberg-Quelle, Jitter 1 %, Netzbrumm −30 dB: jeder falsche Grundton markiert, kein richtiger als unsicher',
+      bL.n >= 550 && bL.unm === 0 && bL.fehl === 0, bL.txt);
+    // Vertrag: f0Cep ist der Cepstrum-Grundton (auf 1 % bei sauberen Vokalen), unstimmhaft NaN und f0Unsure false
+    let cepOk = 0, cepN = 0;
+    for (const x of R_vok) { cepN++; if (Math.abs(x.r.f0Cep / x.lo - 1) <= 0.01 || Math.abs(x.r.f0Cep * 2 / x.lo - 1) <= 0.01 || Math.abs(x.r.f0Cep * 3 / x.lo - 1) <= 0.01) cepOk++; }
+    const stille = D.analyseAt(noise(TSR, 3e-4, 5), TSR, TSR / 2, { floorDb: -80 });
+    check('K3b', 'f0Cep: Cepstrum-Grundton (oder sein ganzzahliger Unterton bis 1/3) auf 1 % bei den sechs Vokalen; Pause: f0Cep NaN, f0Unsure false',
+      cepOk === cepN && cepN > 0 && !stille.voiced && Number.isNaN(stille.f0Cep) && stille.f0Unsure === false, cepOk + '/' + cepN);
+    // Prüfgrundlage der schnellen Sätze: Grundtonfelder mit einer Ordnung gleich wie mit dem vollen Sweep
+    let gleich = 0, nG = 0;
+    for (const z of ZUF.slice(0, 40)) {
+      const ds = D.resample(D.synthVowel(z.f0, z.F, z.B, 0.6, SR, { gain: 0.3 }), SR, TSR), a = D.analyseAt(ds, TSR, 2400, {}), b = D.analyseAt(ds, TSR, 2400, SCHNELL);
+      nG++; if (a.f0 === b.f0 && a.f0Unsure === b.f0Unsure && a.f0Grund === b.f0Grund && (a.f0Cep === b.f0Cep) && a.octaveAmbiguous === b.octaveAmbiguous && a.subFactor === b.subFactor) gleich++;
+    }
+    check('K3b', 'Grundton, f0Cep, f0Unsure und Teilerkontrolle hängen nicht vom LPC-Ordnungssweep ab (Grundlage der schnellen Prüfsätze)', gleich === nG, gleich + '/' + nG);
   }
 };
