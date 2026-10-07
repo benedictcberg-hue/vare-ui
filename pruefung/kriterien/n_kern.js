@@ -996,7 +996,8 @@ module.exports = async function (H) {
      Abstrahlung, Vibrato ±7 Cent), Frikativ als gefiltertes Rauschen (/ʃ/ 2,7 + 3,6 kHz, /s/ 4,8 + 3 kHz, /f/ breit,
      /h/ durch den Trakt), Mikrofonrauschen 40 dB, Boden bekannt. Bezug ist dieselbe Folge mit Stille statt Frikativ.
      (a) Jeder stimmhafte Rahmen, dessen SFR mehr als 6 dB über dem Bezugsrahmen liegt, trägt sfrUnsure und cppUnsure
-     (Grund 'rauschanteil'); Rahmen mit CPP mehr als 3 dB darunter zu mindestens 95 % (Rest im Bericht, offen).
+     (Grund 'rauschanteil'); Rahmen mit CPP mehr als 3 dB darunter zu mindestens 95 % (Rest im Bericht, offen). /s/ liegt
+     über dem SFR-Band; für ihn kam der Hochtonanteil bis 5,5 kHz dazu: dort mindestens 99 %.
      (b) Über die Rahmen ohne Marke liegen SFR q3 und CPP q1 höchstens 1 dB neben denselben Rahmen des Bezugs: Was ohne
      Marke bleibt, ist nicht verseucht (so rechnet die Zusammenfassung, sobald sie die Marke beachtet; gegen alle
      Bezugsrahmen verglichen läge CPP q1 wegen der ausgelassenen Übergangsrahmen bis 1,7 dB höher). (c) Einsätze aus der Stille (Bezug) nie markiert; ein gehaltenes /a/
@@ -1039,7 +1040,7 @@ module.exports = async function (H) {
     const FAELLE = [{ f0: 130, db: -12, art: 'sch', vok: 0.3, frik: 0.1 }, { f0: 98, db: -12, art: 'sch', vok: 0.3, frik: 0.1 }, { f0: 200, db: -12, art: 's', vok: 0.3, frik: 0.1 },
       { f0: 130, db: -12, art: 'h', vok: 0.8, frik: 0.1 }, { f0: 130, db: -18, art: 'sch', vok: 0.4, frik: 0.1, xf: 0.03 }, { f0: 130, db: -24, art: 'sch', vok: 0.3, frik: 0.1 },
       { f0: 147, db: -6, art: 'sch', vok: 0.25, frik: 0.08 }, { f0: 200, db: -12, art: 'f', vok: 0.3, frik: 0.1 }, { f0: 247, db: -12, art: 's', vok: 0.3, frik: 0.08 }, { f0: 130, db: -12, art: 's', vok: 0.3, frik: 0.05 }];
-    let nS = 0, nSm = 0, nC = 0, nCm = 0, nRef = 0, nRefM = 0, quart = []; const bspS = [], bspC = [];
+    let nS = 0, nSm = 0, nC = 0, nCm = 0, nRef = 0, nRefM = 0, nCs = 0, nCsm = 0, quart = []; const bspS = [], bspC = [], bspCs = [];
     for (let k = 0; k < FAELLE.length; k++) {
       const o = Object.assign({ seed: 12345 + k }, FAELLE[k]), sig = silben(o), A = rahmenF(sig.mit, sig.floorDb), B = rahmenF(sig.ohne, sig.floorDb);
       const nm = o.f0 + ' Hz /' + o.art + '/ ' + o.db + ' dB ' + Math.round(o.frik * 1000) + ' ms' + (o.xf ? ' Überblendung' : '');
@@ -1052,11 +1053,14 @@ module.exports = async function (H) {
         if (!a.cppUnsure) { cOhne.push(a.cpp); cB.push(b.cpp); }
         const marke = a.sfrUnsure && a.cppUnsure && a.sfrGrund === 'rauschanteil' && a.cppGrund === 'rauschanteil';
         if (a.sfr - b.sfr > 6) { nS++; if (marke) nSm++; else if (bspS.length < 3) bspS.push(nm + ' Rahmen ' + i + ': SFR +' + r1(a.sfr - b.sfr) + ' dB'); }
-        if (a.cpp - b.cpp < -3) { nC++; if (marke) nCm++; else if (bspC.length < 4) bspC.push(nm + ' Rahmen ' + i + ': CPP ' + r1(a.cpp - b.cpp) + ' dB'); }
+        if (a.cpp - b.cpp < -3) { nC++; if (marke) nCm++; else if (bspC.length < 4) bspC.push(nm + ' Rahmen ' + i + ': CPP ' + r1(a.cpp - b.cpp) + ' dB'); if (o.art === 's') { nCs++; if (marke) nCsm++; else bspCs.push(nm + ' Rahmen ' + i + ': CPP ' + r1(a.cpp - b.cpp) + ' dB, SFR ' + (a.sfr - b.sfr >= 0 ? '+' : '') + r1(a.sfr - b.sfr) + ' dB, Rauschteil ap ' + r1(a.fensterRauschAp) + ' Hochton +' + r1(a.fensterRauschHochDb) + ' dB'); } }
       }
       quart.push({ nm, dS: D.quantile(sOhne, 0.75) - D.quantile(sB, 0.75), dC: D.quantile(cOhne, 0.25) - D.quantile(cB, 0.25) });
     }
     const qSchlecht = quart.filter(q => !(Math.abs(q.dS) <= 1 && Math.abs(q.dC) <= 1));
+    // /s/ liegt mit 4–5 kHz über dem SFR-Band: Seine Rahmen verlieren CPP, ohne dass die SFR stark steigt
+    check('A4d', '/s/ (Hauptenergie über 4 kHz, 50–100 ms, 130–247 Hz): stimmhafte Rahmen mit CPP mehr als 3 dB unter dem Bezug zu mindestens 99 % mit cppUnsure (nur mit dem SFR-Band 95 %)',
+      nCs >= 150 && nCsm >= 0.99 * nCs, nCsm + ' von ' + nCs + ' markiert' + (bspCs.length ? '; offen: ' + bspCs.slice(0, 3).join(' | ') : ''));
     check('A4d', 'Frikativ vor dem Vokal (/ʃ/ /s/ /f/ /h/ −6…−24 dB, 50–100 ms, 98–247 Hz, auch überblendet): jeder stimmhafte Rahmen mit SFR mehr als 6 dB über dem Bezug ohne Frikativ trägt sfrUnsure und cppUnsure (\'rauschanteil\'), Rahmen mit CPP mehr als 3 dB darunter zu mindestens 95 %',
       nS >= 250 && nSm === nS && nC >= 600 && nCm >= 0.95 * nC,
       'SFR +6 dB: ' + nSm + '/' + nS + ' markiert, CPP −3 dB: ' + nCm + '/' + nC + ' markiert' + (bspS.length ? ' — ohne Marke: ' + bspS.join(' | ') : '') + (nC - nCm ? '; offen (CPP ohne SFR-Änderung): ' + bspC.join(' | ') : ''));
