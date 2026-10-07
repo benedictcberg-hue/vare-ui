@@ -17,7 +17,8 @@ const TAKE_SOLL = [
   ['duration_s', 'durationS', 2], ['sample_rate', 'sampleRate', 0], ['device', 'deviceLabel', 'text'],
   ['kernel_version', 'analysis.kernelVersion', 'text'], ['calibration_id', 'calibrationId', 'text'], ['vowel_intent', 'vowelIntent', 'text'],
   ['vowel_class', 'summary.vowel.dominant', 'text'], ['vowel_share', 'summary.vowel.dominantShare', 3],
-  ['f0_med_hz', 'summary.f0.med', 1], ['f0_q1_hz', 'summary.f0.q1', 1], ['f0_q3_hz', 'summary.f0.q3', 1], ['f0_note', 'summary.f0.note', 'text']
+  ['f0_med_hz', 'summary.f0.med', 1], ['f0_q1_hz', 'summary.f0.q1', 1], ['f0_q3_hz', 'summary.f0.q3', 1], ['f0_note', 'summary.f0.note', 'text'],
+  ['f0_unsure_share', 'summary.f0UnsureShare', 3], ['f0_korrektur_share', 'summary.f0KorrekturShare', 3]
 ];
 for (let k = 1; k <= 5; k++) {
   const p = 'summary.F.' + (k - 1) + '.';
@@ -29,7 +30,9 @@ TAKE_SOLL.push(
   ['d34_best_vowel', 'summary.best.cls', 'text'], ['f3_stable_med', 'summary.f3stable.med', 1], ['f3_scored_med', 'summary.f3scored.med', 1],
   ['d45_med', 'summary.d45.med', 1], ['d45_q1', 'summary.d45.q1', 1], ['d45_q3', 'summary.d45.q3', 1], ['d45_n', 'summary.d45.n', 0],
   ['sfr_med_db', 'summary.sfr.med', 2], ['sfr_q1', 'summary.sfr.q1', 2], ['sfr_q3', 'summary.sfr.q3', 2],
-  ['shr_med_db', 'summary.shr.med', 2], ['shr_max_db', 'summary.shr.max', 2], ['cpp_med_db', 'summary.cpp.med', 2],
+  ['shr_med_db', 'summary.shr.med', 2], ['shr_max_db', 'summary.shr.max', 2],
+  ['shr_unsure_share', 'summary.shrUnsureShare', 3], ['shr_unsure_max_db', 'summary.shrUnsureMax', 2], ['shr_other_max_db', 'summary.shrOtherMax', 2],
+  ['cpp_med_db', 'summary.cpp.med', 2],
   ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3],
   ['rms_med_dbfs', 'summary.rms.med', 2], ['rms_max_dbfs', 'summary.rms.max', 2], ['floor_dbfs', 'summary.floorDb', 2],
   ['floor_source', 'summary.floorSource', 'text'], ['snr_db', 'summary.snrDb', 2],
@@ -52,7 +55,8 @@ const TEXTE = {
 
 /* Rahmen-CSV: Spalte, Art, Quelle, Nachkommastellen.
    feld = Serienfeld; bit = [Feld, Bitmaske oder Name in A.FLAG]; gate = Wort zum Gatterzustand;
-   vokal = Klassenname aus V.CENTROIDS. Die Bitbedeutung folgt analysis.js (fillFrame, FLAG). */
+   vokal = Klassenname aus V.CENTROIDS; grund = Codefeld, in der CSV der Text des Kerns (GRUND_ZEILEN).
+   Die Bitbedeutung folgt analysis.js (fillFrame, FLAG). */
 const FRAME_SOLL = [
   ['t_s', 'feld', 't', 3], ['voiced', 'bit', ['flags', 'VOICED']], ['gate', 'gate'], ['vowel', 'vokal'],
   ['f0_hz', 'feld', 'f0', 2], ['ap', 'feld', 'ap', 3], ['rms_dbfs', 'feld', 'rms', 2]
@@ -66,8 +70,20 @@ FRAME_SOLL.push(
   ['h1h2_db', 'feld', 'h1h2', 2], ['h1h2c_db', 'feld', 'h1h2c', 2],
   ['slot_unsure', 'feld', 'slotUnsure', 0], ['n_peaks', 'feld', 'nPeaks', 0],
   ['octave_corrected', 'bit', ['flags', 'OCTAVE']], ['octave_ambiguous', 'bit', ['flags', 'OCTAMBIG']],
-  ['h1h2_unsure', 'bit', ['flags', 'H1H2UNSURE']], ['flags', 'feld', 'flags', 0]
+  ['h1h2_unsure', 'bit', ['flags', 'H1H2UNSURE']],
+  ['f0_unsure', 'bit', ['flags', 'F0UNSURE']], ['f0_grund', 'grund', 'f0Grund'], ['f0_korrektur', 'grund', 'f0Korrektur'],
+  ['f0_cep', 'feld', 'f0Cep', 2], ['f0_yin', 'feld', 'f0Yin', 2], ['octave_unter_grenze', 'bit', ['flags', 'OCTUNTER']],
+  ['shr_grid_hz', 'feld', 'shrGrid', 2], ['shr_other_db', 'feld', 'shrOther', 2], ['shr_unsure', 'bit', ['flags', 'SHRUNSURE']], ['shr_grund', 'grund', 'shrGrund'],
+  ['shr_kamm_db', 'feld', 'shrKamm', 2], ['shr_zweitpuls', 'feld', 'shrZweitpuls', 3],
+  ['flags', 'feld', 'flags', 0]
 );
+/* Gründe je Zeile, Texte aus den Verträgen K3 (f0Grund, f0Korrektur) und K4 (shrGrund). In jeder Zeile
+   tragen die drei Spalten verschiedene Texte, damit vertauschte Spalten auffallen. */
+const GRUND_ZEILEN = {
+  f0Grund: ['teiltonreihe', '', 'cepstrum', 'kein cepstrum', 'teiltonreihe', ''],
+  f0Korrektur: ['', 'teiltonreihe', '', 'cepstrum', 'cepstrum', ''],
+  shrGrund: ['kamm', 'zweitpuls', 'kamm+zweitpuls', 'grundton', 'kamm+zweitpuls+grundton', 'zweitpuls+grundton']
+};
 
 /* CSV nach RFC 4180 lesen: Anführungszeichen, verdoppelte Anführungszeichen, Zeilenumbruch im Feld.
    Meldet Formfehler (Anführungszeichen mitten im ungequoteten Feld, LF ohne CR als Zeilenende). */
@@ -155,6 +171,10 @@ function buildSeries(A) {
   [1, 2, 4, 8, 16, 22].forEach((v, r) => { s.valid[r] = v; });
   [F.VOICED, F.OCTAVE | F.SCORE, F.H1H2UNSURE | F.SUBGRID, F.OCTAMBIG | F.D34VALID,
     F.VOICED | F.OCTAVE | F.H1H2UNSURE | F.OCTAMBIG | F.VOWELAMBIG | F.D45VALID, 0].forEach((v, r) => { s.flags[r] = v; });
+  // Grundton- und SHR-Bits mit eigenen Mustern (F0UNSURE 0,3; OCTUNTER 2,3; SHRUNSURE 0,2,3; F0KORR 1),
+  // verschieden von denen oben und voneinander. Fehlt ein Name in A.FLAG, reißt P2f/P2g.
+  [F.F0UNSURE | F.SHRUNSURE, F.F0KORR, F.OCTUNTER | F.SHRUNSURE, F.F0UNSURE | F.OCTUNTER | F.SHRUNSURE, 0, 0].forEach((v, r) => { s.flags[r] |= (v || 0); });
+  for (const feld in GRUND_ZEILEN) if (s[feld]) GRUND_ZEILEN[feld].forEach((t, r) => { s[feld][r] = A.codeAus(feld, t); });
   [0, 1, 2, 2, 1, 0].forEach((v, r) => { s.gate[r] = v; });
   [-1, 0, 3, 9, 5, -1].forEach((v, r) => { s.cls[r] = v; });
   return s;
@@ -165,6 +185,7 @@ function expectFrame(entry, s, r, dialect, A, V) {
   if (kind === 'bit') { const mask = typeof src[1] === 'number' ? src[1] : A.FLAG[src[1]]; return (s[src[0]][r] & mask) ? '1' : '0'; }
   if (kind === 'gate') { for (const w in A.GATE_CODE) if (A.GATE_CODE[w] === s.gate[r]) return w; return '?'; }
   if (kind === 'vokal') return s.cls[r] >= 0 ? V.CENTROIDS[s.cls[r]].cls : '';
+  if (kind === 'grund') return GRUND_ZEILEN[src][r];
   throw new Error('Art ' + kind);
 }
 
@@ -324,7 +345,7 @@ module.exports = async function (H) {
     const sum = takeZwei.summary, ser = takeZwei.series, n = ser.t.length, fehlt = [];
     for (const [key, path] of TAKE_SOLL) if (path.indexOf('summary.') === 0 && !resolvePath({ summary: sum }, path).found) fehlt.push(key + '←' + path);
     for (const [name, kind, src] of FRAME_SOLL) {
-      const field = kind === 'feld' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : 'cls';
+      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : 'cls';
       if (!(ArrayBuffer.isView(ser[field]) && ser[field].length === n)) fehlt.push(name + '←' + field);
       if (kind === 'bit' && typeof src[1] === 'string' && typeof A.FLAG[src[1]] !== 'number') fehlt.push(name + '←FLAG.' + src[1]);
     }

@@ -168,4 +168,63 @@ module.exports = async function (H) {
     check('I2b', 'SFR je Halbton: Rahmen mit unsicherem Grundton gehen in keinen Halbton-Median ein; ihr Wert gegen den Median der sicheren Rahmen, ohne sichere Gruppe NaN', !bad.length,
       'Mediane ' + JSON.stringify(med) + (bad.length ? '; ' + bad.join('; ') : ''));
   }
+
+  /* ---------- I2c: CSV ---------- */
+  const zeilen = (text, sep) => text.replace(/^﻿/, '').split('\r\n').filter(z => z !== '').map(z => z.split(sep));
+  const zahlZelle = (v, dec) => (typeof v === 'number' && isFinite(v) ? v : -99).toFixed(dec);
+  {
+    // Rahmen-CSV des Prüftakes gegen analyseAt: Gründe als Text, Marken 0/1, Zahlen mit −99 für fehlend.
+    // Die Gründe enthalten weder Komma noch Anführungszeichen, ein schlichtes Teilen reicht hier.
+    const z = zeilen(H.C.framesToCsv(ser, 'standard', H.V), ','), kopf = z[0], bad = [];
+    const SOLL = [['f0_unsure', r => r.f0Unsure ? '1' : '0'], ['f0_grund', r => r.f0Grund], ['f0_korrektur', r => r.f0Korrektur],
+      ['f0_cep', r => zahlZelle(f32(r.f0Cep), 2)], ['f0_yin', r => zahlZelle(f32(r.f0Yin), 2)], ['octave_unter_grenze', r => r.octaveUnterGrenze ? '1' : '0'],
+      ['shr_grid_hz', r => zahlZelle(f32(r.shrGrid), 2)], ['shr_other_db', r => zahlZelle(f32(r.shrOther), 2)], ['shr_unsure', r => r.shrUnsure ? '1' : '0'],
+      ['shr_grund', r => r.shrGrund], ['shr_kamm_db', r => zahlZelle(f32(r.shrKamm), 2)], ['shr_zweitpuls', r => zahlZelle(f32(r.shrZweitpuls), 3)]];
+    let geprueft = 0;
+    const texte = new Set();
+    for (const [k, f] of SOLL) {
+      const c = kopf.indexOf(k);
+      if (c < 0) { bad.push(k + ' fehlt'); continue; }
+      for (let i = 0; i < R.length; i++) {
+        const want = f(R[i]), got = z[i + 1] && z[i + 1][c];
+        if (got !== want) { if (bad.length < 6) bad.push(k + '[' + i + '] ' + JSON.stringify(got) + ' statt ' + JSON.stringify(want)); } else geprueft++;
+        if (/grund|korrektur/.test(k) && want) texte.add(want);
+      }
+    }
+    check('I2c', 'Rahmen-CSV: f0_unsure, f0_grund, f0_korrektur, f0_cep, f0_yin, octave_unter_grenze, shr_grid_hz, shr_other_db, shr_unsure, shr_grund, shr_kamm_db, shr_zweitpuls Rahmen für Rahmen gleich analyseAt (Gründe als Text, fehlend −99)',
+      !bad.length && geprueft === SOLL.length * R.length && texte.size >= 4, geprueft + '/' + SOLL.length * R.length + ' Zellen, Gründe ' + [...texte].join(' | ') + (bad.length ? ' — ' + bad.join('; ') : ''));
+  }
+  {
+    // Take-CSV: die neuen Anteile und Höchstwerte aus der Zusammenfassung; F0- und SHR-Spalten aus den sicheren Rahmen.
+    const su = res.summary, take = { code: 'I', summary: su }, z = zeilen(H.C.takesToCsv([take], 'standard'), ','), kopf = z[0], w = z[1] || [], bad = [];
+    const SOLL = [['f0_unsure_share', su.f0UnsureShare, 3], ['f0_korrektur_share', su.f0KorrekturShare, 3], ['shr_unsure_share', su.shrUnsureShare, 3],
+      ['shr_unsure_max_db', su.shrUnsureMax, 2], ['shr_other_max_db', su.shrOtherMax, 2], ['shr_max_db', su.shr && su.shr.max, 2], ['f0_med_hz', su.f0 && su.f0.med, 1]];
+    for (const [k, v, dec] of SOLL) { const c = kopf.indexOf(k); if (c < 0) bad.push(k + ' fehlt'); else if (w[c] !== zahlZelle(v, dec)) bad.push(k + ' ' + w[c] + ' statt ' + zahlZelle(v, dec)); }
+    check('I2c', 'Take-CSV: f0_unsure_share, f0_korrektur_share, shr_unsure_share, shr_unsure_max_db, shr_other_max_db aus der Zusammenfassung (im Prüftake alle gemessen)',
+      !bad.length && SOLL.every(e => isFinite(e[1])), SOLL.map(([k, v, dec]) => k + ' ' + zahlZelle(v, dec)).join(', ') + (bad.length ? ' — ' + bad.join('; ') : ''));
+  }
+  {
+    // Ältere Serie (vor der Gegenprobe gespeichert, ohne die neuen Felder): Ein Bit 0 hieße dort „sicher“,
+    // ist aber unbekannt — −99, Gründe leer, kein Absturz; alle übrigen Spalten wie zuvor.
+    const alt = {};
+    for (const k in ser) if (FELDER.concat(CODES.map(c => c[0])).indexOf(k) < 0) alt[k] = ser[k];
+    const NEU = ['f0_unsure', 'f0_grund', 'f0_korrektur', 'f0_cep', 'f0_yin', 'octave_unter_grenze', 'shr_grid_hz', 'shr_other_db', 'shr_unsure', 'shr_grund', 'shr_kamm_db', 'shr_zweitpuls'];
+    const bad = [];
+    let za = null, zv = null;
+    try { za = zeilen(H.C.framesToCsv(alt, 'excelde', H.V), ';'); zv = zeilen(H.C.framesToCsv(ser, 'excelde', H.V), ';'); } catch (e) { bad.push('Ausnahme ' + e.message); }
+    if (za) {
+      const kopf = za[0];
+      for (const k of NEU) {
+        const c = kopf.indexOf(k);
+        if (c < 0) { bad.push(k + ' fehlt'); continue; }
+        const text = /grund|korrektur/.test(k), werte = new Set(za.slice(1).map(r => r[c]));
+        if (werte.size !== 1 || !(text ? werte.has('') : /^-99(,0+)?$/.test([...werte][0]))) bad.push(k + ' ' + [...werte].slice(0, 3).join('/'));
+      }
+      kopf.forEach((k, c) => { if (NEU.indexOf(k) < 0 && za.some((r, i) => r[c] !== zv[i][c])) bad.push(k + ' verändert'); });
+    }
+    const altTake = zeilen(H.C.takesToCsv([{ code: 'A', summary: { f0: { med: 110, q1: 100, q3: 120, n: 50 }, shr: { med: -30, max: -20, n: 50 } } }], 'standard'), ',');
+    for (const k of ['f0_unsure_share', 'f0_korrektur_share', 'shr_unsure_share', 'shr_unsure_max_db', 'shr_other_max_db']) { const c = altTake[0].indexOf(k); if (c < 0 || !/^-99\.0+$/.test(altTake[1][c])) bad.push('Take ' + k + ' ' + (c < 0 ? 'fehlt' : altTake[1][c])); }
+    check('I2c', 'Ältere Serie und Zusammenfassung ohne die neuen Felder: Marken und Zahlen −99, Gründe leer (nicht 0 = „sicher“), übrige Spalten unverändert, kein Absturz',
+      !bad.length, bad.length ? bad.slice(0, 5).join('; ') : NEU.length + ' Rahmenspalten, 5 Take-Spalten');
+  }
 };

@@ -55,7 +55,12 @@
     { key: 'f0_med_hz', get: g('summary.f0.med'), dec: 1 },
     { key: 'f0_q1_hz', get: g('summary.f0.q1'), dec: 1 },
     { key: 'f0_q3_hz', get: g('summary.f0.q3'), dec: 1 },
-    { key: 'f0_note', get: g('summary.f0.note') }
+    { key: 'f0_note', get: g('summary.f0.note') },
+    /* F0-Median, Quartile und Note stammen nur aus Rahmen, deren Grundton die Gegenprobe besteht
+       (analysis.js summarise). Wie viele das nicht taten und wie viele korrigiert wurden, steht hier;
+       ältere Auswertungen kennen beides nicht (−99). */
+    { key: 'f0_unsure_share', get: g('summary.f0UnsureShare'), dec: 3 },
+    { key: 'f0_korrektur_share', get: g('summary.f0KorrekturShare'), dec: 3 }
   ]
     .concat(stat('f1', 'summary.F.0', 1, true), stat('f2', 'summary.F.1', 1, true), stat('f3', 'summary.F.2', 1, true), stat('f4', 'summary.F.3', 1, true), stat('f5', 'summary.F.4', 1, true))
     .concat(stat('d34', 'summary.d34', 1))
@@ -74,6 +79,11 @@
       { key: 'sfr_q3', get: g('summary.sfr.q3'), dec: 2 },
       { key: 'shr_med_db', get: g('summary.shr.med'), dec: 2 },
       { key: 'shr_max_db', get: g('summary.shr.max'), dec: 2 },
+      /* shr_med_db und shr_max_db: nur Rahmen ohne shrUnsure. Die übrigen fehlen dort nicht still:
+         Anteil, höchster Hauptwert und höchster Wert auf dem anderen Raster. */
+      { key: 'shr_unsure_share', get: g('summary.shrUnsureShare'), dec: 3 },
+      { key: 'shr_unsure_max_db', get: g('summary.shrUnsureMax'), dec: 2 },
+      { key: 'shr_other_max_db', get: g('summary.shrOtherMax'), dec: 2 },
       { key: 'cpp_med_db', get: g('summary.cpp.med'), dec: 2 },
       { key: 'h1h2_med_db', get: g('summary.h1h2.med'), dec: 2 },
       { key: 'h1h2c_med_db', get: g('summary.h1h2c.med'), dec: 2 },
@@ -101,6 +111,26 @@
       { key: 'comment', get: g('comment') }
     ]);
 
+  /* Gründe je Rahmen stehen in der Serie als Codes (analysis.js GRUND, codeAus); hier werden sie wieder
+     Text. Die Listen müssen denen in analysis.js gleichen — die Prüfung P2f/P2g setzt jeden Text über
+     analysis.js ein und erwartet ihn hier zurück. 255 = Text, den die Analyse nicht kannte: '?'. */
+  var GRUND_TEXT = { f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum'], f0Korrektur: ['', 'teiltonreihe', 'cepstrum'], shrGrund: ['kamm', 'zweitpuls', 'grundton'] };
+  function grundText(feld, code) {
+    if (!code) return '';
+    if (code === 255) return '?';
+    var liste = GRUND_TEXT[feld];
+    if (feld !== 'shrGrund') return code < liste.length ? liste[code] : '?';
+    if (code >> liste.length) return '?';
+    var t = [];
+    for (var b = 0; b < liste.length; b++) if (code & (1 << b)) t.push(liste[b]);
+    return t.join('+');
+  }
+  /* Ältere gespeicherte Serien haben die Grundton- und SHR-Felder nicht. Dann ist ein Bit 0 keine
+     Aussage („sicher“), sondern unbekannt: −99, und die Gründe bleiben leer. Merkmal ist das Codefeld,
+     das mit den Bits zusammen geschrieben wird (f0Grund für den Grundton, shrGrund für SHR). */
+  function bitMit(merkmal, bit) { return function (s, i) { return s[merkmal] ? ((s.flags[i] & bit) ? 1 : 0) : null; }; }
+  function grundSpalte(feld) { return function (s, i) { return s[feld] ? grundText(feld, s[feld][i]) : null; }; }
+
   // Rahmenweise Spalten: Name → Serienfeld (oder Funktion) und Nachkommastellen.
   var FRAME_COLUMNS = [
     ['t_s', 't', 3], ['voiced', function (s, i) { return (s.flags[i] & 1) ? 1 : 0; }, 0],
@@ -120,6 +150,12 @@
     ['octave_corrected', function (s, i) { return (s.flags[i] & 2) ? 1 : 0; }, 0],
     ['octave_ambiguous', function (s, i) { return (s.flags[i] & 128) ? 1 : 0; }, 0],
     ['h1h2_unsure', function (s, i) { return (s.flags[i] & 8) ? 1 : 0; }, 0],
+    // Grundton: Gegenprobe gerissen (gilt für alles aus F0 Abgeleitete), Grund, Korrektur, Cepstrum- und YIN-Wert
+    ['f0_unsure', bitMit('f0Grund', 512), 0], ['f0_grund', grundSpalte('f0Grund')], ['f0_korrektur', grundSpalte('f0Korrektur')],
+    ['f0_cep', 'f0Cep', 2], ['f0_yin', 'f0Yin', 2], ['octave_unter_grenze', bitMit('f0Grund', 4096), 0],
+    // SHR: Raster des Hauptwerts, Wert auf dem anderen Raster (nur bei Zweifel), Zweifel und Belege
+    ['shr_grid_hz', 'shrGrid', 2], ['shr_other_db', 'shrOther', 2], ['shr_unsure', bitMit('shrGrund', 2048), 0], ['shr_grund', grundSpalte('shrGrund')],
+    ['shr_kamm_db', 'shrKamm', 2], ['shr_zweitpuls', 'shrZweitpuls', 3],
     ['flags', 'flags', 0]
   ];
 
@@ -152,7 +188,8 @@
     for (var i = 0; i < series.t.length; i++) {
       var cells = [];
       for (var c = 0; c < FRAME_COLUMNS.length; c++) {
-        var col = FRAME_COLUMNS[c], v = (typeof col[1] === 'function') ? col[1](series, i, VOWEL) : series[col[1]][i];
+        // Fehlt ein Feld (ältere Serie), ist der Wert unbekannt: −99, nicht Absturz und nicht 0.
+        var col = FRAME_COLUMNS[c], v = (typeof col[1] === 'function') ? col[1](series, i, VOWEL) : (series[col[1]] ? series[col[1]][i] : null);
         cells.push(fmtCell(v, col[2], d));
       }
       lines.push(cells.join(d.sep));
