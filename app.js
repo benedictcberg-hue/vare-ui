@@ -669,16 +669,24 @@
       opts: { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: s.spreadMaxHz, hopS: s.hopS, yieldMs: 0 }
     };
   }
+  function fehlerText(e) { return (e && (e.message || e.name)) || String(e); }
+  function wavRettenKnopf(box, text, name, blob) {
+    var b = document.createElement('button'); b.className = 'danger'; b.textContent = text;
+    b.addEventListener('click', function () { download(name, blob()); });
+    box.appendChild(b);
+  }
   function finishTake(samples, sr, feld) {
     feld = feld || takeAngaben(new Date());
     st.busy = true; updateTakeButton();
     var prog = $('take-progress'); prog.hidden = false; prog.innerHTML = '<div class="skeleton"></div><div class="small muted" id="take-progress-text">Analyse …</div>';
-    var now = feld.ende, info = feld.info;
+    var now = feld.ende, info = feld.info, wav = null, audioFehler = null, take = null;
+    // Das WAV wird einmal erzeugt und für Ablage und Rettung verwendet.
+    function wavBlob() { if (!wav) wav = new Blob([W.encode(samples, sr, feld.audioFormat)], { type: 'audio/wav' }); return wav; }
     A.analyseTake(samples, sr, feld.opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; }).then(function (res) {
       return Promise.all([S.getMeta('nextCode', 0), S.allTakes()]).then(function (rr) {
         var n = A.nextCodeIndex(rr[1], rr[0]);
         var code = codeFromIndex(n), label = feld.label || defaultLabel(code, now);
-        var take = {
+        take = {
           id: uuid(), schemaVersion: 1, code: code, label: label, comment: feld.comment, createdAt: now.toISOString(),
           durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate,
           deviceLabel: info.deviceLabel, deviceId: info.deviceId, channelCount: 1,
@@ -688,27 +696,34 @@
           vowelIntent: feld.vowelIntent, calibrationId: feld.calibrationId,
           analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio
         };
-        // Take und Rahmenverlauf in einer Transaktion: nie der eine ohne den anderen (storage.js putTakeSeries).
-        return S.putTakeSeries(take, res.series).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); }).then(function () {
-          if (!feld.storeAudio) return null;
-          var wav = W.encode(samples, sr, feld.audioFormat);
-          return S.putAudio(take.id, sr, feld.audioFormat, new Blob([wav], { type: 'audio/wav' }));
-        }).then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
-          S.persist().catch(function () { });
-          renderTakeResult(take);
-        });
+        /* Take, Rahmenverlauf und WAV in einer Transaktion (storage.js putTakeSeries). Scheitert sie mit dem
+           WAV — bei knappem Speicher zuerst, es ist der größte Brocken —, werden Take und Verlauf ohne WAV
+           gespeichert, und die Meldung sagt genau das. Früher hieß es dann „NICHT gespeichert“, obwohl Take
+           und Verlauf in der Chronik standen; wer der Meldung glaubte, sang den Take ein zweites Mal. */
+        var extra = feld.storeAudio ? { audio: { sampleRate: sr, format: feld.audioFormat, blob: wavBlob() } } : null;
+        return S.putTakeSeries(take, res.series, extra).catch(function (e) {
+          if (!extra) throw e;
+          audioFehler = e; take.hasAudio = false;
+          return S.putTakeSeries(take, res.series, null);
+        }).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); })
+          .then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
+            S.persist().catch(function () { });
+            renderTakeResult(take);
+            if (audioFehler) {
+              status('Take ' + take.code + ' gespeichert, das WAV nicht (' + fehlerText(audioFehler) + ') — eine Neu-Analyse dieses Takes ist nicht möglich. Das WAV jetzt sichern: Knopf unter dem Ergebnis.', true);
+              wavRettenKnopf($('take-result'), 'WAV dieses Takes sichern', 'vare-' + take.code + '-' + stamp(now) + '.wav', wavBlob);
+            }
+          });
       });
     }).catch(function (e) {
       /* Ist die Analyse fertig und nur das Speichern scheitert (Speicherplatz, privater Modus),
          liegt die Aufnahme nur noch im Arbeitsspeicher dieser Seite. Dann wenigstens einen Weg
          anbieten, sie zu retten, statt sie mit einer Fehlermeldung verschwinden zu lassen. */
-      status('NICHT gespeichert (' + (e && e.message || e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
+      status('NICHT gespeichert (' + fehlerText(e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
       // Bezeichnung und Kommentar wurden beim Stopp geleert; stehen dort noch keine neuen, kommen sie zurück.
       if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
       var box = $('take-result'); box.innerHTML = '';
-      var b = document.createElement('button'); b.className = 'danger'; b.textContent = 'Aufnahme als WAV retten';
-      b.addEventListener('click', function () { download('vare-ungespeichert-' + stamp(now) + '.wav', new Blob([W.encode(samples, sr, feld.audioFormat)], { type: 'audio/wav' })); });
-      box.appendChild(b);
+      wavRettenKnopf(box, 'Aufnahme als WAV retten', 'vare-ungespeichert-' + stamp(now) + '.wav', wavBlob);
     }).then(function () { prog.hidden = true; st.busy = false; updateTakeButton(); });
   }
   function analysisMeta(meta, now) {

@@ -49,7 +49,8 @@
       return new Promise(function (resolve, reject) {
         var t = db.transaction(stores, mode), result;
         t.oncomplete = function () { resolve(result); };
-        t.onerror = function () { reject(t.error); };
+        // Beim Fehlerereignis ist t.error noch leer; der Grund steht an der Anfrage (z. B. QuotaExceededError).
+        t.onerror = function (ev) { reject(t.error || (ev && ev.target && ev.target.error) || new Error('Schreiben fehlgeschlagen')); };
         t.onabort = function () { reject(t.error || new Error('Transaktion abgebrochen')); };
         result = fn(t);
       });

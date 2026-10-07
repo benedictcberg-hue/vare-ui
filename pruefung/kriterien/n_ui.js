@@ -5,7 +5,8 @@
    (ihre Zeitgeber und Datenbankrückrufe laufen ins Leere), so wie ein Tab, der neu geladen wird.
    B1a: Take und Rahmenverlauf in einer Transaktion (Take, Neu-Analyse).
    B1b: Bearbeiten im Detail überschreibt keine laufende oder abgeschlossene Neu-Analyse.
-   B1c: Export und Import sind während „Alle neu analysieren“ gesperrt, mit Hinweis. */
+   B1c: Export und Import sind während „Alle neu analysieren“ gesperrt, mit Hinweis.
+   B1d: Meldungen stimmen mit dem Speicherzustand: Speicher reicht für Take und Verlauf, nicht für das WAV. */
 'use strict';
 const vm = require('vm'), fs = require('fs'), path = require('path'), nodeCrypto = require('crypto');
 const { Blob } = require('buffer');
@@ -166,7 +167,7 @@ function htmlVorgaben() {
 // Wie U.El, aber neues innerHTML heißt neue Kinder: sonst sammelten sich an „#d-save“ die Klicks aller früher gezeigten Takes.
 class E extends U.El {
   get innerHTML() { return this._html || ''; }
-  set innerHTML(v) { this._html = v; this._q = {}; }
+  set innerHTML(v) { this._html = v; this._q = {}; this.kinder = []; }
 }
 // Mikrofon-Ersatz: liefern() bestimmt, was der Recorder beim Stopp zurückgibt.
 function recorderNeu(liefern, sr) {
@@ -367,6 +368,42 @@ module.exports = async function (H) {
       'Lauf beobachtet=' + imLauf + ' | gesperrte Knöpfe ' + gesperrt.length + '/3 | Downloads im Lauf ' + dlLauf + ' | Import übernommen=' + importiert + ' | Hinweis „' + hinweis.slice(0, 90) + '“ | danach frei ' + frei.length + '/3, Export geht=' + nachher);
     p.schliessen();
   } catch (e) { check('B1c', 'Ablauf Export/Import während der Neu-Analyse läuft durch', false, kurzFehler(e)); }
+
+  /* ---------- B1d · Meldung = Speicherzustand: das WAV passt nicht mehr, Take und Verlauf schon ---------- */
+  try {
+    // Erst messen, was ein Take ohne WAV belegt; dann eine frische Chronik, deren Quote dafür reicht, für das WAV nicht.
+    const mess = idbNeu(), pm = await seiteNeu(mess, normal, SR);
+    pm.kalibriert('cal-1'); await pm.mikrofon();
+    pm.st().settings.storeAudio = false;
+    const vor = mess.nutzung(); await pm.take(); const ohneWav = mess.nutzung() - vor;
+    pm.schliessen();
+    const wavBytes = 44 + 2 * SIG.length;
+    const br = idbNeu(), p = await seiteNeu(br, normal, SR);
+    p.kalibriert('cal-1'); await p.mikrofon();
+    br.ctl.quote = br.nutzung() + ohneWav + Math.round(0.5 * wavBytes);
+    p.el('take-label').value = 'Speicher knapp'; p.el('take-comment').value = 'wichtig';
+    const A = await p.take();
+    const meldung = p.status(), ergebnis = p.el('take-result');
+    const knopf = (ergebnis.kinder || []).find(k => /WAV/.test(k.textContent || ''));
+    const nextCode = br.laden('vare', 'meta').get('nextCode'), hatAudio = A ? await p.S.hasAudio(A.id) : null, serie = A ? await p.S.getSeries(A.id) : null;
+    let dl = null;
+    if (knopf) { const n0 = p.downloads.length; knopf.click(); dl = p.downloads.length > n0 ? p.downloads[p.downloads.length - 1] : null; }
+    const teil1 = !!A && A.hasAudio === false && hatAudio === false && !!serie && !/NICHT gespeichert/.test(meldung) && /gespeichert/.test(meldung) && /WAV/.test(meldung) && /QuotaExceededError/.test(meldung)
+      && /Gespeichert als/.test(ergebnis.innerHTML) && !!dl && dl.size === wavBytes && p.el('take-label').value === '' && p.el('take-comment').value === '' && nextCode && nextCode.value === 1;
+    // Scheitert der Take selbst, heißt es „NICHT gespeichert“ — mit dem Grund, nicht „null“.
+    br.ctl.quote = Infinity;
+    br.ctl.putFehler = laden => (laden === 'takes' ? domFehler('UnknownError', 'Take nicht schreibbar (Prüfung)') : null);
+    const B = await p.take();
+    br.ctl.putFehler = null;
+    const meldung2 = p.status();
+    const teil2 = !B && /NICHT gespeichert \(Take nicht schreibbar \(Prüfung\)\)/.test(meldung2);
+    check('B1d', 'Meldung = Speicherzustand: reicht der Speicher für Take und Verlauf, nicht für das WAV, heißt es „gespeichert, das WAV nicht“ mit Grund und Knopf zum Sichern (Take ohne Audio, Code weitergezählt, Felder leer); scheitert der Take, „NICHT gespeichert“ mit Grund',
+      ohneWav < wavBytes && teil1 && teil2,
+      'Take ohne WAV ' + ohneWav + ' B, WAV ' + wavBytes + ' B | Meldung „' + meldung.slice(0, 110) + '“ | Take ' + (A ? A.code + ' hasAudio=' + A.hasAudio + ', Audio da=' + hatAudio + ', Verlauf da=' + !!serie : 'nicht gespeichert')
+      + ' | Knopf ' + (knopf ? '„' + knopf.textContent + '“, Datei ' + (dl ? dl.size + ' B' : 'keine') : 'fehlt') + ' | Felder „' + p.el('take-label').value + '|' + p.el('take-comment').value + '“ | nextCode ' + (nextCode && nextCode.value)
+      + ' | Take scheitert: „' + meldung2.slice(0, 80) + '“');
+    p.schliessen();
+  } catch (e) { check('B1d', 'Ablauf Speicher knapp läuft durch', false, kurzFehler(e)); }
 
   const neueFehler = fehlerListe.slice(fehlerVorher);
   check('B1z', 'Keine Ausnahme in der Seite während der B1-Abläufe', !neueFehler.length, neueFehler.slice(0, 3).join(' || '));
