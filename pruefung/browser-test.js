@@ -86,6 +86,9 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
     const micInfo = await page.textContent('#mic-info');
     check('Mikrofon läuft', /Hz/.test(micInfo), micInfo);
+    // Scheitert recorder-worklet.js, fiele die Seite still auf ScriptProcessor zurück; die Kalibrierung danach
+    // belegt, dass über das Worklet auch Daten ankommen.
+    check('Erfassung über das AudioWorklet, nicht über den Rückfall', /AudioWorklet/.test(micInfo), micInfo);
     check('Take-Knopf ohne Kalibrierung gesperrt (Pflicht)', await page.isDisabled('#btn-take'), await page.textContent('#take-hint'));
     await page.waitForTimeout(800);
     const stateWord = await page.textContent('#gate-state');
