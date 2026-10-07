@@ -756,31 +756,97 @@
       renderKontext();
     }).catch(function (e) { $('takes-list').innerHTML = '<p class="rust">Chronik nicht lesbar: ' + CH.esc(e && e.message || e) + '</p>'; });
   }
-  var handlers = {
-    rowCsv: function (take) { download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.csv', new Blob([C.takesToCsv([take], st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); },
-    frameCsv: function (take, series) { if (!series) return; download('vare-' + take.code + '-rahmen.csv', new Blob([C.framesToCsv(series, st.settings.csvDialect, V)], { type: 'text/csv;charset=utf-8' })); },
-    downloadWav: function (take) { S.getAudio(take.id).then(function (a) { if (a) download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.wav', a.blob); }); },
-    reanalyse: function (take) {
-      if (st.busy) return; st.busy = true; status('Neu-Analyse von ' + take.code + ' …');
-      S.getAudio(take.id).then(function (a) {
+  /* Eine Neu-Analyse, gemeinsam für „Neu analysieren“ und „Alle neu analysieren“: Audio lesen, mit der
+     jetzigen Rechenweise auswerten, die ganze alte Auswertung in die Historie (nicht nur zwei Felder: sonst
+     ist nicht mehr nachvollziehbar, mit welchen Schwellen der alte Wert entstand). Geschrieben wird der Take,
+     wie er JETZT in der Chronik steht — Bezeichnung oder Kommentar können sich während der Analyse geändert
+     haben; ist er inzwischen gelöscht, wird nichts geschrieben. abbrechen: siehe analysis.js analyseTake.
+     Liefert { take, geaendert }. */
+  function neuAuswerten(id, fortschritt, abbrechen) {
+    return S.getTake(id).then(function (t0) {
+      if (!t0) throw new Error('Take nicht mehr vorhanden');
+      return Promise.all([S.getAudio(id), t0.calibrationId ? S.allCalibrations() : Promise.resolve([])]).then(function (r) {
+        var a = r[0], cal = r[1].filter(function (c) { return c.id === t0.calibrationId; })[0] || null;
         if (!a) throw new Error('kein Audio gespeichert');
         return a.blob.arrayBuffer().then(function (buf) {
-          var dec = W.decode(buf), calP = take.calibrationId ? S.allCalibrations().then(function (all) { return all.filter(function (c) { return c.id === take.calibrationId; })[0] || null; }) : Promise.resolve(null);
-          return calP.then(function (cal) { return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS }); });
+          var dec = W.decode(buf);
+          return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, abbrechen: abbrechen }, fortschritt);
         });
-      }).then(function (res) {
-        var now = new Date();
-        /* Die ganze alte Auswertung in die Historie, nicht nur zwei Felder: sonst ist nach einer
-           Neu-Analyse nicht mehr nachvollziehbar, mit welchen Schwellen der alte Wert entstand. */
+      });
+    }).then(function (res) {
+      return S.getTake(id).then(function (take) {
+        if (!take) throw new Error('Take während der Neu-Analyse gelöscht');
+        var neu = analysisMeta(res.meta, new Date()), alt = take.analysis || {}, geaendert = [];
         take.history = (take.history || []).concat([{ analysis: take.analysis, summary: take.summary }]);
-        var neu = analysisMeta(res.meta, now), alt = take.analysis || {}, geaendert = [];
         if (alt.gate && neu.gate && alt.gate.f3MinHz !== neu.gate.f3MinHz) geaendert.push('F3-Mindestwert ' + alt.gate.f3MinHz + ' → ' + neu.gate.f3MinHz + ' Hz');
         if (alt.spreadMaxHz !== neu.spreadMaxHz) geaendert.push('Streuungsgrenze ' + alt.spreadMaxHz + ' → ' + neu.spreadMaxHz + ' Hz');
         if (alt.hopS !== neu.hopS) geaendert.push('Rahmenabstand ' + alt.hopS + ' → ' + neu.hopS + ' s');
         if (alt.kernelVersion !== neu.kernelVersion) geaendert.push('Kern ' + alt.kernelVersion + ' → ' + neu.kernelVersion);
         take.summary = res.summary; take.analysis = neu; take.reanalysisNote = geaendert.join(', ');
-        return S.putTake(take).then(function () { return S.putSeries(take.id, res.series); }).then(recomputeRefs).then(function () { return geaendert; });
-      }).then(function (geaendert) { status('Neu analysiert: ' + take.code + (geaendert && geaendert.length ? ' — geändert: ' + geaendert.join(', ') : ' (gleiche Einstellungen)')); st.busy = false; route(); })
+        return S.putTake(take).then(function () { return S.putSeries(take.id, res.series); }).then(function () { return { take: take, geaendert: geaendert }; });
+      });
+    });
+  }
+  function takeName(t) { return t.code + ' (' + CH.dateShort(t.createdAt) + ')'; }
+  /* „Alle neu analysieren“: jeder Take mit gespeichertem Audio nacheinander, genau wie die Einzel-Neu-Analyse.
+     Takes ohne Audio lassen sich nicht neu rechnen: Sie werden genannt und bleiben, wie sie sind — anders
+     gerechnet, wenn sie es waren. Abbrechen wirkt vor dem nächsten Block, auch mitten in einem Take; dieser
+     bleibt dann unverändert, die schon fertigen bleiben neu. Danach werden die Referenzen neu bestimmt. */
+  var alleLauf = null;
+  function alleNeuAnalysieren() {
+    if (st.busy || st.taking) { status('Erst Take, Analyse oder Neu-Analyse abwarten.', true); return; }
+    var box = $('reanalyse-all'), text = $('reanalyse-all-text'), knopf = $('btn-reanalyse-all'), stopp = $('btn-reanalyse-abbruch');
+    Promise.all([S.allTakes(), S.audioIds()]).then(function (r) {
+      var mitAudio = {}; (r[1] || []).forEach(function (id) { mitAudio[id] = true; });
+      var liste = r[0].filter(function (t) { return mitAudio[t.id]; }).reverse(), ohne = r[0].filter(function (t) { return !mitAudio[t.id]; }).reverse();
+      var sek = liste.reduce(function (a, t) { return a + (t.durationS || 0); }, 0);
+      // Ohne Audio: nennen, und sagen, ob sie anders gerechnet bleiben.
+      var ohneText = function () {
+        if (!ohne.length) return '';
+        var anders = ohne.filter(function (t) { return unvergleichbar(t); });
+        return ' Ohne Audio, nicht neu zu rechnen: ' + ohne.map(takeName).join(', ') + '.'
+          + (anders.length ? ' Davon bleiben anders gerechnet: ' + anders.map(function (t) { return takeName(t) + ' — ' + unvergleichbar(t); }).join('; ') + '.' : '');
+      };
+      if (!liste.length) { box.hidden = false; text.textContent = 'Kein Take mit gespeichertem Audio — nichts neu zu analysieren.' + ohneText(); stopp.hidden = true; return; }
+      if (!window.confirm('Alle ' + liste.length + ' Takes mit Audio (zusammen ' + dauerText(sek) + ') mit Kern ' + D.VERSION + ' und den jetzigen Einstellungen neu analysieren? Die bisherige Auswertung bleibt je Take in der Historie.'
+        + (ohne.length ? ' ' + ohne.length + ' Takes ohne Audio bleiben, wie sie sind.' : ''))) return;
+      var lauf = alleLauf = { abbruch: false }, neu = [], fehl = [], i = 0;
+      st.busy = true; updateTakeButton();
+      knopf.disabled = true; stopp.hidden = false; stopp.disabled = false; box.hidden = false;
+      var zeige = function (t, done, total) { text.textContent = 'Neu-Analyse ' + i + ' von ' + liste.length + ': ' + takeName(t) + (total ? ' — ' + done + ' / ' + total + ' Rahmen' : ' …'); };
+      function naechster() {
+        if (lauf.abbruch || i >= liste.length) return Promise.resolve();
+        var t = liste[i++];
+        zeige(t, 0, 0);
+        return neuAuswerten(t.id, function (done, total) { zeige(t, done, total); }, function () { return lauf.abbruch; })
+          .then(function (x) { neu.push(x.take); }, function (e) { if (!(e && e.abgebrochen)) fehl.push(takeName(t) + ': ' + (e && e.message || e)); })
+          .then(function () { if (location.hash === '#/chronik') refreshChronik(); return naechster(); });
+      }
+      return naechster().then(recomputeRefs).then(function () {
+        var rest = liste.length - neu.length - fehl.length;
+        var msg = (lauf.abbruch ? 'Neu-Analyse abgebrochen: ' : 'Alle neu analysiert: ') + neu.length + ' von ' + liste.length + ' Takes mit Kern ' + D.VERSION + ' neu gerechnet'
+          + (neu.length ? ' (' + neu.map(function (t) { return t.code; }).join(', ') + ')' : '') + '.'
+          + (lauf.abbruch && rest ? ' ' + rest + ' unverändert: ' + liste.slice(liste.length - rest).map(takeName).join(', ') + '.' : '')
+          + (fehl.length ? ' Fehlgeschlagen, unverändert: ' + fehl.join('; ') + '.' : '') + ohneText() + ' Referenzen neu bestimmt.';
+        text.textContent = msg; status(msg, lauf.abbruch || fehl.length > 0 || ohne.some(function (t) { return unvergleichbar(t); }));
+      }).catch(function (e) { text.textContent = 'Neu-Analyse gestoppt: ' + (e && e.message || e); status(text.textContent, true); })
+        .then(function () { st.busy = false; alleLauf = null; knopf.disabled = false; stopp.hidden = true; updateTakeButton(); if (location.hash === '#/chronik') refreshChronik(); });
+    }).catch(function (e) { status('Chronik nicht lesbar: ' + (e && e.message || e), true); });
+  }
+  function alleAbbrechen() {
+    if (!alleLauf) return;
+    alleLauf.abbruch = true; $('btn-reanalyse-abbruch').disabled = true;
+    $('reanalyse-all-text').textContent += ' — wird abgebrochen';
+  }
+  var handlers = {
+    rowCsv: function (take) { download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.csv', new Blob([C.takesToCsv([take], st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); },
+    frameCsv: function (take, series) { if (!series) return; download('vare-' + take.code + '-rahmen.csv', new Blob([C.framesToCsv(series, st.settings.csvDialect, V)], { type: 'text/csv;charset=utf-8' })); },
+    downloadWav: function (take) { S.getAudio(take.id).then(function (a) { if (a) download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.wav', a.blob); }); },
+    reanalyse: function (take) {
+      if (st.busy) { status('Gerade läuft eine Analyse — Neu-Analyse von ' + take.code + ' danach.', true); return; }
+      st.busy = true; status('Neu-Analyse von ' + take.code + ' …');
+      neuAuswerten(take.id, null, null).then(function (x) { return recomputeRefs().then(function () { return x.geaendert; }); })
+        .then(function (geaendert) { status('Neu analysiert: ' + take.code + (geaendert && geaendert.length ? ' — geändert: ' + geaendert.join(', ') : ' (gleiche Einstellungen)')); st.busy = false; route(); })
         .catch(function (e) { st.busy = false; status('Neu-Analyse fehlgeschlagen: ' + (e && e.message || e), true); });
     },
     remove: function (take) {
@@ -1068,6 +1134,8 @@
     $('btn-import-json').addEventListener('click', function () { $('file-import').click(); });
     $('file-import').addEventListener('change', function (e) { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ''; });
     $('btn-clear-all').addEventListener('click', clearAll);
+    $('btn-reanalyse-all').addEventListener('click', alleNeuAnalysieren);
+    $('btn-reanalyse-abbruch').addEventListener('click', alleAbbrechen);
     window.addEventListener('hashchange', route);
     window.addEventListener('resize', function () { if (st.rec && st.rec.active) return; drawHist(); });
     fillDevices();

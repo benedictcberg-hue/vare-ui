@@ -350,10 +350,14 @@
   }
 
   /* Hauptaufruf. samples: Float32Array/Float64Array bei sr. Liefert Promise<{ summary, series, meta }>.
-     onProgress(done, total) wird je Block gerufen; zwischen Blöcken gibt die Funktion den Faden frei. */
+     onProgress(done, total) wird je Block gerufen; zwischen Blöcken gibt die Funktion den Faden frei.
+     o.abbrechen (Funktion): liefert sie vor einem Block true, endet die Analyse ohne Ergebnis — das Promise
+     wird mit einem Fehler verworfen, der abgebrochen = true trägt. So lässt sich ein langer Take mitten in
+     der Rechnung abbrechen, ohne dass halbe Werte entstehen. */
   function analyseTake(samples, sr, o, onProgress) {
     var opts = {};
     for (var k in DEFAULTS) opts[k] = (o && o[k] != null) ? o[k] : DEFAULTS[k];
+    var abbrechen = (o && typeof o.abbrechen === 'function') ? o.abbrechen : null;
     var TSR = D.TARGET_SR;
     var ds = D.resample(samples, sr, TSR);
     var hop = Math.max(1, Math.round(opts.hopS * TSR)), half = Math.round(0.03 * TSR);
@@ -368,6 +372,7 @@
     return new Promise(function (resolve, reject) {
       function step() {
         try {
+          if (abbrechen && abbrechen()) { var ab = new Error('Analyse abgebrochen'); ab.abgebrochen = true; reject(ab); return; }
           var end = Math.min(centres.length, i + opts.chunk);
           for (; i < end; i++) {
             var t = centres[i] / TSR, r = D.analyseAt(ds, TSR, centres[i], frameOpts);

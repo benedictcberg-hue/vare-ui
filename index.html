@@ -195,7 +195,12 @@
         <button id="btn-export-json">JSON-Sicherung</button>
         <button id="btn-import-json">JSON importieren</button>
         <input type="file" id="file-import" accept=".json,application/json" hidden>
+        <button id="btn-reanalyse-all">Alle neu analysieren</button>
         <button id="btn-clear-all" class="danger">Alles löschen</button>
+      </div>
+      <div id="reanalyse-all" class="row small" aria-live="polite" hidden>
+        <span id="reanalyse-all-text"></span>
+        <button id="btn-reanalyse-abbruch" hidden>Abbrechen</button>
       </div>
     </div>
     <div class="panel">

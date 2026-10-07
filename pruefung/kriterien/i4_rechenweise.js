@@ -156,6 +156,79 @@ module.exports = async function (H) {
       + ' | jetzt ' + JSON.stringify(fa));
   }
 
+  /* ---------- I4b: „Alle neu analysieren“ (app.js in der Nachbildung aus u_oberflaeche.js) ---------- */
+  {
+    const fehlerVorher = U.fehler.length, aufFehler = e => U.fehler.push('I4b: ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | '));
+    process.on('unhandledRejection', aufFehler);
+    const SIG = H.concat([H.noise(Math.round(0.1 * H.SR), 2e-4, 91), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], H.BW5, 1.0, H.SR, { gain: 0.3 }), H.noise(Math.round(0.1 * H.SR), 2e-4, 92)]);
+    const T0 = Date.parse('2026-04-06T09:00:00Z');
+    // Seite mit Takes: mitAudio Takes mit gespeichertem Audio, dann einer ohne; alle als „Kern 3.0.0“ gespeichert außer keep.
+    async function chronikMitTakes(mitAudio, ohneAudio, keep) {
+      const sp = U.speicherNeu(), uhr = U.uhrNeu(T0), p = await U.seiteOeffnen(sp, uhr, SIG, H.SR);
+      p.kalibriert('cal-I4'); await sp.api.putCalibration(Object.assign({}, p.st().cal)); await p.mikrofon();
+      const takes = [];
+      for (let k = 0; k < mitAudio + ohneAudio; k++) { p.st().settings.storeAudio = k < mitAudio; uhr.vor(60e3); takes.push(await p.take()); }
+      p.st().settings.storeAudio = true;
+      for (const t of takes) if (!keep || keep.indexOf(t.code) < 0) { const x = sp.d.takes.get(t.id); x.analysis.kernelVersion = '3.0.0'; await sp.api.putTake(x); }
+      // Gespeicherte Referenz aus einem jetzt anders gerechneten Take: muss nach dem Lauf neu bestimmt sein.
+      const letzter = takes[takes.length - 1];
+      await sp.api.setMeta('refs', { a: { d34: 999, takeId: letzter.id, code: letzter.code, date: letzter.createdAt, startS: 0.2, lenS: 0.5, pinned: false } });
+      p.sb.location.hash = '#/chronik';
+      return { sp, p, takes };
+    }
+    // textContent der Fortschrittszeile mitschreiben; beiJedem(text) darf eingreifen (z. B. Abbrechen klicken).
+    function mitschreiben(p, beiJedem) {
+      const el = p.el('reanalyse-all-text'), log = [];
+      let v = el.textContent;
+      Object.defineProperty(el, 'textContent', { get: () => v, set: x => { v = String(x); log.push({ text: v, busy: p.st().busy, abbruchSichtbar: !p.el('btn-reanalyse-abbruch').hidden, takeGesperrt: p.el('btn-take').disabled }); if (beiJedem) beiJedem(v); } });
+      return log;
+    }
+    const zustand = (sp, t) => { const x = sp.d.takes.get(t.id); return x ? { kern: x.analysis.kernelVersion, hist: (x.history || []).map(h => h.analysis && h.analysis.kernelVersion).join('/'), notiz: x.reanalysisNote || '' } : null; };
+    try {
+      const { sp, p, takes } = await chronikMitTakes(3, 1, ['C']);
+      const [tA, tB, tC, tD] = takes, serVorher = takes.map(t => sp.d.series.get(t.id));
+      const log = mitschreiben(p);
+      p.klick('btn-reanalyse-all');
+      const fertig = await p.warte(() => !p.st().busy && /Alle neu analysiert/.test(p.el('reanalyse-all-text').textContent), 60000);
+      const z = takes.map(t => zustand(sp, t)), text = p.el('reanalyse-all-text').textContent, refs = p.st().refs, gesp = sp.d.meta.get('refs') || {};
+      const lauf = log.filter(e => /Neu-Analyse \d von 3/.test(e.text));
+      check('I4b', '„Alle neu analysieren“: jeder Take mit Audio mit dem jetzigen Kern neu, frühere Auswertung in der Historie und „Kern 3.0.0 → ' + D.VERSION + '“ wie bei der Einzel-Neu-Analyse; auch ein schon gleich gerechneter Take',
+        fertig && z[0].kern === D.VERSION && z[0].hist === '3.0.0' && z[0].notiz.indexOf('Kern 3.0.0 → ' + D.VERSION) >= 0 && z[1].kern === D.VERSION && z[1].hist === '3.0.0'
+        && z[2].kern === D.VERSION && z[2].hist === D.VERSION && [0, 1, 2].every(k => sp.d.series.get(takes[k].id) !== serVorher[k]),
+        'fertig ' + fertig + ' | ' + takes.map((t, k) => t.code + ' ' + JSON.stringify(z[k])).join(' | '));
+      check('I4b', '„Alle neu analysieren“: Take ohne Audio genannt, bleibt unverändert und anders gerechnet (mit Grund); Referenz danach nur aus gleich gerechneten Takes, gespeichert, übergangene Takes gezählt',
+        z[3].kern === '3.0.0' && z[3].hist === '' && sp.d.series.get(tD.id) === serVorher[3]
+        && new RegExp('Ohne Audio, nicht neu zu rechnen: ' + tD.code + ' ').test(text) && new RegExp('bleiben anders gerechnet: ' + tD.code + ' .*Kern 3\\.0\\.0 statt ' + D.VERSION.replace(/\./g, '\\.')).test(text)
+        && !!refs.a && [tA.id, tB.id, tC.id].indexOf(refs.a.takeId) >= 0 && refs.a.d34 !== 999 && !!gesp.a && gesp.a.takeId === refs.a.takeId && p.st().refsUebergangen.a === 1 && /Referenzen neu bestimmt/.test(text),
+        JSON.stringify(z[3]) + ' | Referenz /a/ ' + (refs.a ? refs.a.code + ' ' + Math.round(refs.a.d34) : 'keine') + ', übergangen ' + p.st().refsUebergangen.a + ' | „' + text + '“');
+      check('I4b', '„Alle neu analysieren“: Fortschritt sichtbar (Take n von N, Rahmen), Abbrechen-Knopf und gesperrter Take-Knopf während des Laufs, danach frei',
+        lauf.length >= 3 && lauf.some(e => new RegExp('^Neu-Analyse 1 von 3: ' + tA.code + ' \\(').test(e.text)) && lauf.some(e => /Neu-Analyse 3 von 3: .* — \d+ \/ \d+ Rahmen$/.test(e.text))
+        && lauf.every(e => e.busy && e.abbruchSichtbar && e.takeGesperrt) && !p.st().busy && p.el('btn-reanalyse-abbruch').hidden && !p.el('btn-reanalyse-all').disabled,
+        lauf.length + ' Fortschrittszeilen, z. B. „' + (lauf[1] || lauf[0] || {}).text + '“');
+      p.schliessen();
+    } catch (e) { check('I4b', 'Ablauf „Alle neu analysieren“ läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    try {
+      // Abbrechen mitten im zweiten Take (feiner Rahmenabstand: mehrere Blöcke je Take).
+      const { sp, p, takes } = await chronikMitTakes(3, 0, []);
+      p.st().settings.hopS = 0.01;
+      const serVorher = takes.map(t => sp.d.series.get(t.id));
+      let geklickt = '';
+      const log = mitschreiben(p, v => { if (!geklickt && /^Neu-Analyse 2 von 3: .* — (\d+) \/ (\d+) Rahmen$/.test(v) && +RegExp.$1 < +RegExp.$2) { geklickt = v; p.klick('btn-reanalyse-abbruch'); } });
+      p.klick('btn-reanalyse-all');
+      const fertig = await p.warte(() => !p.st().busy && /abgebrochen/.test(p.el('reanalyse-all-text').textContent) && !/wird abgebrochen$/.test(p.el('reanalyse-all-text').textContent), 60000);
+      const z = takes.map(t => zustand(sp, t)), text = p.el('reanalyse-all-text').textContent, refs = p.st().refs;
+      check('I4b', '„Alle neu analysieren“ abbrechbar mitten in einem Take: fertige Takes neu, der laufende und die übrigen unverändert und benannt, Referenz nur aus dem neu gerechneten',
+        fertig && !!geklickt && z[0].kern === D.VERSION && z[0].hist === '3.0.0' && z[1].kern === '3.0.0' && z[1].hist === '' && z[2].kern === '3.0.0' && z[2].hist === ''
+        && sp.d.series.get(takes[1].id) === serVorher[1] && sp.d.series.get(takes[2].id) === serVorher[2]
+        && new RegExp('^Neu-Analyse abgebrochen: 1 von 3 .*2 unverändert: ' + takes[1].code + ' .*' + takes[2].code + ' ').test(text) && !!refs.a && refs.a.takeId === takes[0].id && !p.st().busy,
+        'geklickt bei „' + geklickt + '“ | ' + takes.map((t, k) => t.code + ' ' + JSON.stringify(z[k])).join(' | ') + ' | „' + text + '“');
+      p.schliessen();
+    } catch (e) { check('I4b', 'Ablauf Abbrechen läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    process.removeListener('unhandledRejection', aufFehler);
+    const neueFehler = U.fehler.splice(fehlerVorher);
+    check('I4b', 'app.js: keine Ausnahme in den nachgespielten Neu-Analysen', neueFehler.length === 0, neueFehler.slice(0, 3).join(' || '));
+  }
+
   /* ---------- I4c: CSV für Excel DE ---------- */
   {
     const { C } = H, T2 = require(path.join(__dirname, 't2_pruefstaerke.js'));
