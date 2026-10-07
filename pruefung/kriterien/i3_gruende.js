@@ -285,4 +285,109 @@ module.exports = async function (H) {
       !bad.length && geprueft >= 100 && zaehl['Nummer mehrdeutig'] > 0 && zaehl['zwei Resonanzen in einem Gipfel möglich'] > 0 && zaehl['im Rauschboden'] > 0,
       geprueft + ' ungültige Formanten geprüft, Gründe ' + JSON.stringify(zaehl) + (bad.length ? ' — ' + bad.join(' | ') : ''));
   }
+
+  /* ---------- I3c: Live-Boden ohne Kalibrierung ---------- */
+  /* Regel aus dem Vertrag V3 (analysis.js estimateFloor), hier unabhängig nachgebaut: Pegel sortieren; größte
+     Lücke zwischen 5 % und 95 %; ab 10 dB ist der Boden der Median darunter (bekannt), sonst leisester
+     Pegel − 24 (unbekannt), beides nicht unter −95; unter 10 Pegeln −70 (unbekannt). */
+  function regelV3(pegel) {
+    const l = pegel.filter(isFinite).sort((a, b) => a - b);
+    if (l.length < 10) return { db: -70, known: false };
+    const lo = Math.max(1, Math.ceil(l.length * 0.05)), hi = Math.floor(l.length * 0.95);
+    let cut = -1, gap = 0;
+    for (let j = lo; j <= hi; j++) if (l[j] - l[j - 1] > gap) { gap = l[j] - l[j - 1]; cut = j; }
+    if (gap >= 10 && cut > 0) { const q = l.slice(0, cut), m = q.length >> 1; return { db: Math.max(-95, q.length % 2 ? q[m] : 0.5 * (q[m - 1] + q[m])), known: true }; }
+    return { db: Math.max(-95, l[0] - 24), known: false };
+  }
+  const NZ = 5e-3;   // Raumrauschen, gleichverteilt: rund 35 dB unter dem Vokal
+  const leise = (s, seed) => noise(Math.round(s * SR), NZ, seed);
+  const mitNz = (x, seed) => { const z = noise(x.length, NZ, seed), y = Float64Array.from(x); for (let i = 0; i < y.length; i++) y[i] += z[i]; return y; };
+  const vokal = (f0, s, env) => { const y = D.synthVowel(f0, AV[0], AV[1], s, SR); if (env) for (let i = 0; i < y.length; i++) y[i] *= Math.pow(10, env(i / SR) / 20); return y; };
+  const bodenEcht = D.rmsDb(D.resample(noise(SR, NZ, 99), SR, TSR));
+  /* Live-Schleife über ein Signal: je Takt 40 ms weiter. Mitgeschrieben wird je Takt der Puffer davor, der
+     Boden, den app.js an analyseAt übergibt, der Rahmen und die Anzeige. */
+  async function liveLauf(sig) {
+    const seite = await appSeite(), DD = seite.ab.VAREDSP, echt = DD.analyseAt, out = [];
+    let letzt = null;
+    DD.analyseAt = function (ds, sr, idx, o) { const r = echt(ds, sr, idx, o); letzt = { r, floorDb: o.floorDb }; return r; };
+    seite.quelle.sig = sig;
+    for (let pos = Math.round(0.2 * 48000); pos <= sig.length; pos += 1920) {
+      seite.quelle.pos = pos;
+      const ring = seite.st.rmsRing.slice();
+      letzt = null; seite.takt();
+      if (!letzt) continue;
+      out.push({ t: pos / 48000, pos, ring, floorDb: letzt.floorDb, r: letzt.r, f0: seite.kachel('f0').text, boden: seite.kachel('floor'),
+        wort: seite.el('gate-state').textContent, grund: seite.el('gate-reason').textContent, pegel: (seite.canv['level-canvas'] || []).filter(o => o[0] === 'fillText').map(o => o[1][0]).join(' | '),
+        striche: (seite.canv['level-canvas'] || []).filter(o => o[0] === 'moveTo').length });
+    }
+    DD.analyseAt = echt; seite.ende();
+    return out;
+  }
+  // Vergleich mit dem echten Boden (wie nach einer Kalibrierung), gleicher Ausschnitt wie live.
+  const referenz = (sig, pos) => { const sl = D.resample(Float32Array.from(sig.subarray(pos - 9600, pos)), 48000, TSR); return D.analyseAt(sl, TSR, sl.length - 1, { align: 'end', floorDb: bodenEcht }); };
+  {
+    // Decrescendo ohne Pause davor, ohne Kalibrierung: die alte Klemme verwarf live den leisen Teil als Pause.
+    const sig = mitNz(concat([vokal(147, 8, t => -36 * t / 8), leise(1, 31)]), 32);
+    const bad = [];
+    let ref = 0, verl = 0, extra = 0, extraGueltig = 0, falschGueltig = 0, tVerl = '';
+    try {
+      const L = await liveLauf(sig);
+      for (const e of L) {
+        const k = referenz(sig, e.pos);
+        if (k.voiced) ref++;
+        if (k.voiced && !e.r.voiced) { verl++; if (!tVerl) tVerl = e.t.toFixed(2) + ' s'; }
+        if (!k.voiced && e.r.voiced) { extra++; for (let q = 0; q < 5; q++) if (e.r.valid[q]) { extraGueltig++; if (Math.abs(e.r.F[q] - AV[0][q]) > 130) falschGueltig++; } }
+        if (e.r.voiced && e.f0 === 'Pause') bad.push(e.t.toFixed(2) + ' s stimmhaft, Anzeige Pause');
+      }
+    } catch (e) { bad.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    check('I3c', 'Live ohne Kalibrierung, Decrescendo um 36 dB ohne Pause davor: kein Takt, den der echte Boden stimmhaft misst, gilt als Pause; zusätzlich stimmhafte Takte ohne falschen gültigen Formanten',
+      !bad.length && ref >= 150 && verl === 0 && falschGueltig === 0,
+      'stimmhaft mit echtem Boden ' + ref + ', live verloren ' + verl + (tVerl ? ' ab ' + tVerl : '') + ', zusätzlich ' + extra + ' (gültige Formanten ' + extraGueltig + ', davon > 130 Hz falsch ' + falschGueltig + ')' + (bad.length ? ' — ' + bad.slice(0, 3).join('; ') : ''));
+  }
+  {
+    // Dieselbe Regel wie offline, Takt für Takt auf dem Puffer davor; Anzeige: geschätzt aus Stille als Zahl,
+    // sonst „Stimmschwelle angenommen“ und kein Bodenwert.
+    const sig = mitNz(concat([leise(1.5, 41), vokal(147, 2.5), leise(0.8, 42), vokal(196, 11, t => -6 * t / 11), leise(1, 43)]), 44);
+    const bad = [], z = { bekannt: 0, angenommen: 0 };
+    try {
+      const L = await liveLauf(sig);
+      for (const e of L) {
+        const soll = regelV3(e.ring);
+        if (!(Math.abs(e.floorDb - soll.db) < 1e-9)) { if (bad.length < 4) bad.push(e.t.toFixed(2) + ' s: Boden ' + r1(e.floorDb) + ' statt ' + r1(soll.db)); continue; }
+        const fmt1 = v => v.toFixed(1);
+        if (soll.known) {
+          z.bekannt++;
+          if (e.boden.text !== fmt1(soll.db) + ' dBFS (geschätzt aus Stille)' || !/unsure/.test(e.boden.klasse)) bad.push(e.t.toFixed(2) + ' s: „' + e.boden.text + '“');
+        } else {
+          z.angenommen++;
+          if (e.boden.text !== 'unbekannt · Stimmschwelle angenommen: ' + fmt1(soll.db + 12) + ' dBFS' || !/unsure/.test(e.boden.klasse)) bad.push(e.t.toFixed(2) + ' s: „' + e.boden.text + '“');
+        }
+        if (bad.length > 4) break;
+      }
+    } catch (e) { bad.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    check('I3c', 'Live-Boden ohne Kalibrierung nach der Regel aus V3 auf dem Puffer der letzten 10 s (Takt für Takt gleich); bekannt: „geschätzt aus Stille“ mit Zahl, sonst „unbekannt · Stimmschwelle angenommen: … dBFS“ statt eines Bodenwerts',
+      !bad.length && z.bekannt >= 50 && z.angenommen >= 50, JSON.stringify(z) + (bad.length ? ' — ' + bad.slice(0, 4).join('; ') : ''));
+  }
+  {
+    // Stille ohne Kalibrierung: Mit angenommenem Boden ist „über der Schwelle“ kein „Ton“. Keine Anzeige darf
+    // dann Ton behaupten; das Gatter meldet Pause, und der Pegelbalken zeigt keinen Bodenstrich.
+    const sig = mitNz(leise(3, 51), 52);
+    const bad = [], z = { angenommen: 0, ohnePeriode: 0 };
+    let beleg = '';
+    try {
+      const L = await liveLauf(sig);
+      for (const e of L) {
+        if (e.r.voiced) bad.push(e.t.toFixed(2) + ' s stimmhaft');
+        const ang = /Stimmschwelle angenommen/.test(e.boden.text);
+        if (ang) z.angenommen++;
+        if (e.r.tonalButAperiodic) z.ohnePeriode++;
+        // Das Gatterfenster (0,3 s) ist in den ersten Takten noch nicht voll und meldet selbst Übergang.
+        if (ang && (/Ton/.test(e.grund) || (e.t >= 0.8 && e.wort !== 'Pause'))) { if (bad.length < 4) bad.push(e.t.toFixed(2) + ' s: „' + e.wort + ' — ' + e.grund + '“'); }
+        if (ang && (!/Boden unbekannt · Stimmschwelle angenommen/.test(e.pegel) || e.striche !== 1)) { if (bad.length < 4) bad.push(e.t.toFixed(2) + ' s Pegelbalken „' + e.pegel + '“, ' + e.striche + ' Striche'); }
+        if (ang && e.r.tonalButAperiodic && !beleg) beleg = e.wort + ' — ' + e.grund;
+      }
+    } catch (e) { bad.push('Ausnahme ' + String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+    check('I3c', 'Stille ohne Kalibrierung: mit angenommenem Boden nie „Ton“, und ist das Gatterfenster voll, steht Pause statt „Übergang“; Pegelbalken nur mit der angenommenen Stimmschwelle, ohne Bodenstrich',
+      !bad.length && z.angenommen >= 50 && z.ohnePeriode >= 20, JSON.stringify(z) + ' | „' + beleg + '“' + (bad.length ? ' — ' + bad.join('; ') : ''));
+  }
 };

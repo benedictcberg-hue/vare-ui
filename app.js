@@ -174,11 +174,24 @@
   }
 
   /* ---------- Live-Schleife ---------- */
+  /* Rauschboden live. Kalibriert: der gemessene Boden. Sonst dieselbe Regel wie offline (A.bodenAusPegeln,
+     Vertrag V3), angewandt auf den Ringpuffer: die Pegel der 0,10-s-Fenster der letzten 10 s (250 Takte zu
+     40 ms) statt aller Rahmen eines Takes. Liegen darin zwischen Stille und Stimme 10 dB Lücke (Stille
+     mindestens 5 %, also 0,5 s), ist der Boden aus der Stille geschätzt. Sonst ist er unbekannt: Die
+     Stimmschwelle liegt dann 12 dB unter dem leisesten Pegel und heißt „angenommen“, und über stimmhaft
+     entscheidet die Periodizität. Früher galt hier min(q05, q50 − 20), die Schwelle lag also bei q50 − 8 dB:
+     Der leise Teil eines Decrescendo ohne Pause davor galt live als „Pause“ (nachgebildet: 36 dB in 8 s, ab
+     rund 16 dB unter dem Anfang jeder Takt) — derselbe Fehler, den V3 offline behoben hat (Bericht 4, M19).
+     Übertragen ist alles bis auf eins: Ein Take kennt alle seine Rahmen, live gibt es nur die Vergangenheit.
+     Der gerade gemessene Rahmen kommt erst nach der Entscheidung in den Puffer. Sonst läge die Schwelle stets
+     unter ihm, und schon der erste Takt einer Atempause hieße nicht „Pause“. Dafür ist nach mehr als 10 s
+     Gesang der Boden zu Beginn einer Pause unbekannt, bis 0,5 s Stille im Puffer liegen; solche Takte stehen
+     als „kein Periodenbezug“ da, nicht als Ton. Die Untergrenze von 5 % bleibt: Darunter würde ein einzelner
+     leiser Konsonant zum „bekannten“ Boden, und die Schwelle schnitte leise Stimme ab. */
   function floorNow() {
     if (st.cal) return { db: st.cal.floorDb, src: 'kalibriert' };
-    if (st.rmsRing.length < 25) return { db: -67, src: 'Vorgabe' };
-    var q05 = D.quantile(st.rmsRing, 0.05), q50 = D.quantile(st.rmsRing, 0.5);
-    return { db: Math.max(-90, Math.min(q05, q50 - 20)), src: 'geschätzt' };
+    var b = A.bodenAusPegeln(st.rmsRing);
+    return { db: b.db, src: b.known ? 'geschätzt' : 'angenommen' };
   }
   function tick(now) {
     st.raf = requestAnimationFrame(tick);
@@ -218,7 +231,8 @@
     STAT_KEYS.forEach(function (k) { setStat(k, 'Pause', false, true); });
     st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false]; st.lastCls = null;
     setGateWord('pause', null, reason);
-    drawLevel(NaN, st.cal ? st.cal.floorDb : -67);
+    var fl = floorNow();
+    drawLevel(NaN, fl.db, fl.src);
     drawD34({ state: 'pause', score: NaN, reason: reason }, null);
     drawSpec({ voiced: false, F: [], valid: [], BW: [], spectrumDb: null }, null);
     $('live-ref').textContent = '';
@@ -241,8 +255,10 @@
     if (rost) { var sp = document.createElement('span'); sp.className = 'rust unsicher-teil'; sp.textContent = rost; v.appendChild(sp); }
   }
   function renderLive(fr, gs, fl) {
-    drawLevel(fr.rmsDb, fl.db);
-    setStat('floor', fmt(fl.db, 1) + ' dBFS (' + fl.src + ')', fl.src !== 'kalibriert');
+    drawLevel(fr.rmsDb, fl.db, fl.src);
+    // Ein angenommener Boden ist kein Messwert: keine Rauschboden-Zahl, sondern die angenommene Stimmschwelle.
+    if (fl.src === 'angenommen') setStat('floor', 'unbekannt · Stimmschwelle angenommen: ' + fmt(fl.db + 12, 1) + ' dBFS', true);
+    else setStat('floor', fmt(fl.db, 1) + ' dBFS (' + (fl.src === 'geschätzt' ? 'geschätzt aus Stille' : fl.src) + ')', fl.src !== 'kalibriert');
     var cls = gs.state === 'stabil' ? gs.cls : null;
     if (cls !== st.lastCls || gs.state === 'pause') { st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false]; }
     st.lastCls = cls;
@@ -251,8 +267,13 @@
       // Lauter Ton, aber kein Periodenbezug — das ist etwas anderes als Stille und darf nicht
       // „Pause“ heißen. Alle abgeleiteten Werte bleiben leer, der Pegel wird weiter gezeigt.
       STAT_KEYS.forEach(function (k) { if (k !== 'floor') setStat(k, '–', true); });
-      setGateWord('uebergang', null, 'Ton, aber kein Periodenbezug (' + fmt(fr.rmsDb, 1) + ' dBFS) — Vibrato, Knarren oder Geräusch?');
-      drawD34({ state: 'uebergang', score: NaN, reason: 'kein Periodenbezug' }, null); drawSpec(fr, null); drawHist(); $('live-ref').textContent = '';
+      /* Mit angenommenem Boden liegt die Schwelle absichtlich unter allem Gemessenen: „über der Schwelle“
+         heißt dann nicht „Ton“, und Stille ist von Geräusch nicht zu trennen. Gesagt wird nur, was feststeht;
+         meldet das Gatter Pause, bleibt es dabei. */
+      var ang = fl.src === 'angenommen', wort = (ang && gs.state === 'pause') ? 'pause' : 'uebergang';
+      setGateWord(wort, null, ang ? 'kein Periodenbezug (' + fmt(fr.rmsDb, 1) + ' dBFS) — Stille oder Geräusch? Ohne Kalibrierung und ohne Stille ist der Boden unbekannt'
+        : 'Ton, aber kein Periodenbezug (' + fmt(fr.rmsDb, 1) + ' dBFS) — Vibrato, Knarren oder Geräusch?');
+      drawD34({ state: wort, score: NaN, reason: 'kein Periodenbezug' }, null); drawSpec(fr, null); drawHist(); $('live-ref').textContent = '';
       return;
     }
     if (!fr.voiced) {
@@ -328,13 +349,16 @@
     $('live-ref').textContent = CH.refZeile(cls, ref, gs.score, cls ? (st.refsUebergangen[cls] || 0) : 0);
     drawD34(gs, ref); drawSpec(fr, disp); drawHist();
   }
-  function drawLevel(rms, floor) {
+  // Pegelbalken mit Boden und Stimmschwelle. Ist der Boden nur angenommen, steht kein Bodenstrich da, nur die Schwelle.
+  function drawLevel(rms, floor, src) {
     var c = CH.setupCanvas($('level-canvas'), 40), ctx = c.ctx, w = c.w, x = function (db) { return (Math.max(-80, Math.min(0, db)) + 80) / 80 * w; };
+    var ang = src === 'angenommen';
     ctx.fillStyle = COL.line; ctx.fillRect(0, 12, w, 16);
     if (isFinite(rms)) { ctx.fillStyle = rms > -3 ? COL.rust : COL.ink; ctx.fillRect(0, 12, x(rms), 16); }
-    ctx.strokeStyle = COL.muted; ctx.beginPath(); ctx.moveTo(x(floor), 6); ctx.lineTo(x(floor), 34); ctx.stroke();
+    if (!ang) { ctx.strokeStyle = COL.muted; ctx.beginPath(); ctx.moveTo(x(floor), 6); ctx.lineTo(x(floor), 34); ctx.stroke(); }
     ctx.strokeStyle = COL.rust; ctx.beginPath(); ctx.moveTo(x(floor + 12), 6); ctx.lineTo(x(floor + 12), 34); ctx.stroke();
-    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'right'; ctx.fillText(fmt(rms, 1) + ' dBFS', w - 4, 10); ctx.textAlign = 'left'; ctx.fillText('Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB', 4, 10);
+    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'right'; ctx.fillText(fmt(rms, 1) + ' dBFS', w - 4, 10); ctx.textAlign = 'left';
+    ctx.fillText(ang ? 'Boden unbekannt · Stimmschwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS' : 'Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB', 4, 10);
   }
   function drawD34(gs, ref) {
     var c = CH.setupCanvas($('d34-canvas'), 56), ctx = c.ctx, w = c.w, x = function (v) { return Math.max(0, Math.min(w, v / 1600 * w)); };
@@ -425,7 +449,7 @@
     var iv = setInterval(function () {
       var el = (performance.now() - t0) / 1000, acc = 0, cur = null, left = 0;
       for (var i = 0; i < phases.length; i++) { if (el < acc + phases[i].seconds) { cur = phases[i]; left = acc + phases[i].seconds - el; break; } acc += phases[i].seconds; }
-      if (cur) { $('cal-progress').textContent = cur.label + ' — noch ' + left.toFixed(1) + ' s'; drawLevel(st.rec.latest(0.1).length ? D.rmsDb(st.rec.latest(0.1)) : NaN, st.cal ? st.cal.floorDb : -67); }
+      if (cur) { $('cal-progress').textContent = cur.label + ' — noch ' + left.toFixed(1) + ' s'; var flK = floorNow(); drawLevel(st.rec.latest(0.1).length ? D.rmsDb(st.rec.latest(0.1)) : NaN, flK.db, flK.src); }
       if (el >= total + 0.1 || !st.rec || !st.rec.active) {
         clearInterval(iv);
         if (!st.rec || !st.rec.active) { st.calRunning = false; $('btn-cal').disabled = true; $('cal-progress').hidden = true; status('Kalibrierung abgebrochen — Mikrofon nicht mehr aktiv.', true); updateTakeButton(); return; }
@@ -1047,7 +1071,7 @@
     window.addEventListener('hashchange', route);
     window.addEventListener('resize', function () { if (st.rec && st.rec.active) return; drawHist(); });
     fillDevices();
-    drawLevel(NaN, -67); drawD34({ state: 'pause', score: NaN }, null); drawSpec({ voiced: false, F: [], valid: [], BW: [] }, null); drawHist();
+    var fl0 = floorNow(); drawLevel(NaN, fl0.db, fl0.src); drawD34({ state: 'pause', score: NaN }, null); drawSpec({ voiced: false, F: [], valid: [], BW: [] }, null); drawHist();
   }
   window.VAREAPP = { state: st, init: init, finishTake: finishTake, handlers: handlers, refreshChronik: refreshChronik, SETTINGS_DEFAULT: SETTINGS_DEFAULT };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

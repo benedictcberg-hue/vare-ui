@@ -71,6 +71,14 @@
   function estimateFloor(ds, sr, hopS) {
     var n = Math.round(D.MAIN_WINDOW * sr), hop = Math.round(hopS * sr), levels = [];
     for (var s = 0; s + n <= ds.length; s += hop) levels.push(D.rmsDb(ds.subarray(s, s + n)));
+    return bodenAusPegeln(levels);
+  }
+  /* Die Regel selbst, auf eine Liste von Pegeln der 0,10-s-Fenster: offline über alle Rahmen des Takes, live
+     (app.js floorNow) über den Ringpuffer der letzten 10 s — damit live und offline dieselbe Schwelle gilt.
+     Die übergebene Liste bleibt unverändert (live ist sie der Puffer in Zeitfolge). */
+  function bodenAusPegeln(pegel) {
+    var levels = [];
+    for (var p = 0; p < pegel.length; p++) if (isFinite(pegel[p])) levels.push(pegel[p]);
     if (levels.length < 10) return { db: -70, known: false, gapDb: NaN };
     levels.sort(function (a, b) { return a - b; });
     var lo = Math.max(1, Math.ceil(levels.length * 0.05)), hi = Math.floor(levels.length * 0.95);
@@ -526,7 +534,7 @@
     return m;
   }
 
-  var api = { DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
+  var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
     indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
