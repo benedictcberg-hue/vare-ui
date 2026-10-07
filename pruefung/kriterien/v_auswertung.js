@@ -300,4 +300,35 @@ module.exports = async function (H) {
     const falsch = ok.filter(([, tk, a]) => !A.computeRefs([tk], {}, a).a || uv(tk, a) !== '').map(([nm, tk, a]) => nm + ': „' + uv(tk, a) + '“');
     check('V2', 'Vergleichbarkeit: nur live wirksame Gatterwerte und fehlende Angaben in aktuell (gelten als Vorgabe) schließen nicht aus', falsch.length === 0, falsch.join(' | '));
   }
+
+  /* ---------- V3: Zusammenfassung langer Takes, stabil-Anteil, Rauschboden ohne Stille (analysis.js) ---------- */
+
+  /* V3a: lange Takes (Bericht 2, Befund 7). stats() nahm Minimum und Maximum mit Math.min.apply: jeder
+     Wert ein Argument, ab etwa 125 000 Werten RangeError. Das sind 21 min bei 10 ms Raster oder 11 min
+     bei 5 ms; app.js speicherte den Take dann nicht. 400 000 Werte = 67 min bei 10 ms. */
+  {
+    const n = 400000, a = new Float64Array(n);
+    for (let i = 0; i < n; i++) a[i] = -30 - (i % 977) * 0.05;
+    a[123457] = -95.5; a[333333] = -3.25; a[5] = NaN; a[6] = Infinity;
+    let r, fehler = '';
+    try { r = A.stats(a, true); } catch (e) { fehler = e.constructor.name + ': ' + e.message; }
+    check('V3', 'stats über 400 000 Werte: kein Absturz, Minimum und Maximum exakt, nicht-endliche Werte übergangen',
+      !fehler && r.min === -95.5 && r.max === -3.25 && r.n === n - 2, fehler || 'min ' + r.min + ', max ' + r.max + ', n ' + r.n);
+    const leer = A.stats([NaN], true);
+    check('V3', 'stats ohne endlichen Wert: Minimum und Maximum NaN, n 0', Number.isNaN(leer.min) && Number.isNaN(leer.max) && leer.n === 0, JSON.stringify(leer));
+  }
+  {
+    // Derselbe Weg wie analyseTake: summarise über eine Serie mit 400 000 Rahmen (Pegel aller Rahmen
+    // gehen in stats(…, true)). Nur jeder hundertste Rahmen stimmhaft, damit der Lauf kurz bleibt.
+    const n = 400000, ser = A.makeSeries(n);
+    for (let i = 0; i < n; i++) {
+      ser.t[i] = 0.01 * i; ser.rms[i] = -40 - (i % 500) * 0.01; ser.gate[i] = 0; ser.cls[i] = -1; ser.score[i] = NaN; ser.flags[i] = 0;
+      if (i % 100 === 0) { ser.flags[i] = A.FLAG.VOICED; ser.f0[i] = 147; ser.shr[i] = -20 - (i % 7); }
+    }
+    ser.rms[250000] = -88.5;
+    let s, fehler = '';
+    try { s = A.summarise(ser, { hopS: 0.01, durationS: n * 0.01, floorDb: -90, floorSource: 'calibration', floorKnown: true }); } catch (e) { fehler = e.constructor.name + ': ' + e.message; }
+    check('V3', 'Zusammenfassung eines Takes mit 400 000 Rahmen (67 min bei 10 ms, 33 min bei 5 ms) läuft durch, Pegel-Minimum und -Maximum stimmen',
+      !fehler && s.rms.min === Math.fround(-88.5) && s.rms.max === -40 && s.nFrames === n, fehler || 'rms min ' + s.rms.min + ', max ' + s.rms.max);
+  }
 };

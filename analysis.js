@@ -14,7 +14,14 @@
     var vals = [];
     for (var i = 0; i < arr.length; i++) if (isFinite(arr[i])) vals.push(arr[i]);
     var o = { med: D.median(vals), q1: D.quantile(vals, 0.25), q3: D.quantile(vals, 0.75), n: vals.length };
-    if (extra) { o.min = vals.length ? Math.min.apply(null, vals) : NaN; o.max = vals.length ? Math.max.apply(null, vals) : NaN; }
+    /* Minimum und Maximum per Schleife: Math.min.apply übergibt jeden Wert als Argument, ab etwa
+       125 000 Werten (21 min bei 10 ms Raster, 11 min bei 5 ms) lief der Stapel über (RangeError), und
+       der Take wurde nicht gespeichert (Bericht 2, Befund 7). */
+    if (extra) {
+      var mn = Infinity, mx = -Infinity;
+      for (var k = 0; k < vals.length; k++) { if (vals[k] < mn) mn = vals[k]; if (vals[k] > mx) mx = vals[k]; }
+      o.min = vals.length ? mn : NaN; o.max = vals.length ? mx : NaN;
+    }
     return o;
   }
 
