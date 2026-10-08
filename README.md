@@ -250,7 +250,7 @@ Windows länger.
 
 | Modul | IDs | prüft | Linux |
 |---|---|---|---|
-| eingebaut in `test_dsp.js` | T1–T27 | Abnahmetabelle, Sweeps, Gatter, Sprünge, CSV-Grundlagen, Schritt 0 | 8 s |
+| eingebaut in `test_dsp.js` | T1–T27 | Abnahmetabelle, Sweeps, Gatter, Sprünge, CSV-Grundlagen, Schritt 0 | 10 s |
 | `n_kern.js` | A1–A4 | Nachprüfung des Kerns: Feinspur mit Oktavkontrolle, Mischrahmen am Tonwechsel, Atempause im Raum und mit Brumm, digitale Stille; SHR an Rändern, Tonwechseln und bei Hauch; Formanten nach dem Teiltonabstand (hohe Lage), enge Cluster, Vokalwechsel; Grundton bei starkem Hauch (Unterton, Oktave offen); SFR/CPP neben Frikativen | 181 s |
 | `k_kern.js` | K1–K4 | Feinspur und Tonsprünge; Nummerierung, Lesarten, Verschmelzung, Rauschboden; Gegenprobe des Grundtons; SHR-Raster | 162 s |
 | `v_auswertung.js` | V1–V3 | Live-Gatter im Vokalwechsel und bei Vibrato; Grenzvokal, Referenzen, Pins; lange Takes, „stabil“, Boden ohne Stille | 30 s |
