@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>VARE — Session-Recorder</title>
+<link rel="stylesheet" href="./style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%230C1410%27/%3E%3Ctext x=%2716%27 y=%2723%27 font-size=%2720%27 text-anchor=%27middle%27 fill=%27%23C9A227%27 font-family=%27serif%27%3EV%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<header>
+  <h1>VARE <span class="muted small">Session-Recorder · Kern <span id="kernel-version" class="mono">–</span></span></h1>
+  <p class="small muted" id="korpus-stand"></p>
+  <nav id="nav" hidden>
+    <a href="#/aufnahme" id="nav-aufnahme">Aufnahme</a>
+    <a href="#/chronik" id="nav-chronik">Chronik</a>
+    <button type="button" id="btn-abmelden" class="knopf">Token entfernen</button>
+  </nav>
+</header>
+<main>
+  <section id="anmeldung" class="panel anmeldung">
+    <h2>Mit dem privaten Korpus verbinden</h2>
+    <p>
+      Diese Seite ist öffentlich und enthält <strong>keine Messwerte</strong> — weder deine Marken
+      noch Aufnahmen noch Auswertungen. Sie liest <code>korpus.json</code> aus dem privaten Repo
+      <code id="korpus-repo" class="mono"></code> mit deinem eigenen GitHub-Token, und zwar nur lesend.
+      Erst danach erscheint die Oberfläche.
+    </p>
+    <p class="small muted">
+      Alles Weitere bleibt ohnehin auf diesem Gerät: Aufnahmen, Chronik und Export liegen im
+      Browserspeicher. Es geht nichts an GitHub zurück.
+    </p>
+    <label for="token">GitHub-Token
+      <input type="password" id="token" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
+    </label>
+    <label class="inline"><input type="checkbox" id="token-merken"> Token in diesem Browser merken</label>
+    <div class="row">
+      <button type="button" id="btn-verbinden" class="primary">Verbinden</button>
+      <span id="anmeldung-stand" class="small muted"></span>
+    </div>
+    <p id="anmeldung-fehler" class="fehler small" role="alert"></p>
+    <details>
+      <summary>Token anlegen (einmalig)</summary>
+      <ol class="small">
+        <li>github.com → Settings → Developer settings → Personal access tokens → <strong>Fine-grained tokens</strong> → Generate new token.</li>
+        <li>Repository access: <em>Only select repositories</em> → <strong>nur</strong> <code id="korpus-repo-2" class="mono"></code>.</li>
+        <li>Permissions → Repository permissions → <strong>Contents: Read-only</strong>. Sonst nichts.</li>
+        <li>Token hier einfügen und „Verbinden“.</li>
+      </ol>
+      <p class="small muted">
+        Schreibrechte braucht die Seite nicht. Ein Token mit mehr Rechten als nötig ist das einzige
+        Risiko, das diese Hülle überhaupt hat.
+      </p>
+    </details>
+    <p class="small muted" id="anmeldung-file" hidden>
+      Aus <code>file://</code> heraus ist das Mikrofon gesperrt und ein gemerktes Token wäre für
+      andere lokale Seiten lesbar. Im Ordner starten: <code>python -m http.server 8000</code>.
+    </p>
+  </section>
+
+  <div id="app" hidden>
+  <div class="notice warn" id="notice-file" hidden>
+    <strong>Mikrofon ist aus <code>file://</code> gesperrt.</strong> Im Ordner dieser Datei starten:
+    <code>python -m http.server 8000</code>, dann <a href="http://localhost:8000">http://localhost:8000</a> öffnen.
+    Die Chronik ist auch hier lesbar; aufnehmen geht nur über http://localhost oder https.
+  </div>
+  <div class="notice" id="notice-origin">
+    Die Chronik liegt nur in diesem Browser unter dieser Adresse (<span id="origin-name" class="mono"></span>). Nichts verlässt das Gerät.
+    Andere Adresse oder anderer Browser = andere Chronik; Übertragung per JSON-Sicherung.
+  </div>
+  <div class="notice warn" id="notice-flags" hidden></div>
+
+  <!-- ======================= AUFNAHME ======================= -->
+  <section id="view-aufnahme" hidden>
+    <div class="panel">
+      <h2>Mikrofon</h2>
+      <div class="row">
+        <label>Gerät <select id="mic-device"><option value="">Standard</option></select></label>
+        <button id="btn-mic" class="primary">Mikrofon starten</button>
+        <span id="mic-info" class="mono small muted">kein Mikrofon aktiv</span>
+      </div>
+      <canvas id="level-canvas" height="40" aria-label="Pegel"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>Kalibrierung <span class="muted small">5 s Stille, 3 s /a/, 1 s Ausklang</span></h2>
+      <div id="cal-status" class="small">Noch keine Kalibrierung in dieser Sitzung.</div>
+      <div id="cal-warnings" class="rust small"></div>
+      <div class="row">
+        <button id="btn-cal" class="primary" disabled>Kalibrieren</button>
+        <span id="cal-progress" class="mono" hidden></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Live</h2>
+      <div class="row">
+        <span id="gate-state" class="pause">Pause</span>
+        <span id="gate-reason" class="muted"></span>
+        <label class="inline">Vokalabsicht <select id="take-intent"></select></label>
+      </div>
+      <div class="bar-row"><span class="muted small">ΔF3–4</span><canvas id="d34-canvas" height="56" aria-label="Abstand F3 zu F4"></canvas></div>
+      <div id="live-ref" class="small muted"></div>
+      <div class="grid" id="live-grid">
+        <div class="stat" id="st-f0"><span class="k">F0</span><span class="v" id="v-f0">–</span></div>
+        <div class="stat" id="st-f2"><span class="k">F2</span><span class="v" id="v-f2">–</span></div>
+        <div class="stat" id="st-d34"><span class="k">ΔF3–4</span><span class="v" id="v-d34">–</span></div>
+        <div class="stat" id="st-f1"><span class="k">F1 · F1/F0</span><span class="v" id="v-f1">–</span></div>
+        <div class="stat" id="st-f3"><span class="k">F3</span><span class="v" id="v-f3">–</span></div>
+        <div class="stat" id="st-f4"><span class="k">F4</span><span class="v" id="v-f4">–</span></div>
+        <div class="stat" id="st-f5"><span class="k">F5</span><span class="v" id="v-f5">–</span></div>
+        <div class="stat" id="st-d45"><span class="k">ΔF4–5</span><span class="v" id="v-d45">–</span></div>
+        <div class="stat" id="st-sfr"><span class="k">SFR 2400–3200 − 0–2000</span><span class="v" id="v-sfr">–</span></div>
+        <div class="stat" id="st-shr"><span class="k">SHR</span><span class="v" id="v-shr">–</span></div>
+        <div class="stat" id="st-cpp"><span class="k">CPP (eigene Skala)</span><span class="v" id="v-cpp">–</span></div>
+        <div class="stat" id="st-h1h2"><span class="k">H1−H2 · H1*−H2*</span><span class="v" id="v-h1h2">–</span></div>
+        <div class="stat" id="st-tube"><span class="k">Rohrlänge (Modell)</span><span class="v" id="v-tube">–</span></div>
+        <div class="stat" id="st-floor"><span class="k">Rauschboden</span><span class="v" id="v-floor">–</span></div>
+      </div>
+      <p class="small muted" id="live-hints"></p>
+      <canvas id="spec-canvas" height="170" aria-label="Teiltonleiter und Formanten 0 bis 5 kHz"></canvas>
+      <canvas id="hist-canvas" height="140" aria-label="Verlauf F2, F3 und 2·F0, letzte 20 Sekunden"></canvas>
+      <div class="row">
+        <button id="btn-pruef">Prüfsignal durch die Kette</button>
+        <span class="small muted">Synthetischer /a/ bei G3 mit bekannten Formanten — erwartet gegen gemessen.</span>
+      </div>
+      <div id="pruef-out" class="table-wrap small"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Schritt 0 — Sitzungskontext</h2>
+      <p class="small muted">Einsingen und Pausen verändern die Stimme.
+        Diese vier Angaben entscheiden, ob zwei Takes überhaupt vergleichbar sind. Sie werden mitgeschrieben,
+        nicht geschätzt: was hier leer bleibt, steht in der CSV als −99 (Zahl) oder als leere Zelle (Text).</p>
+      <div class="row">
+        <label class="inline">Einsing-Status
+          <select id="ctx-warmup">
+            <option value="">– nicht angegeben</option>
+            <option value="kalt">kalt, nicht eingesungen</option>
+            <option value="kurz">kurz eingesungen</option>
+            <option value="voll">voll eingesungen</option>
+            <option value="nachpause">nach Pause wieder angewärmt</option>
+          </select>
+        </label>
+        <label class="inline">Minuten seit Einsingbeginn
+          <input type="number" id="ctx-warmup-min" min="0" max="600" step="1" size="4">
+        </label>
+      </div>
+      <div id="ctx-hinweis" class="notice warn" role="status" hidden></div>
+      <div class="row">
+        <span class="small">Sitzung <strong id="ctx-session-nr" class="mono">–</strong> ·
+          nächster Take ist Nummer <strong id="ctx-position" class="mono">–</strong> ·
+          Pause seit dem letzten Take <strong id="ctx-pause" class="mono">–</strong></span>
+        <button id="btn-neue-sitzung">Neue Sitzung beginnen</button>
+      </div>
+      <div class="small muted">Die Pause wird aus der Uhrzeit des letzten Takes gerechnet und läuft
+        mit — sie wird im Moment des Take-Starts festgehalten. Die Take-Position zählt innerhalb
+        dieser Sitzung fortlaufend; die Nummer eines gelöschten Takes wird nicht neu vergeben.
+        „Neue Sitzung beginnen“ setzt sie auf 1 zurück und verlangt eine neue Kalibrierung.
+        Die Minuten seit Einsingbeginn laufen mit: eingetragen wird der Stand im Moment der Eingabe,
+        jeder Take rechnet die Minute seines Starts. Liegen letzte Eingabe und letzter Take über drei
+        Stunden zurück, werden die Einsing-Angaben geleert — das ist dann eine andere Übungseinheit.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Take</h2>
+      <div class="row">
+        <label>Bezeichnung <input type="text" id="take-label" size="22"></label>
+        <button id="btn-take" class="primary" disabled>Take starten</button>
+        <span id="take-timer" class="mono">0,0 s</span>
+      </div>
+      <label>Kommentar <textarea id="take-comment"></textarea></label>
+      <div id="take-hint" class="small muted"></div>
+      <div id="take-progress" hidden></div>
+      <div id="take-result"></div>
+    </div>
+
+    <details class="panel">
+      <summary>Einstellungen</summary>
+      <div id="settings"></div>
+      <div class="row"><button id="btn-settings-reset">Vorgaben wiederherstellen</button></div>
+    </details>
+  </section>
+
+  <!-- ======================= CHRONIK ======================= -->
+  <section id="view-chronik" hidden>
+    <div class="panel">
+      <h2>Chronik</h2>
+      <div id="chronik-storage" class="small muted"></div>
+      <div class="row actions">
+        <button id="btn-export-csv">Alle als CSV</button>
+        <button id="btn-export-json">JSON-Sicherung</button>
+        <button id="btn-import-json">JSON importieren</button>
+        <input type="file" id="file-import" accept=".json,application/json" hidden>
+        <button id="btn-reanalyse-all">Alle neu analysieren</button>
+        <button id="btn-clear-all" class="danger">Alles löschen</button>
+      </div>
+      <div id="reanalyse-all" class="row small" aria-live="polite" hidden>
+        <span id="reanalyse-all-text"></span>
+        <button id="btn-reanalyse-abbruch" hidden>Abbrechen</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Referenzen je Vokal — engstes stabiles ΔF3–4</h3>
+      <div id="refs-table" class="table-wrap"></div>
+    </div>
+    <div class="panel">
+      <h3>Takes</h3>
+      <p class="small muted">Rost = Messwert unsicher oder fehlt. Gold ohne Strich = sicher gemessen, aber Befund:
+        F3 unter dem Mindestwert, mit dem der Take gerechnet wurde, SHR über −15 dB, gehaltene Tonsprünge.</p>
+      <div id="takes-list" class="table-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ======================= TAKE-DETAIL ======================= -->
+  <section id="view-take" hidden>
+    <div id="take-detail"></div>
+  </section>
+  </div><!-- /#app -->
+</main>
+<script src="./korpus.js"></script>
+<script src="./dsp.js"></script>
+<script src="./vowel.js"></script>
+<script src="./wav.js"></script>
+<script src="./csv.js"></script>
+<script src="./storage.js"></script>
+<script src="./analysis.js"></script>
+<script src="./calibration.js"></script>
+<script src="./recorder.js"></script>
+<script src="./chronik.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

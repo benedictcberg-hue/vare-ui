@@ -1,0 +1,85 @@
+/* VARE — Gestaltung: Forest Green und Gold. Rost ausschließlich für unsichere Messwerte. */
+:root {
+  --bg: #0C1410; --panel: #14201A; --line: #24352C; --ink: #E8EDE7; --muted: #8FA396; --gold: #C9A227; --rust: #A85A3C;
+  --serif: Georgia, "Times New Roman", "Noto Serif", serif;
+  --mono: Consolas, "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono", monospace;
+  --sans: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Sans", sans-serif;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); color-scheme: dark; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.45; }
+a { color: var(--gold); }
+h1, h2, h3 { font-family: var(--serif); font-weight: 400; margin: 0 0 .5rem; }
+h1 { font-size: 1.6rem; } h2 { font-size: 1.25rem; } h3 { font-size: 1.05rem; color: var(--muted); }
+.num { font-family: var(--serif); font-variant-numeric: tabular-nums; }
+.mono, .measure, output, code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+header { padding: 1rem 1rem .5rem; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; align-items: baseline; }
+header nav a { display: inline-block; min-height: 46px; line-height: 46px; padding: 0 1rem; text-decoration: none; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; }
+header nav a[aria-current="page"] { border-color: var(--gold); color: var(--gold); }
+main { max-width: 980px; margin: 0 auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+.notice { border: 1px solid var(--gold); border-radius: 8px; padding: .75rem 1rem; background: var(--panel); }
+.notice.warn { border-color: var(--rust); }
+.muted { color: var(--muted); }
+.rust { color: var(--rust); }
+.gold { color: var(--gold); }
+.row { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: center; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem .75rem; }
+.stat { border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; min-height: 46px; }
+.stat .k { display: block; color: var(--muted); font-size: .8rem; }
+.stat .v { display: block; font-family: var(--mono); font-size: 1.1rem; }
+.stat.unsure .v { color: var(--rust); border-bottom: 1px dashed var(--rust); }
+/* Befund: sicher gemessen, aber auffällig (F3 unter dem Mindestwert, SHR über −15 dB, gehaltene
+   Tonsprünge). Gold ohne Strich — Rost und Strich bleiben unsicheren Messwerten vorbehalten. */
+.stat.befund .v, .befund { color: var(--gold); }
+.stat.frozen .v { color: var(--muted); }
+/* Unsicherer Teil einer Kachel, deren übriger Wert trägt (F1/F0 bei unsicherem Grundton). */
+.unsicher-teil { border-bottom: 1px dashed var(--rust); }
+button, select, input[type="text"], input[type="file"], textarea { min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
+button { cursor: pointer; }
+button.primary { border-color: var(--gold); color: var(--gold); }
+button.danger { border-color: var(--rust); color: var(--rust); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+input[type="range"] { min-height: 46px; width: 100%; accent-color: var(--gold); }
+label { display: block; }
+label.inline { display: inline-flex; align-items: center; gap: .5rem; min-height: 46px; }
+textarea { width: 100%; min-height: 70px; }
+canvas { display: block; width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+#gate-state { font-family: var(--mono); font-size: 2.2rem; min-height: 46px; }
+#gate-state.pause { color: var(--muted); }
+#gate-state.uebergang { color: var(--rust); border: 1px dashed var(--rust); border-radius: 6px; padding: 0 .5rem; display: inline-block; }
+#gate-state.stabil { color: var(--gold); }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--muted); font-weight: 400; }
+td.num, th.num { text-align: right; font-family: var(--mono); }
+.table-wrap { overflow-x: auto; }
+.skeleton { height: 46px; border-radius: 6px; background: linear-gradient(90deg, var(--panel), var(--line), var(--panel)); background-size: 200% 100%; }
+@media (prefers-reduced-motion: no-preference) { .skeleton { animation: shimmer 1.4s linear infinite; } }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.small { font-size: .85rem; }
+.actions button { margin-right: .4rem; margin-bottom: .4rem; }
+details summary { cursor: pointer; min-height: 46px; line-height: 46px; color: var(--muted); }
+.setting { display: grid; grid-template-columns: 1fr auto; gap: .25rem .75rem; align-items: center; padding: .25rem 0; }
+.setting output { min-width: 5.5em; text-align: right; }
+.bar-row { display: grid; grid-template-columns: 90px 1fr; gap: .5rem; align-items: center; }
+.tag { display: inline-block; padding: 0 .4rem; border: 1px solid var(--line); border-radius: 4px; font-size: .8rem; color: var(--muted); }
+.tag.rust { border-color: var(--rust); color: var(--rust); }
+.tag.gold { border-color: var(--gold); color: var(--gold); }
+[hidden] { display: none !important; }
+
+/* Klassen statt Inline-Styles: die Content-Security-Policy der oeffentlichen Huelle
+   erlaubt kein style-Attribut. */
+.setting input[type="range"].voll { grid-column: 1 / -1; }
+th.spalte-breit { min-width: 180px; }
+.hover-zeile { min-height: 2.6em; }
+
+/* Anmeldung: die oeffentliche Seite zeigt vor der Verbindung nur dieses eine Feld. */
+.anmeldung { max-width: 620px; margin: 0 auto; }
+.anmeldung h2 { margin-top: 0; }
+.anmeldung input[type="password"] { width: 100%; font-family: var(--mono); }
+.anmeldung .fehler { color: var(--rust); }
+.anmeldung ol { padding-left: 1.2rem; }
+.anmeldung li { margin-bottom: .35rem; }
+.leer-hinweis { color: var(--muted); font-size: .9rem; }
