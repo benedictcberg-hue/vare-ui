@@ -294,7 +294,27 @@ module.exports = async function (H) {
       pruef('SHR-Zweifel', iS, [['rost', 'SHR ' + fmt(r.shr, 1) + ' (Raster ' + fmt(r.shrGrid) + ' Hz) / ' + fmt(r.shrOther, 1) + ' (Raster ' + fmt(anders) + ' Hz), unsicher: ' + grundWorte]], ['F0']);
     }
     if (iO >= 0) pruef('unter 60 Hz', iO, [['rost', 'Reihe unter 60 Hz, nicht geteilt']]);
-    if (iN >= 0 && rostTeile(hov(iN)).length) bad.push('sicherer Rahmen mit Rost: ' + hov(iN).slice(0, 120));
+    /* Sicherer Rahmen ohne Rost. Bis Kern 4.0 war der erste Rahmen mit sicherem Grundton und SHR im Prüftake auch
+       sonst sicher (Formanten und ΔF3–4 gültig). Seit Kern 4.1 stimmt das nicht mehr: Über 250 Hz Teiltonabstand
+       sind Formanten und ΔF3–4 zu Recht unsicher ('teilton', A3), und der Jitter-Ton trägt SHR-Zweifel 'rauschen'
+       (A2) — im Prüftake ist kein Rahmen mehr in allem sicher. Deshalb zwei Prüfungen statt einer, keine schwächer:
+       Im Prüftake zeigt der Rahmen mit sicherem Grundton und SHR weder F0 noch SHR noch H1−H2 in Rost; und ein
+       Rahmen, der in allem sicher ist (Grundton, SHR, alle fünf Formanten und ΔF3–4 gültig), zeigt gar keinen Rost —
+       aus einem eigenen sauberen Take /a/ auf G3. */
+    if (iN >= 0) { const r = rostTeile(hov(iN)).filter(t => /^(F0|SHR|H1−H2) /.test(t)); if (r.length) bad.push('sicherer Grundton/SHR mit Rost: ' + r.join(' ‖ ').slice(0, 120)); }
+    {
+      const sauber = await A.analyseTake(concat([noise(Math.round(0.2 * SR), 2e-4, 5), D.synthVowel(196, AV[0], AV[1], 0.6, SR), noise(Math.round(0.2 * SR), 2e-4, 6)]), SR, {});
+      const sS = sauber.series, FL = A.FLAG;
+      let iA = -1;
+      for (let i = 0; i < sS.t.length && iA < 0; i++) {
+        const fl = sS.flags[i];
+        if ((fl & FL.VOICED) && (fl & FL.D34VALID) && sS.valid[i] === 31 && !(fl & (FL.F0UNSURE | FL.F0KORR | FL.OCTAMBIG | FL.OCTAVE | FL.SHRUNSURE | FL.H1H2UNSURE))) iA = i;
+      }
+      const hA = iA >= 0 ? CHR.hoverText(sS, iA) : '';
+      if (iA < 0) bad.push('kein Rahmen in allem sicher im sauberen Take');
+      else if (rostTeile(hA).length) bad.push('sicherer Rahmen mit Rost: ' + hA.slice(0, 120));
+      else belege.push('in allem sicher ' + ohneSpans(hA).slice(0, 60));
+    }
     check('I2d', 'Hover (Detail): unsicherer Grundton samt SHR und H1−H2 in Rost mit Grund (Cepstrum-Wert bzw. fehlende Teiltonreihe), korrigierter mit altem Wert ohne Rost, SHR-Zweifel mit beiden Werten und Rastern in Rost, „Reihe unter 60 Hz, nicht geteilt“; sicherer Rahmen ohne Rost',
       !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : belege.join(' | ').slice(0, 400));
   }
