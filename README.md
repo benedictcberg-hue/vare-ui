@@ -251,8 +251,10 @@ Gezählt wird nur Weite und Dauer, ohne Urteil (`dsp.js` `detectJumps`):
 - **Restkanten:** Einzelne kurze Kanten bleiben, vor allem im Ausklang eines Raums mit langem Nachhall und
   bei Schritten knapp unter 5 HT mit Vibrato. Eine Atempause von nur 0,2 s im stark halligen Raum kann einen
   gehaltenen Scheinsprung ergeben; die Grenze der Pausentiefe hat dort nach beiden Seiten wenig Abstand. Ein
-  leiser, gehaltener Oktavbruch am Phrasenende kann als Ausklang entfallen. Die Grenzen sind an
-  synthetischen Räumen und Stimmen gemessen.
+  leiser, gehaltener Oktavbruch am Phrasenende kann als Ausklang entfallen. Färben Raum und rosa Rauschen den
+  vierten Teilton stark, kann die Feinspur auf drei Viertel der Periode springen; das ergibt einen
+  Scheinsprung von etwa 5 HT, auch gehalten (in synthetischen Räumen in rund jedem siebten Fall). Die
+  Grenzen sind an synthetischen Räumen und Stimmen gemessen.
 
 ## Signallücken
 
