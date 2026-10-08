@@ -444,8 +444,8 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   womöglich der falsche Formant gemeint.
 - Rost heißt „Messwert trägt nicht“. Ein sicher gemessener Befund (F3 unter dem Mindestwert, SHR über
   der Warnschwelle, gehaltene Tonsprünge) steht in Gold ohne Strich, ebenso ein geprüft korrigierter
-  Grundton in der F0-Spur. Ausnahme bisher: SHR an harten Ein- und Aussätzen (siehe „Bekannter
-  Fehler“).
+  Grundton in der F0-Spur. SHR an Ein- und Aussätzen, an Tonwechseln und bei Hauch steht als unsicher in
+  Rost, nie als Warnung (siehe „Grenze: SHR an Rändern, Tonwechseln und bei Hauch“).
 - In Pausen frieren alle Werte sichtbar ein; im Export steht −99. Ein lauter Ton ohne fassbare Periode
   heißt nicht „Pause“, sondern „kein Periodenbezug“.
 - Ohne Kalibrierung und ohne Stille ist der Rauschboden unbekannt. Dann steht „unbekannt ·
