@@ -309,10 +309,14 @@ module.exports = async function (H) {
       if (!nah(su2.F[k].teiltonShare, w)) bad.push('F' + (k + 1) + '.teiltonShare ' + su2.F[k].teiltonShare + ' statt ' + w);
     }
     // SFR je Halbton: Rahmen mit Rauschanteil verschieben den Median ihres Halbtons nicht.
-    const sN = A.makeSeries(6), mN = [[196, -10], [196, -12], [196, -14], [196, 20, 1], [196, 22, 1], [196, 24, 1]];
-    mN.forEach(([f0, sfr, u], i) => { sN.t[i] = 0.01 * i; sN.f0[i] = f0; sN.sfr[i] = sfr; sN.flags[i] = A.FLAG.VOICED; sN.sfrGrund[i] = u ? A.codeAus('sfrGrund', 'rauschanteil') : 0; });
-    const medN = A.normaliseSfr(sN), gr = medN && medN[Math.round(D.hzToMidi(196))];
-    if (!(Math.abs(gr - (-12)) < 1e-6) || !(Math.abs(sN.sfrn[3] - 32) < 1e-4)) bad.push('SFR je Halbton: Median ' + gr + ' statt −12, Rahmen mit Rauschanteil ' + sN.sfrn[3] + ' statt 32');
+    // Eine Ausnahme (etwa ein fehlendes Serienfeld) reißt dieses Kriterium, nicht das ganze Modul.
+    try {
+      const sN = A.makeSeries(6), mN = [[196, -10], [196, -12], [196, -14], [196, 20, 1], [196, 22, 1], [196, 24, 1]];
+      if (!sN.sfrGrund) throw new Error('Serie ohne sfrGrund');
+      mN.forEach(([f0, sfr, u], i) => { sN.t[i] = 0.01 * i; sN.f0[i] = f0; sN.sfr[i] = sfr; sN.flags[i] = A.FLAG.VOICED; sN.sfrGrund[i] = u ? A.codeAus('sfrGrund', 'rauschanteil') : 0; });
+      const medN = A.normaliseSfr(sN), gr = medN && medN[Math.round(D.hzToMidi(196))];
+      if (!(Math.abs(gr - (-12)) < 1e-6) || !(Math.abs(sN.sfrn[3] - 32) < 1e-4)) bad.push('SFR je Halbton: Median ' + gr + ' statt −12, Rahmen mit Rauschanteil ' + sN.sfrn[3] + ' statt 32');
+    } catch (e) { bad.push('SFR je Halbton: ' + kurz(e)); }
     // Ältere Serie ohne die Codes und Belege: Anteile NaN (nicht 0 = „nichts ausgelassen“), Median über alle Rahmen wie damals.
     const alt = {}; for (const k in ser2) if (NEU_ZAHL.concat(NEU_CODE.slice(2), ['slotTeilton', 'slotWechsel']).indexOf(k) < 0) alt[k] = ser2[k];
     let sa = null; try { sa = A.summarise(alt, { hopS: 0.01, durationS: ser2.t.length * 0.01, floorDb: -70, floorSource: 'estimate', floorKnown: true }); } catch (e) { bad.push('ältere Serie: Ausnahme ' + kurz(e)); }
