@@ -36,8 +36,22 @@ Fine-grained Personal Access Token, angelegt unter
 <https://github.com/settings/personal-access-tokens/new>:
 
 - Repository access: **nur** `vare-tools` (keine weiteren Repos)
-- Permissions → Repository → **Contents: Read-only**
-- Sonst nichts. Schreibrechte braucht die Seite nicht.
+- Permissions → Repository → **Contents: Read and write**
+- Sonst nichts.
+
+Lesend braucht die Seite das Token für `korpus.json`. Schreibend braucht sie es für genau eine
+Sache: die Ablage jeder Kalibrierung (siehe unten). Mit einem nur lesenden Token läuft alles
+andere weiter; die Kalibrierungen warten dann im Browser und die Seite sagt das sichtbar.
+
+### Ablage der Kalibrierung
+
+Nach jeder gelungenen Kalibrierung legt die Seite eine kleine JSON-Datei im privaten Repo ab:
+`vare-tools/data/input/kalibrierung-JJJJMMTT-hhmmss-<id>.json`. Darin stehen Uhrzeit (UTC und
+Wanduhr), Kernversion, Abtastrate, Rauschboden, Pegel des /a/, SNR gesamt und je Band, Ausklang
+und F1–F3 des /a/. Nicht darin: Gerätename, Audio, Takes. Eine vorhandene Datei wird nie
+überschrieben. Scheitert das Schreiben (offline, Token nur lesend), bleibt die Datei in einer
+Warteschlange im Browser und geht beim nächsten Verbinden raus; die Zeile unter der Kalibrierung
+nennt, was offen ist.
 
 Das Token bleibt im Browser (localStorage, wenn „merken“ angehakt ist, sonst nur für die
 Sitzung) und geht ausschließlich an `api.github.com`.

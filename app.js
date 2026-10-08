@@ -490,13 +490,57 @@
             var prev = all.filter(function (c) { return c.deviceLabel === rec.deviceLabel; })[0] || all[0] || null;
             var warnings = K.compare(prev, rec);
             st.cal = rec; st.calSession = true; st.rmsRing = [];
-            return S.putCalibration(rec).then(function () { renderCalStatus(warnings); });
+            return S.putCalibration(rec).then(function () { renderCalStatus(warnings); ablageEinreihen(rec); });
           }).catch(function (e) { status('Kalibrierung konnte nicht gespeichert werden: ' + e.message, true); }).then(function () {
             st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
           });
         } catch (e) { st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; status('Kalibrierung fehlgeschlagen: ' + e.message, true); updateTakeButton(); }
       }, 20);
     }
+  }
+
+  /* ---------- Ablage der Kalibrierung im privaten Repo ---------- */
+  /* Nach jeder gelungenen Kalibrierung geht eine kleine JSON-Datei mit den Messwerten nach
+     data/input/ im privaten Repo. Klappt das nicht (offline, Token nur lesend), bleibt sie in
+     einer Warteschlange im Browser und wird beim nächsten Verbinden erneut geschickt. Was offen
+     ist, steht sichtbar unter der Kalibrierung — nichts geht still verloren. */
+  function ablageAnzeigen(text, fehler) {
+    var el = $('ablage-status'); if (!el) return;
+    el.textContent = text || ''; el.className = 'small' + (fehler ? ' rust' : ' muted');
+  }
+  function ablageEinreihen(rec) {
+    var datei;
+    try { datei = KO.kalibrierungsDatei(rec); } catch (e) { ablageAnzeigen('Kalibrierung nicht für die Ablage aufbereitet: ' + e.message, true); return; }
+    return S.getMeta('ablageOffen', []).then(function (liste) {
+      liste = Array.isArray(liste) ? liste : [];
+      if (!liste.some(function (x) { return x.pfad === datei.pfad; })) liste.push(datei);
+      return S.setMeta('ablageOffen', liste);
+    }).then(ablageAbarbeiten).catch(function (e) { ablageAnzeigen('Kalibrierung nicht in die Warteschlange gelegt: ' + e.message, true); });
+  }
+  function ablageAbarbeiten() {
+    if (st.ablageLaeuft) return Promise.resolve();
+    st.ablageLaeuft = true;
+    var erledigt = 0;
+    function weiter() {
+      return S.getMeta('ablageOffen', []).then(function (liste) {
+        liste = Array.isArray(liste) ? liste : [];
+        if (!liste.length) { if (erledigt) ablageAnzeigen('Kalibrierung abgelegt in ' + KO.REPO + '/' + KO.ABLAGE + '.', false); return null; }
+        if (!st.token) { ablageAnzeigen(liste.length + ' Kalibrierung(en) warten auf die Ablage — sie werden nach dem Verbinden geschickt.', true); return null; }
+        var d = liste[0];
+        return KO.ablegen(st.token, d).then(function () {
+          return S.getMeta('ablageOffen', []).then(function (akt) {
+            akt = (Array.isArray(akt) ? akt : []).filter(function (x) { return x.pfad !== d.pfad; });
+            erledigt++;
+            return S.setMeta('ablageOffen', akt);
+          }).then(weiter);
+        }, function (e) {
+          ablageAnzeigen('Kalibrierung nicht abgelegt: ' + e.message + ' Sie bleibt im Browser und wird beim nächsten Verbinden erneut geschickt (' + liste.length + ' offen).', true);
+          return null;
+        });
+      });
+    }
+    return weiter().catch(function (e) { ablageAnzeigen('Ablage fehlgeschlagen: ' + e.message, true); })
+      .then(function () { st.ablageLaeuft = false; });
   }
 
   /* ---------- Take ---------- */
@@ -1206,7 +1250,7 @@
     var fehler = $('anmeldung-fehler'), stand = $('anmeldung-stand'), knopf = $('btn-verbinden');
     fehler.textContent = ''; stand.textContent = 'verbinde …'; knopf.disabled = true;
     return KO.laden(token).then(function (korpus) {
-      st.korpus = korpus;
+      st.korpus = korpus; st.token = token;
       CH.setMarken(korpus.marken);
       if (merken !== null) KO.tokenSchreiben(token, !!merken);
       /* Der Korpus liefert die Ausgangswerte, überschreibt aber nichts, was hier am Regler
@@ -1225,6 +1269,7 @@
         + (abweichend.length ? ' · hier abweichend eingestellt: ' + abweichend.join(', ') : '');
       $('live-hints').textContent = hintText();
       route();
+      ablageAbarbeiten();
     }).catch(function (e) {
       stand.textContent = ''; fehler.textContent = (e && e.message) || String(e);
       zeigeApp(false);
@@ -1233,7 +1278,7 @@
   function abmelden() {
     // Mitten in Take oder Kalibrierung nicht: das Mikrofon dabei abzuschalten, verdürbe die Aufnahme.
     if (st.taking || st.calRunning) { status(st.taking ? 'Erst den Take beenden, dann das Token entfernen.' : 'Erst die Kalibrierung abwarten, dann das Token entfernen.', true); return; }
-    KO.tokenLoeschen(); st.korpus = null;
+    KO.tokenLoeschen(); st.korpus = null; st.token = '';
     CH.setMarken([]);
     /* Nichts aus korpus.json bleibt sichtbar: die Kopfzeile nennt Stand und Gatterwerte des Korpus.
        Der Haken geht auf „nicht merken“ zurück — wer neu verbindet, entscheidet neu. */
