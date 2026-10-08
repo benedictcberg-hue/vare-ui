@@ -36,8 +36,22 @@ Fine-grained Personal Access Token, angelegt unter
 <https://github.com/settings/personal-access-tokens/new>:
 
 - Repository access: **nur** `vare-tools` (keine weiteren Repos)
-- Permissions → Repository → **Contents: Read-only**
-- Sonst nichts. Schreibrechte braucht die Seite nicht.
+- Permissions → Repository → **Contents: Read and write**
+- Sonst nichts.
+
+Lesend braucht die Seite das Token für `korpus.json`. Schreibend braucht sie es für genau eine
+Sache: die Ablage jeder Kalibrierung (siehe unten). Mit einem nur lesenden Token läuft alles
+andere weiter; die Kalibrierungen warten dann im Browser und die Seite sagt das sichtbar.
+
+### Ablage der Kalibrierung
+
+Nach jeder gelungenen Kalibrierung legt die Seite eine kleine JSON-Datei im privaten Repo ab:
+`vare-tools/data/input/kalibrierung-JJJJMMTT-hhmmss-<id>.json`. Darin stehen Uhrzeit (UTC und
+Wanduhr), Kernversion, Abtastrate, Rauschboden, Pegel des /a/, SNR gesamt und je Band, Ausklang
+und F1–F3 des /a/. Nicht darin: Gerätename, Audio, Takes. Eine vorhandene Datei wird nie
+überschrieben. Scheitert das Schreiben (offline, Token nur lesend), bleibt die Datei in einer
+Warteschlange im Browser und geht beim nächsten Verbinden raus; die Zeile unter der Kalibrierung
+nennt, was offen ist.
 
 Das Token bleibt im Browser (localStorage, wenn „merken“ angehakt ist, sonst nur für die
 Sitzung) und geht ausschließlich an `api.github.com`.
@@ -50,7 +64,10 @@ im Code — sie kommen aus `korpus.json` im privaten Repo.
 
 ## Start
 
-**GitHub Pages:** Settings → Pages → Deploy from a branch, **main** / **(root)**.
+**GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**. Veröffentlicht wird über
+`.github/workflows/pages.yml`, und zwar nur, wenn der Prüflauf auf ubuntu-latest und windows-latest grün ist.
+Nicht die Quelle „Deploy from a branch“ wählen: Dann veröffentlicht GitHub jeden Push auf main selbst, ohne
+Prüflauf, und das Gate in `pages.yml` greift nicht.
 Adresse: `https://benedictcberg-hue.github.io/vare-ui/`
 
 **Lokal (Windows 10, Edge oder Chrome):** im Ordner `py -m http.server 8000` (oder `python -m http.server 8000`), dann
@@ -73,11 +90,16 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    „Alle neu analysieren“ für jeden Take mit gespeichertem Audio (abbrechbar; Takes ohne Audio werden
    genannt und bleiben „anders gerechnet“). Verglichen und als Referenz genutzt werden nur Takes mit
    gleicher Rechenweise (Kernversion, Zusammenfassung, Gatter, Rahmenabstand, Streuungsgrenze).
+   Kein Take geht verloren: Vor der Analyse liegt die Aufnahme mit allen Angaben in IndexedDB. Wird die
+   Seite währenddessen neu geladen oder geschlossen, bietet sie die Aufnahme danach unter „Unvollendete
+   Analyse“ an (fortsetzen, WAV sichern, verwerfen); während Aufnahme und Analyse fragt der Browser vor
+   dem Verlassen nach. Take und Rahmenverlauf (und das WAV) werden in einer Transaktion gespeichert.
 3. **Kalibrierpflicht.** 5 s Stille, 3 s /a/, 1 s Ausklang vor dem ersten Take. Rauschboden,
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
 
-Die Zahlen und Regeln in diesem README gelten für **Kern 4.0.0** (`dsp.js`, `VERSION`).
+Die Zahlen und Regeln in diesem README gelten für **Kern 4.1.0** (`dsp.js`, `VERSION`). Wo eine Messung
+mit einem früheren Kern entstand, steht es dabei.
 
 ## Was „ungültig“ heißt
 
@@ -96,8 +118,8 @@ Ein Formant gilt nur als gültig, wenn alles zutrifft:
 
 ΔF3–4 ist nur gültig, wenn F3 und F4 gültig sind. Ein ungültiger Wert verschwindet nicht: Er steht
 gestrichelt in Rost, ohne Klammer und ohne Wertung, und nennt live jeden zutreffenden Grund, im Hover
-der Chronik jeden gespeicherten. Die Zahl der Fenster wird nicht gespeichert: „nur in 2 Fenstern“ steht
-im Hover nur, wenn kein anderer Grund zutrifft.
+der Chronik jeden gespeicherten. Die Zahl der Fenster steht je Rahmen im Verlauf (CSV `n_win1…5`); nur ältere
+Verläufe ohne sie zeigen „nur in 2 Fenstern“ allein dann, wenn kein anderer Grund zutrifft.
 
 | Grund | heißt |
 |---|---|
@@ -107,6 +129,8 @@ im Hover nur, wenn kein anderer Grund zutrifft.
 | Streuung über Fenster N Hz, Streuung über Ordnungen N Hz | Die Streuung erreicht die Grenze (Vorgabe 130 Hz, Einstellung „Gültigkeitsgrenze Streuung“). |
 | nur in einem Fenster, nur in 2 Fenstern | Zu wenige Fensterlängen sehen ihn. |
 | in weniger als 2 Ordnungen | Zu wenige LPC-Ordnungen sehen ihn. |
+| Teiltonabstand N Hz zu groß · Teiltonabstand zu groß | Die Teiltöne liegen weiter als 250 Hz auseinander (Grundton, bei unsicherem Grundton sein Doppeltes). Die LPC-Hüllkurve sieht eine Resonanz nur an den Teiltönen; ihr Gipfel sitzt womöglich auf dem nächsten Teilton statt auf der Resonanz. Siehe „Grenze: Formanten in hoher Lage“. |
+| Vokalwechsel im Fenster | Die Hüllkurven der beiden Fensterhälften weichen um mehr als 5 dB voneinander ab: Im Fenster wechselt der Vokal, der Wert mischt zwei Vokale. |
 | nicht gefunden | Kein Gipfel für diesen Slot. |
 | Zuordnung unsicher, Grund nicht gespeichert · Grund nicht gespeichert | Ältere Rahmenverläufe ohne die Gründe; nach „Neu analysieren“ steht der genaue Grund da. |
 | Grund unbekannt | Keiner der Gründe trifft zu. Das darf nicht vorkommen und wäre selbst ein Befund. |
@@ -119,12 +143,19 @@ Grundton und SHR folgen derselben Regel:
 - **Grundton unsicher.** Der YIN-Wert muss eine Gegenprobe bestehen: die eigene Teiltonreihe und
   das Cepstrum. Fällt er durch und lässt er sich nicht geprüft ersetzen, steht er in Rost mit Grund
   („eigene Teiltonreihe fehlt“, „Cepstrum zeigt … Hz“, „keine Gegenprobe möglich“) und geht in keinen
-  Median ein (F0, Note, H1−H2, SFR je Halbton). Ein geprüft ersetzter Wert ist nicht unsicher: Er steht
+  Median ein (F0, Note, H1−H2, SFR je Halbton). Ebenso unsicher: ein Mischwert zweier Töne am Tonwechsel
+  („Mischwert am Tonwechsel“, mit den Tönen der Teilfenster) und eine teilweise belegte Reihe bei F0/2
+  („womöglich eine Oktave tiefer“). Ein geprüft ersetzter Wert ist nicht unsicher: Er steht
   mit dem alten YIN-Wert da, in der F0-Spur in Gold. Die Teilerkontrolle teilt nie unter 60 Hz; eine
   Teiltonreihe darunter heißt „Oktave unsicher“.
 - **SHR unsicher.** Das Raster liegt zwischen F0 und 2·F0. Ist es zweifelhaft (Kammkontrast der
   Teiltöne, zweite Anregung im LPC-Restsignal), stehen beide Werte in Rost mit Grund. Die Warnung in
-  Gold (über −15 dB) gibt es nur ohne Zweifel.
+  Gold (über −15 dB) gibt es nur ohne Zweifel. Siehe „Grenze: SHR an Rändern, Tonwechseln und bei Hauch“.
+- **SFR und CPP unsicher.** Liegt neben dem Vokal ein hörbarer, nicht periodischer Teil mit mehr Hochton im
+  Fenster (Konsonant, starker Hauch), stehen SFR und CPP in Rost mit „Rauschanteil im Fenster“. Ohne diese
+  Marke stand ein Frikativ im Median als Stimmklang da. Bei stark behauchter Stimme trägt ein kleiner Teil der
+  Rahmen die Marke, ohne dass ein Konsonant da ist.
+- **ΔF3–4 und ΔF4–5 nicht messbar** bei einem Teiltonabstand über 250 Hz (Grund „Teiltonabstand zu groß“).
 
 In Zusammenfassung und CSV behält jeder Rahmen Wert und Marke; die Zusammenfassung lässt unsichere
 Rahmen aus und nennt ihren Anteil daneben.
@@ -162,15 +193,40 @@ dann die ehrliche Anzeige, kein Defekt. Eine weitere Beweisquelle für F5 gibt e
 offene Entwurfsfrage. Echte Aufnahmen sind nicht geprüft — die Zahlen gelten für synthetische
 Signale.
 
-## Bekannter Fehler: SHR an Ein- und Aussätzen
+## Grenze: Formanten in hoher Lage
 
-An einem harten Ein- oder Aussatz steigt SHR in den Rahmen, deren Analysefenster die Kante
-überdeckt, ohne dass Kammkontrast oder zweite Anregung anschlagen. Der Rahmen gilt dann als sicher.
-Gemessen (Kern 4.0.0) an einem sauberen synthetischen /a/ bei 196 Hz mit Stille davor und danach:
-10 Rahmen über −25 dB, Höchstwert −11,7 dB; die Zusammenfassung meldet „SHR max“ dann als sichere
-Warnung in Gold. Bis der Kern das behebt, ist ein SHR-Höchstwert über −15 dB an Silbenkanten, im
-Staccato oder an Phrasengrenzen kein Beleg. Ob die Spitze an einer Kante liegt, zeigt die Rahmen-CSV
-(`t_s`, `shr_db`, `rms_dbfs`).
+Die LPC-Hüllkurve sieht eine Resonanz nur an den Teiltönen. Liegen sie weit auseinander, sitzt der Gipfel
+auf dem nächsten Teilton, bis zum halben Teiltonabstand neben der Resonanz. Der Kern rechnet mit dem
+Teiltonabstand (Grundton, bei unsicherem Grundton sein Doppeltes; CSV `teilton_hz`):
+
+- **über 250 Hz:** ΔF3–4 und ΔF4–5 sind nie gültig (Grund „Teiltonabstand zu groß“, CSV `d34_grund`,
+  `d45_grund`). Ein Formant gilt nur, wenn kein Nachbargipfel näher als das 1,5-Fache des Abstands liegt,
+  und ist auch dann meist nur auf etwa ± halben Teiltonabstand bestimmt. Die Zusammenfassung nennt je Formant den
+  Anteil solcher Rahmen im Median (CSV `fK_teilton_share`), das Detail steht in Rost daneben.
+- **über 375 Hz:** kein Formant ist messbar (alle Slots ungültig). Darüber liegen im Analyseband weniger
+  Teiltöne, als die LPC Koeffizienten hat.
+
+Gilt für hohe Töne, Kiekser und Brüche in die obere Lage. Anteile je Take: CSV `teilton_share` (über
+250 Hz) und `teilton_hoch_share` (über 375 Hz), im Detail „Hohe Lage“. Offen: Zwischen 250 und 375 Hz lagen
+an synthetischen Vokalen rund 1,5 % der gültigen Formanten weiter daneben, bis etwa einen ganzen
+Teiltonabstand. Sie sind als gültig markiert; dort hilft nur der Anteil in Rost als Warnung.
+
+## Grenze: SHR an Rändern, Tonwechseln und bei Hauch
+
+Der frühere bekannte Fehler (SHR stieg an harten Ein- und Aussätzen ohne Marke und erschien als sichere
+Warnung) ist behoben. SHR gilt jetzt als unsicher, mit Grund in Rost:
+
+- **Ein- oder Aussatz im Fenster:** Die Pegel der 20-ms-Blöcke im längsten Fenster liegen 12 dB oder mehr
+  auseinander (CSV `fenster_pegel_db`). Das schlägt auch bei einem raschen Decrescendo an: mehr unsichere
+  Rahmen, kein falscher Wert.
+- **Tonwechsel im Fenster:** Die Teilfenster gehören nicht zum selben Ton (CSV `fenster_f0_lo_hz`,
+  `fenster_f0_hi_hz`). Schritte unter etwa 1,5 HT und Wechsel ganz am Fensterrand erkennt die Probe nicht.
+- **Hauch:** SHR liegt über −25 dB, aber weniger als 8 dB über dem Pegel zwischen den Teiltönen (CSV
+  `shr_boden_db`). Der Wert bleibt stehen, ist aber nur eine Obergrenze. Eine echte Subharmonische in
+  behauchter Stimme lässt sich davon nicht trennen. Bei sehr starkem Hauch ist SHR praktisch nicht messbar.
+
+Einzelne Rahmen mit kurzzeitiger Alternation (Jitter um 1–2 % in tiefer Lage) können SHR bis etwa −20 dB
+ohne Marke erreichen. Die Werte stammen aus synthetischen Signalen.
 
 ## Tonsprünge: zwei Spuren
 
@@ -202,6 +258,42 @@ Gezählt wird nur Weite und Dauer, ohne Urteil (`dsp.js` `detectJumps`):
   gestörte Übergänge.
 - Vibrato und Portamento ab 300 ms lösen nichts aus. Schnelles Gleiten über 80–200 ms zählt
   teilweise als Sprung.
+- Die Feinspur prüft die Oktave über die Teiltonreihe. Rahmen am Tonwechsel, die zwischen den Tönen davor und
+  danach liegen, gelten als stimmlos. Eine Atempause erkennt die Sprungsuche auch im Nachhall und bei Brumm
+  am Pegel gegenüber dem eigenen Ton; ein Fenster mit digitaler Stille (exakte Nullen ab 5 ms) gilt als
+  stimmlos.
+- **Restkanten:** Einzelne kurze Kanten bleiben, vor allem im Ausklang eines Raums mit langem Nachhall und
+  bei Schritten knapp unter 5 HT mit Vibrato. Eine Atempause von nur 0,2 s im stark halligen Raum kann einen
+  gehaltenen Scheinsprung ergeben; die Grenze der Pausentiefe hat dort nach beiden Seiten wenig Abstand. Ein
+  leiser, gehaltener Oktavbruch am Phrasenende kann als Ausklang entfallen. Färben Raum und rosa Rauschen den
+  vierten Teilton stark, kann die Feinspur auf drei Viertel der Periode springen; das ergibt einen
+  Scheinsprung von etwa 5 HT, auch gehalten (in synthetischen Räumen in rund jedem siebten Fall). Die
+  Grenzen sind an synthetischen Räumen und Stimmen gemessen.
+
+## Signallücken
+
+Fehlen mitten im Take Abtastwerte — Gerätewechsel unter Windows, USB- oder Bluetooth-Aussetzer,
+angehaltener Audiokontext —, stößt das Signal vor und nach der Lücke ohne Pause aneinander. Über einer
+Atempause entsteht so ein gehaltener Tonsprung, den niemand gesungen hat. Deshalb:
+
+- **Erkennen** (`recorder-worklet.js`, `recorder.js`): Jedes Stück aus dem AudioWorklet trägt den
+  Rahmenzähler des Kontexts und die Uhrzeit im Audiofaden. Springt der Rahmenzähler weiter, als
+  Abtastwerte da sind, fehlt Eingang (auf den Abtastwert genau). Läuft die Uhr dem Rahmenzähler um mehr
+  als 0,1 s davon und holt nicht wieder auf, stand der Kontext. Kam das erste Stück mehr als 0,3 s nach
+  dem Start oder das letzte mehr als 0,3 s vor dem Stopp, fehlt dort Signal. Ein Stück, das nur spät
+  kommt, ist keine Lücke; Stücke, die vor dem Stopp abgeschickt, aber noch nicht angekommen sind, gehören
+  dazu.
+- **Speichern und kennzeichnen:** Der Take wird gespeichert, mit Stelle und Dauer jeder Lücke
+  (`signalLuecken`), und steht in Ergebnis, Liste (Marke „Signallücke“), Detail und Hover in Rost. Die
+  Sprung-Kachel gilt dann als unsicher: Was in der Lücke gesungen wurde, fehlt.
+- **Naht als Pause** (`analysis.js`, auch bei jeder Neu-Analyse): Rahmen, deren längstes Fenster die
+  Naht überdeckt, werden nicht gemessen und als Pause geführt (Bit 8192 in `flags` der Rahmen-CSV); kein
+  Segment reicht über die Naht, und Feinspur und Sprungsuche laufen je Abschnitt. Stand der Kontext (angehalten,
+  Gerätewechsel), kennt der Recorder die Stelle nur auf einige Stücke genau (gemessen in Chromium: der Schnitt lag
+  1–2 Stücke später); dann gilt die ganze Spanne von drei Stücken (rund 0,13 s) als Naht.
+- **Keine Referenz:** Ein Take mit Lücke zählt nie als Referenz und lässt sich nicht anpinnen; eine
+  angepinnte Referenz aus ihm steht verwaist mit Grund da.
+- CSV `signal_gap_s`: fehlende Sekunden; 0 = geprüft, keine Lücke; −99 = nicht geprüft (ältere Takes).
 
 ## Prüfung
 
@@ -211,26 +303,30 @@ node test_dsp.js
 
 Erst die eingebauten Kriterien T1–T27 in `test_dsp.js`, danach jedes Modul unter
 `pruefung/kriterien/` in alphabetischer Reihenfolge (Format: `pruefung/kriterien/README.md`).
-Stand Kern 4.0.0: 424 Kriterien gegen synthetische Signale mit bekannter Wahrheit. Exit-Code 1,
+Kriterien gegen synthetische Signale mit bekannter Wahrheit; wie viele, nennt die letzte Zeile des Laufs. Exit-Code 1,
 sobald eines reißt. **Reißt ein Kriterium, ist das ein Befund, keine Toleranzfrage — melden, nicht
 die Schwelle anheben.** Läuft in CI auf `ubuntu-latest` und `windows-latest` mit Node 22.
 
-Laufzeit unter Linux mit Node 22: rund 3½ Minuten, davon `k_kern.js` allein knapp zwei Minuten. Unter
+Laufzeit unter Linux mit Node 22: rund 9 Minuten, davon `n_kern.js` und `k_kern.js` zusammen knapp sechs. Unter
 Windows länger.
 
 | Modul | IDs | prüft | Linux |
 |---|---|---|---|
-| eingebaut in `test_dsp.js` | T1–T27 | Abnahmetabelle, Sweeps, Gatter, Sprünge, CSV-Grundlagen, Schritt 0 | 8 s |
-| `k_kern.js` | K1–K4 | Feinspur und Tonsprünge; Nummerierung, Lesarten, Verschmelzung, Rauschboden; Gegenprobe des Grundtons; SHR-Raster | 114 s |
-| `v_auswertung.js` | V1–V3 | Live-Gatter im Vokalwechsel und bei Vibrato; Grenzvokal, Referenzen, Pins; lange Takes, „stabil“, Boden ohne Stille | 24 s |
-| `u_oberflaeche.js` | U1–U3 | `app.js` in einer nachgebauten Seite: Schritt 0, Löschen, Import, Gerätewechsel, Token, Sicherung, Rost und Gold, Historie | 17 s |
-| `i3_gruende.js` | I3 | Grund je Slot in Serie, CSV, Live und Hover; Live-Boden; angenommene Stimmschwelle | 15 s |
-| `t1_pruefstaerke.js` | P1 | ob jede Regel für gültig, stimmhaft und stabil wirklich entscheidet (gegen Mutanten) | 9 s |
-| `i4_rechenweise.js` | I4 | Kern-Fingerabdruck je Version, „Alle neu analysieren“, Formelschutz, Sicherung Version 3 | 7 s |
-| `i2_durchreichen.js` | I2 | Grundton- und SHR-Unsicherheit bis Zusammenfassung, CSV und Anzeige | 6 s |
+| eingebaut in `test_dsp.js` | T1–T27 | Abnahmetabelle, Sweeps, Gatter, Sprünge, CSV-Grundlagen, Schritt 0 | 10 s |
+| `n_kern.js` | A1–A4 | Nachprüfung des Kerns: Feinspur mit Oktavkontrolle, Mischrahmen am Tonwechsel, Atempause im Raum und mit Brumm, digitale Stille; SHR an Rändern, Tonwechseln und bei Hauch; Formanten nach dem Teiltonabstand (hohe Lage), enge Cluster, Vokalwechsel; Grundton bei starkem Hauch (Unterton, Oktave offen); SFR/CPP neben Frikativen | 181 s |
+| `k_kern.js` | K1–K4 | Feinspur und Tonsprünge; Nummerierung, Lesarten, Verschmelzung, Rauschboden; Gegenprobe des Grundtons; SHR-Raster | 162 s |
+| `v_auswertung.js` | V1–V3 | Live-Gatter im Vokalwechsel und bei Vibrato; Grenzvokal, Referenzen, Pins; lange Takes, „stabil“, Boden ohne Stille | 30 s |
+| `u_oberflaeche.js` | U1–U3 | `app.js` in einer nachgebauten Seite: Schritt 0, Löschen, Import, Gerätewechsel, Token, Sicherung, Rost und Gold, Historie | 22 s |
+| `i3_gruende.js` | I3 | Grund je Slot in Serie, CSV, Live und Hover; Live-Boden; angenommene Stimmschwelle | 18 s |
+| `t1_pruefstaerke.js` | P1 | ob jede Regel für gültig, stimmhaft und stabil wirklich entscheidet (gegen Mutanten) | 10 s |
+| `i4_rechenweise.js` | I4 | Kern-Fingerabdruck je Version, „Alle neu analysieren“, Formelschutz, Sicherung Version 3 | 10 s |
+| `i2_durchreichen.js` | I2 | Grundton- und SHR-Unsicherheit bis Zusammenfassung, CSV und Anzeige | 8 s |
 | `i1_versoehnen.js` | I1 | Nummerierung über alle Fenster an Vokalwechseln | 4 s |
-| `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 2 s |
+| `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 4 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
+| `n_ablage.js` | AB1–AB2 | Ablage der Kalibrierung: Dateiname unter `data/input/`, nur Messwerte und Uhrzeit ohne Gerätename, PUT an die Contents-API ohne Überschreiben, verständlicher Fehler bei fehlendem Schreibrecht | < 1 s |
+| `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 47 s |
+| `n_zusammen.js` | C1–C3 | Kern und Oberfläche zusammen: Marken und Grundcodes passen in die Serie (auch NAHT neben neuen Kernmarken), Rahmen an einer Naht in jedem Serienfeld und jeder CSV-Spalte nicht gemessen, Feinspur und Sprungsuche je Abschnitt mit der Sprungerkennung des Kerns; jeder Grund und Beleg des Kerns 4.1 in Serie, Sicherung, Zusammenfassung, CSV, live, Hover, Detail, Liste und Ergebnis; Naht nach stehendem Kontext als Spanne, offenes Detail während „Alle neu analysieren“ | 24 s |
 
 Jede Änderung am Kern, die einen Rahmenwert ändert, erhöht `VERSION` in `dsp.js` und trägt einen neuen
 Fingerabdruck in `i4_rechenweise.js` ein; sonst reißt I4a.
@@ -246,11 +342,17 @@ Linux: `NODE_PATH="$(npm root -g)" node pruefung/browser-test.js`
 Windows (PowerShell): `$env:NODE_PATH = (npm root -g); node pruefung\browser-test.js`
 
 Chromium kommt aus der Umgebungsvariablen `VARE_CHROMIUM`, sonst aus `/opt/pw-browsers/chromium`, falls
-vorhanden, sonst aus der Playwright-Installation. 68 Prüfungen, Laufzeit rund 1½ Minuten: Token-Tor (leere Hülle
-ohne Token, Meldung bei falschem Token, Oberfläche erst nach Verbindung), Mikrofon über das
-AudioWorklet, Kalibrierung, Take gegen bekannte Formanten, Live-Gatter, Chronik, CSV, Sicherung,
+vorhanden, sonst aus der Playwright-Installation. Laufzeit rund 2 Minuten; wie viele Prüfungen, nennt die
+letzte Zeile des Laufs. Geprüft: Token-Tor (leere Hülle
+ohne Token: keine Marke, kein Stand, keine Notiz des Testkorpus in Quelltext, Text, Eingaben, Speicher oder
+Zustand, vor und nach falschem Token, mit Gegenprobe nach der Verbindung; Meldung bei falschem Token,
+Oberfläche erst nach Verbindung), Mikrofon über das AudioWorklet, Kalibrierung, Take gegen bekannte
+Formanten, Live-Gatter über die ganze Aufnahme (gewertet nur beim wahren ΔF3–4), Chronik, CSV, Sicherung,
 Import, Detailansicht mit Hover, Neu-Analyse einzeln und „Alle neu analysieren“, Schritt 0 über
-Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px.
+Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px,
+Datenbank Version 1 → 2, Neuladen mitten in der Analyse mit Rückfrage und Fortsetzen, Take ohne
+vorgetäuschte Lücke und ein Aussetzer von 1,5 s als Signallücke, schwach belegte Formanten im Take-Ergebnis
+und die Meldung der Neu-Analyse nach verstellten Gatter-Reglern.
 Die GitHub-API wird nachgestellt — kein Netz, kein echtes Token.
 
 ## CSV
@@ -266,7 +368,35 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
 In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
 
-Stand Kern 4.0.0: 99 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
+Einlesen mit pandas, ohne dass ein Text still als fehlend gilt:
+
+```python
+df = pd.read_csv(datei, keep_default_na=False, na_values=[-99])                        # Standard
+df = pd.read_csv(datei, sep=';', decimal=',', keep_default_na=False, na_values=[-99])  # Excel DE
+```
+
+`na_values=[-99]` macht jede Sentinel-Zahl zu NaN (in jeder Schreibweise, `-99.00` wie `-99,00`);
+`keep_default_na=False` verhindert, dass pandas Texte wie `NA` oder `NULL` als fehlend liest. Take-Codes,
+die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`, `INFINITY`, `TRUE`, `FALSE`,
+`WAHR`, `FALSCH`, `NAN`, `NONE`), vergibt die Seite nicht; nach `MZ` folgt `NB`.
+
+`signal_gap_s` (Take): Sekunden, die in der Aufnahme fehlen (siehe „Signallücken“); 0 = geprüft, keine
+Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
+(nicht gemessen, als Pause geführt).
+
+Stand Kern 4.1.0: 111 Spalten je Take, 88 je Rahmen. Neu mit Kern 4.1.0:
+
+- **Take:** `sfr_unsure_share`, `cpp_unsure_share` (SFR und CPP stehen nur aus Rahmen ohne Rauschanteil im
+  Median), `teilton_share`, `teilton_hoch_share` (Teiltonabstand über 250 bzw. 375 Hz) und `f1…f5_teilton_share`
+  (Anteil der gültigen Rahmen im Median mit Teiltonabstand über 250 Hz). Ältere Auswertungen: −99.
+- **Rahmen:** `slot_grund1…5` auch `teilton` und `wechsel`; `teilton_hz`, `d34_grund`, `d45_grund`
+  (`teilton`), `huell_abstand_db` (über 5 dB: Vokalwechsel); `f0_grund` auch `wechsel` und `oktave`;
+  `shr_grund` auch `rand`, `wechsel`, `rauschen`, mit den Belegen `shr_boden_db`, `fenster_pegel_db`,
+  `fenster_f0_lo_hz`, `fenster_f0_hi_hz`; `sfr_unsure`, `sfr_grund`, `cpp_unsure`, `cpp_grund`
+  (`rauschanteil`) mit `fenster_rausch_ap` und `fenster_rausch_hoch_db`. Marken und Gründe in stimmlosen
+  Rahmen −99 bzw. leer.
+
+Neu mit Kern 4.0.0:
 
 - **Take:** `f0_unsure_share`, `f0_korrektur_share`, `shr_unsure_share`, `shr_unsure_max_db`,
   `shr_other_max_db`, `voicing_floor_dbfs`. F0, Note, SHR und H1−H2 kommen nur aus sicheren Rahmen; die
@@ -277,8 +407,14 @@ Stand Kern 4.0.0: 99 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
   `valid1…5`; `f0_unsure`, `f0_grund`, `f0_korrektur`, `f0_cep`, `f0_yin`, `octave_unter_grenze`;
   `shr_grid_hz`, `shr_other_db`, `shr_unsure`, `shr_grund`, `shr_kamm_db`, `shr_zweitpuls`.
   `valid1…5` = 0 heißt ungültig; den Grund liefern `slot_grund`, `rauschboden` und die Streuungen
-  `sdw1…5`, `sdo1…5`. Wie viele Fenster einen Formanten sahen, steht nicht in der CSV, ebenso wenig die
-  Streuungsgrenze (Vorgabe 130 Hz).
+  `sdw1…5`, `sdo1…5`; `n_win1…5` sagt, in wie vielen der 4 Analysefenster der Formant stand (unter 3 ungültig;
+  −99 in stimmlosen Rahmen und in älteren Verläufen). Die Streuungsgrenze,
+  gegen die `sdw` und `sdo` geprüft wurden, steht je Take in `spread_max_hz` (Vorgabe 130 Hz).
+- **Stimmlose Rahmen** (Pausen, Rahmen an einer Naht): Der Kern misst dort nichts. Marken und Gründe, die nur für
+  einen gemessenen Rahmen etwas sagen (`f0_unsure`, `octave_corrected`, `octave_ambiguous`, `octave_unter_grenze`,
+  `h1h2_unsure`, `shr_unsure`, `slot_unsure`, `rauschboden1…5`, `n_win1…5`, `n_peaks`), stehen dort als −99, die
+  Gründe (`f0_grund`, `f0_korrektur`, `shr_grund`, `slot_grund1…5`) leer — nie 0, das sich als „sicher“ läse.
+  `valid1…5` bleibt 0: „nicht gültig“ stimmt auch ohne Messung.
 - **Ältere Rahmenverläufe** ohne diese Felder: Marken und Zahlen −99, Slot-Grund `?`, übrige Gründe
   leer — nie still „sicher“.
 
@@ -288,7 +424,15 @@ Version 3: Takes, Referenzen, Kalibrierungen und Einstellungen als JSON; nicht e
 (`{"$nf":"NaN"}`). Die Rahmenverläufe stehen exakt als Bytes (Base64, little-endian, `{ $type, n, b64 }`),
 also bitgleich mit dem gespeicherten Float32-Wert — die Rahmen-CSV ist nach Sicherung → Import byte-gleich.
 Sicherungen der Versionen 1 und 2 (Verläufe auf 0,001 gerundet) bleiben lesbar. Eine ältere Seite lehnt
-Version 3 als unbekannt ab, statt sie falsch zu lesen.
+Version 3 als unbekannt ab, statt sie falsch zu lesen. Unvollendete Analysen (Aufnahmen, deren Auswertung
+noch nicht gespeichert ist) gehören nicht zur Sicherung; liegen welche vor, sagt die Seite es nach dem
+Sichern.
+
+Eine Sicherung ist höchstens 500 MB groß: Chrome und Edge halten höchstens 2^29 − 24 Zeichen in einem String,
+und der Import liest die Datei in einen. Geprüft wird vorher die ganze Datei — Takes, Rahmenverläufe (rund
+1,4 MB je Minute Take bei 10 ms Rahmenabstand, doppelt so viel bei 5 ms) und Audio (Base64, 7,7 MB je Minute
+16 Bit bei 48 kHz). Passt das Audio nicht mehr, entsteht die Sicherung ohne Audio, und die Seite sagt, wie
+viel Platz bliebe; passen schon die Messwerte nicht, entsteht keine Datei, und die Seite sagt es.
 
 ## Dateien
 
@@ -301,8 +445,8 @@ Version 3 als unbekannt ab, statt sie falsch zu lesen.
 | `csv.js` | CSV-Spalten, Rahmen-CSV, JSON-Sicherung | ja |
 | `wav.js` | WAV schreiben und lesen (PCM 8/16/24/32, Float32, EXTENSIBLE) | ja |
 | `korpus.js` | Lesen von `korpus.json` aus dem privaten Repo, Token-Verwaltung | Browser |
-| `storage.js` | IndexedDB: takes, series, audio, calibrations, meta | Browser |
-| `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet, Ringpuffer | Browser |
+| `storage.js` | IndexedDB (Version 2): takes, series, audio, calibrations, meta, pending; Take und Verlauf in einer Transaktion | Browser |
+| `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet mit Rahmenzähler und Uhrzeit, Ringpuffer, Erkennung von Signallücken | Browser |
 | `chronik.js` | Liste, Referenzen, Detailansicht mit vier Zeitspuren, Gründe im Hover | Browser |
 | `app.js` | Verdrahtung: Anmeldung, Live-Schleife, Kalibrierung, Take, Export, Prüfsignal, Einstellungen | Browser |
 | `index.html`, `style.css` | Oberfläche, Forest Green und Gold | – |
@@ -319,8 +463,8 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   womöglich der falsche Formant gemeint.
 - Rost heißt „Messwert trägt nicht“. Ein sicher gemessener Befund (F3 unter dem Mindestwert, SHR über
   der Warnschwelle, gehaltene Tonsprünge) steht in Gold ohne Strich, ebenso ein geprüft korrigierter
-  Grundton in der F0-Spur. Ausnahme bisher: SHR an harten Ein- und Aussätzen (siehe „Bekannter
-  Fehler“).
+  Grundton in der F0-Spur. SHR an Ein- und Aussätzen, an Tonwechseln und bei Hauch steht als unsicher in
+  Rost, nie als Warnung (siehe „Grenze: SHR an Rändern, Tonwechseln und bei Hauch“).
 - In Pausen frieren alle Werte sichtbar ein; im Export steht −99. Ein lauter Ton ohne fassbare Periode
   heißt nicht „Pause“, sondern „kein Periodenbezug“.
 - Ohne Kalibrierung und ohne Stille ist der Rauschboden unbekannt. Dann steht „unbekannt ·
@@ -328,7 +472,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
 - Die Glättung wirkt nur auf die Anzeige, beginnt nach jeder Lücke neu und ist per Regler
   veränderbar. Messwerte werden nie geglättet gespeichert.
 - H1−H2 ist bei F1 ≈ F0 filtergetrieben und wird so beschriftet. Bandbreiten unter 40 Hz
-  sind laut Physik Artefakt und werden als solche gekennzeichnet.
+  sind laut Physik Artefakt und werden als solche gekennzeichnet — am Formanten und bei H1*−H2*, das mit den
+  Bandbreiten von F1–F3 rechnet und eine solche auf 40 Hz begrenzt (live, im Hover, im Detail als Anteil, in der
+  CSV als `h1h2c_bw_artifact_share`).
 - CPP auf eigener Skala, nicht Praat-CPPS. Rohrlänge ist eine Modellgröße, keine Messung.
 - Tonsprünge heißen „Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms“ und „kurze Kanten unter 90 ms“, nicht
   „Registerwechsel“ (siehe „Tonsprünge: zwei Spuren“).
@@ -338,6 +484,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   ein Urteil „Periodenverdopplung“ fällt das Werkzeug nicht. Sicher wäre nur die Zyklusalternation —
   die misst dieses Werkzeug nicht und verspricht sie auch nicht.
 - Adduktion wird nicht geschätzt. Dafür bleibt EGG die einzige Option, und das ist ein Gerät.
+- Ein Take mit Signallücke steht überall in Rost als lückenhaft da und ist keine Referenz (siehe
+  „Signallücken“). Meldungen nach dem Take sagen, was gespeichert ist: „NICHT gespeichert“ nur, wenn der
+  Take nicht in der Chronik steht; passt nur das WAV nicht mehr, heißt es „gespeichert, das WAV nicht“.
 
 ## Ausbaustufen (Anschlussstellen vorhanden)
 

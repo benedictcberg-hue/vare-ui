@@ -794,7 +794,11 @@ module.exports = async function (H) {
         const sig = D.synthVowel(f0, [F1, F2, F3, F4, F5], [U(35, 100), U(50, 130), U(70, 200), U(90, 220), U(120, 300)], 0.4, SR, { gain: 0.3 });
         add('Zufall ' + t + ' ' + f0.toFixed(1), t % 2 ? sig : mitSnr(sig, 35, 900 + t), f0, 2400);
       }
-      const recht = SAUBER.filter(x => Math.abs(x.r.f0 / x.f0 - 1) < 0.03 && !x.r.f0Unsure), warn = SAUBER.filter(x => warnUnmarkiert(x.r)), zw = recht.filter(x => x.r.shrUnsure);
+      /* Rasterzweifel heißt: shrOther ist eine Zahl (Vertrag K4, Kamm oder zweite Anregung). Bis A2 war das
+         dasselbe wie shrUnsure bei sicherem Grundton; seit A2 trägt shrUnsure auch Fenster- und
+         Zwischenpegelgründe ('rand', 'wechsel', 'rauschen'), die nichts über das Raster sagen. Deren Anteil
+         auf sauberen Tönen prüft A2f (n_kern.js). */
+      const recht = SAUBER.filter(x => Math.abs(x.r.f0 / x.f0 - 1) < 0.03 && !x.r.f0Unsure), warn = SAUBER.filter(x => warnUnmarkiert(x.r)), zw = recht.filter(x => isFinite(x.r.shrOther));
       check('K4b', 'saubere Töne (6 Vokale 75–450 Hz, F1 = 2·F0, Rauschen 30/40 dB, Rosenberg, Jitter 1/2 %, Vibrato, Wobble, 200 Zufallsvokale): keine unmarkierte Warnung, Rasterzweifel in höchstens 1 % der Rahmen mit richtigem Grundton',
         SAUBER.length >= 1500 && warn.length === 0 && zw.length <= 0.01 * recht.length,
         'Rahmen ' + SAUBER.length + ', unmarkierte Warnung ' + warn.length + ', Rasterzweifel ' + zw.length + '/' + recht.length +

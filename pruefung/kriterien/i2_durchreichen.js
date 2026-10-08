@@ -178,10 +178,13 @@ module.exports = async function (H) {
     // Rahmen-CSV des Prüftakes gegen analyseAt: Gründe als Text, Marken 0/1, Zahlen mit −99 für fehlend.
     // Die Gründe enthalten weder Komma noch Anführungszeichen, ein schlichtes Teilen reicht hier.
     const z = zeilen(H.C.framesToCsv(ser, 'standard', H.V), ','), kopf = z[0], bad = [];
-    const SOLL = [['f0_unsure', r => r.f0Unsure ? '1' : '0'], ['f0_grund', r => r.f0Grund], ['f0_korrektur', r => r.f0Korrektur],
-      ['f0_cep', r => zahlZelle(f32(r.f0Cep), 2)], ['f0_yin', r => zahlZelle(f32(r.f0Yin), 2)], ['octave_unter_grenze', r => r.octaveUnterGrenze ? '1' : '0'],
-      ['shr_grid_hz', r => zahlZelle(f32(r.shrGrid), 2)], ['shr_other_db', r => zahlZelle(f32(r.shrOther), 2)], ['shr_unsure', r => r.shrUnsure ? '1' : '0'],
-      ['shr_grund', r => r.shrGrund], ['shr_kamm_db', r => zahlZelle(f32(r.shrKamm), 2)], ['shr_zweitpuls', r => zahlZelle(f32(r.shrZweitpuls), 3)]];
+    /* Marken und Gründe nur in stimmhaften Rahmen; in stimmlosen fehlen sie (−99 bzw. leer), statt mit 0 „sicher“ zu
+       sagen (B2). Vorher erwartete dieses Kriterium dort die 0 aus dem leeren Rahmen des Kerns. */
+    const bit = f => r => !r.voiced ? '-99' : (f(r) ? '1' : '0'), text = f => r => r.voiced ? f(r) : '';
+    const SOLL = [['f0_unsure', bit(r => r.f0Unsure)], ['f0_grund', text(r => r.f0Grund)], ['f0_korrektur', text(r => r.f0Korrektur)],
+      ['f0_cep', r => zahlZelle(f32(r.f0Cep), 2)], ['f0_yin', r => zahlZelle(f32(r.f0Yin), 2)], ['octave_unter_grenze', bit(r => r.octaveUnterGrenze)],
+      ['shr_grid_hz', r => zahlZelle(f32(r.shrGrid), 2)], ['shr_other_db', r => zahlZelle(f32(r.shrOther), 2)], ['shr_unsure', bit(r => r.shrUnsure)],
+      ['shr_grund', text(r => r.shrGrund)], ['shr_kamm_db', r => zahlZelle(f32(r.shrKamm), 2)], ['shr_zweitpuls', r => zahlZelle(f32(r.shrZweitpuls), 3)]];
     let geprueft = 0;
     const texte = new Set();
     for (const [k, f] of SOLL) {
@@ -286,12 +289,38 @@ module.exports = async function (H) {
     if (iK >= 0) pruef('korrigiert', iK, [['text', 'F0 ' + fmt(R[iK].f0, 1) + ' (korrigiert aus ' + fmt(R[iK].f0Yin, 1) + ' Hz, ' + (R[iK].f0Korrektur === 'cepstrum' ? 'Cepstrum' : 'Teiltonreihe') + ')']], ['F0', 'korrigiert']);
     if (iS >= 0) {
       const r = R[iS], anders = r.shrGrid > 1.5 * r.f0 ? r.f0 : 2 * r.f0;
-      // Grund in Worten, hier unabhängig von chronik.js gebildet (Vertrag K4: Teile in fester Reihenfolge)
-      const grundWorte = r.shrGrund.split('+').map(t => t === 'kamm' ? 'Kamm ' + fmt(r.shrKamm, 1) + ' dB' : t === 'zweitpuls' ? 'zweite Anregung ' + fmt(r.shrZweitpuls, 2) : t === 'grundton' ? 'Grundton unsicher' : '?').join(', ');
+      /* Grund in Worten, hier unabhängig von chronik.js gebildet (Vertrag K4 und A2: Teile in fester Reihenfolge). Bis
+         Kern 4.0 gab es nur 'kamm', 'zweitpuls' und 'grundton'; die Teile aus A2 ('rand', 'wechsel', 'rauschen') standen
+         hier als '?' und verlangten damit vom Hover ein „?“. Jetzt mit ihren Belegen aus der Serie (Float32). */
+      const z = x => isFinite(x);
+      const grundWorte = r.shrGrund.split('+').map(t => t === 'kamm' ? 'Kamm ' + fmt(r.shrKamm, 1) + ' dB' : t === 'zweitpuls' ? 'zweite Anregung ' + fmt(r.shrZweitpuls, 2) : t === 'grundton' ? 'Grundton unsicher'
+        : t === 'rand' ? 'Ein- oder Aussatz im Fenster' + (z(r.fensterPegelDb) ? ' (Pegelspanne ' + fmt(f32(r.fensterPegelDb)) + ' dB)' : '')
+        : t === 'wechsel' ? 'Tonwechsel im Fenster' + (z(r.fensterF0Lo) && z(r.fensterF0Hi) ? ' (' + fmt(f32(r.fensterF0Lo)) + '–' + fmt(f32(r.fensterF0Hi)) + ' Hz)' : '')
+        : t === 'rauschen' ? 'kaum über dem Rauschen zwischen den Teiltönen' + (z(r.shrBoden) ? ' (' + fmt(f32(r.shrBoden), 1) + ' dB)' : '') + ', nur Obergrenze' : '?').join(', ');
       pruef('SHR-Zweifel', iS, [['rost', 'SHR ' + fmt(r.shr, 1) + ' (Raster ' + fmt(r.shrGrid) + ' Hz) / ' + fmt(r.shrOther, 1) + ' (Raster ' + fmt(anders) + ' Hz), unsicher: ' + grundWorte]], ['F0']);
     }
     if (iO >= 0) pruef('unter 60 Hz', iO, [['rost', 'Reihe unter 60 Hz, nicht geteilt']]);
-    if (iN >= 0 && rostTeile(hov(iN)).length) bad.push('sicherer Rahmen mit Rost: ' + hov(iN).slice(0, 120));
+    /* Sicherer Rahmen ohne Rost. Bis Kern 4.0 war der erste Rahmen mit sicherem Grundton und SHR im Prüftake auch
+       sonst sicher (Formanten und ΔF3–4 gültig). Seit Kern 4.1 stimmt das nicht mehr: Über 250 Hz Teiltonabstand
+       sind Formanten und ΔF3–4 zu Recht unsicher ('teilton', A3), und der Jitter-Ton trägt SHR-Zweifel 'rauschen'
+       (A2) — im Prüftake ist kein Rahmen mehr in allem sicher. Deshalb zwei Prüfungen statt einer, keine schwächer:
+       Im Prüftake zeigt der Rahmen mit sicherem Grundton und SHR weder F0 noch SHR noch H1−H2 in Rost; und ein
+       Rahmen, der in allem sicher ist (Grundton, SHR, alle fünf Formanten und ΔF3–4 gültig), zeigt gar keinen Rost —
+       aus einem eigenen sauberen Take /a/ auf G3. */
+    if (iN >= 0) { const r = rostTeile(hov(iN)).filter(t => /^(F0|SHR|H1−H2) /.test(t)); if (r.length) bad.push('sicherer Grundton/SHR mit Rost: ' + r.join(' ‖ ').slice(0, 120)); }
+    {
+      const sauber = await A.analyseTake(concat([noise(Math.round(0.2 * SR), 2e-4, 5), D.synthVowel(196, AV[0], AV[1], 0.6, SR), noise(Math.round(0.2 * SR), 2e-4, 6)]), SR, {});
+      const sS = sauber.series, FL = A.FLAG;
+      let iA = -1;
+      for (let i = 0; i < sS.t.length && iA < 0; i++) {
+        const fl = sS.flags[i];
+        if ((fl & FL.VOICED) && (fl & FL.D34VALID) && sS.valid[i] === 31 && !(fl & (FL.F0UNSURE | FL.F0KORR | FL.OCTAMBIG | FL.OCTAVE | FL.SHRUNSURE | FL.H1H2UNSURE))) iA = i;
+      }
+      const hA = iA >= 0 ? CHR.hoverText(sS, iA) : '';
+      if (iA < 0) bad.push('kein Rahmen in allem sicher im sauberen Take');
+      else if (rostTeile(hA).length) bad.push('sicherer Rahmen mit Rost: ' + hA.slice(0, 120));
+      else belege.push('in allem sicher ' + ohneSpans(hA).slice(0, 60));
+    }
     check('I2d', 'Hover (Detail): unsicherer Grundton samt SHR und H1−H2 in Rost mit Grund (Cepstrum-Wert bzw. fehlende Teiltonreihe), korrigierter mit altem Wert ohne Rost, SHR-Zweifel mit beiden Werten und Rastern in Rost, „Reihe unter 60 Hz, nicht geteilt“; sicherer Rahmen ohne Rost',
       !bad.length, bad.length ? bad.slice(0, 4).join(' | ') : belege.join(' | ').slice(0, 400));
   }
@@ -386,6 +415,8 @@ module.exports = async function (H) {
     let raf = null;
     const meta = new Map(), P = v => Promise.resolve(v);
     const store = { open: () => P(), putTake: () => P(), getTake: () => P(null), allTakes: () => P([]), deleteTake: () => P(), putSeries: () => P(), getSeries: () => P(null), putAudio: () => P(), getAudio: () => P(null),
+      // Schnittstelle seit B1: Take und Verlauf in einer Transaktion, Aufnahme vor der Analyse in pending.
+      putTakeSeries: () => P(), updateTake: () => P(null), updateTakeSeries: () => P(null), putPending: () => P(), allPending: () => P([]), deletePending: () => P(),
       deleteAudio: () => P(), hasAudio: () => P(false), audioIds: () => P([]), putCalibration: () => P(), allCalibrations: () => P([]), deleteCalibration: () => P(),
       getMeta: (k, fb) => P(meta.has(k) ? meta.get(k) : fb), setMeta: (k, v) => { meta.set(k, v); return P(); }, clearAll: () => P(), estimate: () => P(null), persist: () => P(false), persisted: () => P(false) };
     const rec = { active: false, info: null, sampleRate: 48000, samplesSeen: 0, recordedSeconds: 0,

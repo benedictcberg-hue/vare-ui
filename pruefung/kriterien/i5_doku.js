@@ -126,7 +126,8 @@ module.exports = async function (H) {
        live und im Hover), und jedes Kriterienmodul steht im README; Tonsprünge heißen dort neutral. */
     const md = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'), bad = [];
     const CH = require(path.join(ROOT, 'chronik.js')).VARECHRONIK, gruende = new Set();
-    for (const F of [NaN, 500]) for (const grund of [undefined, '', 'nummer', 'verschmolzen', '?']) for (const rauschBoden of [undefined, false, true])
+    // Seit Kern 4.1 auch die Slot-Gründe 'teilton' und 'wechsel' (A3): Sie müssen ebenso in der Tabelle stehen.
+    for (const F of [NaN, 500]) for (const grund of [undefined, '', 'nummer', 'verschmolzen', 'teilton', 'wechsel', '?']) for (const rauschBoden of [undefined, false, true])
       for (const sdWin of [undefined, 0, 200]) for (const sdOrder of [undefined, 0, 200]) for (const nWin of [undefined, 1, 2, 4]) for (const nOrders of [undefined, 1, 3]) for (const smax of [undefined, 130])
         for (const g of CH.formantGruende({ F, grund, rauschBoden, sdWin, sdOrder, nWin, nOrders, smax })) gruende.add(g.replace(/ [\d.,−-]+ Hz$/, ''));
     // In der Tabelle „Grund | heißt“ gesucht, nicht irgendwo im Text: Wörter wie „nur eine Ordnung“ stehen

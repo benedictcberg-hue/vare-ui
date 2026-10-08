@@ -25,11 +25,13 @@
     ctx.fillStyle = COL.bg; ctx.fillRect(0, 0, w, cssH);
     return { ctx: ctx, w: w, h: cssH };
   }
+  /* Note zu einem Grundton, nur zu einem gemessenen: ohne Wert liefert dsp.js hzToNote „--“, ein Text, wo nichts
+     gemessen ist. Fehlend heißt hier „–“ wie bei jedem anderen Wert (in der CSV leer). Roh, nicht maskiert. */
+  function noteText(hz, note) { return (zahl(hz) && note && note !== '--') ? String(note) : ''; }
   function statRange(s) { return s && zahl(s.med) ? fmt(s.med) + ' [' + fmt(s.q1) + '–' + fmt(s.q3) + ']' : '–'; }
   function statRangeShare(summary, s) {
     if (!s || !zahl(s.med)) return '–';
-    var sh = validShareOf(summary, s);
-    return statRange(s) + ' · gültig in ' + fmt(sh * 100) + ' %';
+    return statRange(s) + ' · ' + formantBeleg(summary, s);
   }
 
   /* F1–F5: Median als Punkt, Quartilspanne als Balken, 0–4500 Hz, Sängerformantband hinterlegt. */
@@ -41,6 +43,14 @@
     var v = (summary && summary.voicedShare && summary.nFrames) ? Math.round(summary.voicedShare * summary.nFrames) : 0;
     return (v && st) ? st.n / v : 1;
   }
+  /* Schwach belegt: in weniger als der Hälfte der stimmhaften Rahmen gültig oder weniger als 10 gültige Rahmen.
+     Eine Regel für Liste, Detail und Take-Ergebnis — vorher zeigte das Ergebnis direkt nach dem Take denselben
+     Median ohne Marke, den das Detail in Rost führte (Befund N8). Ein fehlender Formant ist es auch. */
+  function formantSchwach(summary, f) { return !f || !(f.n >= 10) || validShareOf(summary, f) < 0.5; }
+  // Woraus der Median stammt, als Text: Anteil gültiger Rahmen, bei weniger als 10 auch ihre Zahl.
+  function formantBeleg(summary, f) {
+    return 'gültig in ' + prozentHtml(validShareOf(summary, f)) + ' %' + (f && zahl(f.n) && f.n > 0 && f.n < 10 ? ', n = ' + fmt(f.n) : '');
+  }
   function drawFormantBars(cv, summary, cssH) {
     var c = setupCanvas(cv, cssH || 28), ctx = c.ctx, w = c.w, h = c.h, fmax = 4500;
     var x = function (f) { return f / fmax * w; };
@@ -48,7 +58,7 @@
     for (var k = 0; k < 5; k++) {
       var s = summary && summary.F && summary.F[k];
       if (!s || !zahl(s.med)) continue;
-      var weak = s.n < 10 || validShareOf(summary, s) < 0.5;
+      var weak = formantSchwach(summary, s);
       if (weak) { ctx.strokeStyle = COL.rust; ctx.lineWidth = 1; ctx.setLineDash([2, 2]); ctx.strokeRect(x(s.q1), h / 2 - 4, Math.max(2, x(s.q3) - x(s.q1)), 8); ctx.setLineDash([]); }
       else { ctx.fillStyle = COL.line; ctx.fillRect(x(s.q1), h / 2 - 4, Math.max(2, x(s.q3) - x(s.q1)), 8); }
       ctx.beginPath(); ctx.arc(x(s.med), h / 2, 4, 0, 2 * Math.PI);
@@ -75,10 +85,14 @@
      Ein unsicherer Grundton steht in Rost mit Grund, und mit ihm alles, was aus ihm abgeleitet ist. Ein
      korrigierter Grundton ist sicher (Teilerkontrolle oder Gegenprobe), aber nicht der YIN-Wert: Das
      steht dabei, ohne Rost. Die Texte bestehen aus festen Wörtern und Zahlen. */
-  function f0GrundText(grund, f0Cep) {
+  /* Kern 4.1: 'wechsel' = Mischwert zweier Töne am Tonwechsel (Belege: tiefster und höchster Ton der Teilfenster),
+     'oktave' = die Reihe bei F0/2 ist teilweise belegt, der Ton kann eine Oktave tiefer liegen. */
+  function f0GrundText(grund, f0Cep, lo, hi) {
     if (grund === 'teiltonreihe') return 'eigene Teiltonreihe fehlt, vermutlich ein Unterton';
     if (grund === 'cepstrum') return 'Cepstrum zeigt ' + (zahl(f0Cep) ? fmt(f0Cep, 1) + ' Hz' : 'eine andere Periode');
     if (grund === 'kein cepstrum') return 'keine Gegenprobe möglich';
+    if (grund === 'wechsel') return 'Mischwert am Tonwechsel' + (zahl(lo) && zahl(hi) ? ' (Teilfenster ' + fmt(lo) + '–' + fmt(hi) + ' Hz)' : '');
+    if (grund === 'oktave') return 'Reihe bei F0/2 teilweise belegt, womöglich eine Oktave tiefer';
     return 'Grund unbekannt';
   }
   function f0KorrText(art, f0Yin) {
@@ -88,12 +102,19 @@
   function oktavText(unterGrenze) {
     return unterGrenze ? 'Reihe unter ' + fmt((D && D.F0_MIN_HZ) || 60) + ' Hz, nicht geteilt — Oktave unsicher' : 'Subharmonische nahe der Schwelle — Oktave unsicher';
   }
-  function shrGrundText(grund, kamm, zweitpuls) {
+  /* Kern 4.1 (Fensterprobe, Zwischenpegel): 'rand' = Ein- oder Aussatz im Fenster (Pegelspanne der 20-ms-Blöcke),
+     'wechsel' = Tonwechsel im Fenster (Töne der Teilfenster), 'rauschen' = SHR kaum über dem Pegel zwischen den
+     Teiltönen (Hauch): Der Wert ist dann nur eine Obergrenze. b = { pegelDb, f0Lo, f0Hi, boden }, fehlend erlaubt. */
+  function shrGrundText(grund, kamm, zweitpuls, b) {
     var t = [], teile = String(grund || '').split('+');
+    b = b || {};
     for (var i = 0; i < teile.length; i++) {
       if (teile[i] === 'kamm') t.push('Kamm ' + fmt(kamm, 1) + ' dB');
       else if (teile[i] === 'zweitpuls') t.push('zweite Anregung ' + fmt(zweitpuls, 2));
       else if (teile[i] === 'grundton') t.push('Grundton unsicher');
+      else if (teile[i] === 'rand') t.push('Ein- oder Aussatz im Fenster' + (zahl(b.pegelDb) ? ' (Pegelspanne ' + fmt(b.pegelDb) + ' dB)' : ''));
+      else if (teile[i] === 'wechsel') t.push('Tonwechsel im Fenster' + (zahl(b.f0Lo) && zahl(b.f0Hi) ? ' (' + fmt(b.f0Lo) + '–' + fmt(b.f0Hi) + ' Hz)' : ''));
+      else if (teile[i] === 'rauschen') t.push('kaum über dem Rauschen zwischen den Teiltönen' + (zahl(b.boden) ? ' (' + fmt(b.boden, 1) + ' dB)' : '') + ', nur Obergrenze');
       else if (teile[i]) t.push('Grund unbekannt');
     }
     return t.length ? t.join(', ') : 'Grund unbekannt';
@@ -104,15 +125,20 @@
      (slotGrund leer) und Gipfel über dem Rauschboden. Genannt wird jeder zutreffende Grund, nicht nur der
      erste: am tiefen engen Cluster im Rauschen trifft oft „Nummer mehrdeutig“ und „im Rauschboden“ zugleich.
      g = { F, grund ('', 'nummer', 'verschmolzen', '?'), rauschBoden, sdWin, sdOrder, smax, nWin, nOrders };
-     null heißt nicht gespeichert. Die Serie kennt nWin und nOrders nicht: Unter 2 Werten ist die Streuung
-     NaN, daraus folgt „nur in einem Fenster“ bzw. „in weniger als 2 Ordnungen“; „nur in 2 Fenstern“ ist das,
-     was übrig bleibt, wenn sonst nichts die Ungültigkeit erklärt. Ältere Serien kennen rauschBoden und den
-     Unterschied nummer/verschmolzen nicht: dann „Grund nicht gespeichert“, kein erfundener. */
+     null heißt nicht gespeichert. Die Serie kennt nOrders nicht: Unter 2 Werten ist die Streuung NaN, daraus folgt
+     „in weniger als 2 Ordnungen“. nWin steht seit B2 in der Serie; ältere Serien kennen es nicht: Dann folgt
+     „nur in einem Fenster“ aus der Streuung, und „nur in 2 Fenstern“ ist das, was übrig bleibt, wenn sonst nichts
+     die Ungültigkeit erklärt. Ältere Serien kennen rauschBoden und den Unterschied nummer/verschmolzen nicht:
+     dann „Grund nicht gespeichert“, kein erfundener. Kern 4.1: 'teilton' = Teiltöne zu weit auseinander, der Gipfel
+     sitzt womöglich auf einem Teilton statt auf der Resonanz (g.teiltonHz, A3); 'wechsel' = Vokalwechsel im Fenster. */
+  function teiltonText(hz) { return 'Teiltonabstand ' + (zahl(hz) ? fmt(hz) + ' Hz ' : '') + 'zu groß'; }
   function formantGruende(g) {
     if (!zahl(g.F)) return ['nicht gefunden'];
     var t = [], smax = zahl(g.smax) ? g.smax : NaN;
     if (g.grund === 'nummer') t.push('Nummer mehrdeutig');
     else if (g.grund === 'verschmolzen') t.push('zwei Resonanzen in einem Gipfel möglich');
+    else if (g.grund === 'teilton') t.push(teiltonText(g.teiltonHz));
+    else if (g.grund === 'wechsel') t.push('Vokalwechsel im Fenster');
     else if (g.grund) t.push('Zuordnung unsicher, Grund nicht gespeichert');
     if (g.rauschBoden === true) t.push('im Rauschboden');
     if (zahl(g.sdWin) && g.sdWin >= smax) t.push('Streuung über Fenster ' + fmt(g.sdWin) + ' Hz');
@@ -131,6 +157,21 @@
      ungültig und ist darum kein Grund oben, steht aber neutral dabei: Die Bandbreite geht in H1*−H2* ein. */
   var BW_ARTEFAKT_HZ = (D && D.BW_ARTIFACT_HZ) || 40;
   var BANDBREITE_TEXT = 'Bandbreite unter ' + BW_ARTEFAKT_HZ + ' Hz';
+  /* H1*−H2* rechnet mit den Bandbreiten von F1–F3. War eine davon Artefakt, ging sie auf 40 Hz begrenzt ein (physik.md
+     7.2). Neutral dabei, wie die Bandbreite am Formanten: die Begrenzung ist die festgelegte Rechenweise; liegt F1
+     nahe H1 oder H2, wo die Bandbreite stark wirkt, ist H1−H2 ohnehin als filtergetrieben markiert. */
+  var H1C_BW_TEXT = 'H1*−H2* mit ' + BANDBREITE_TEXT + ' gerechnet (auf ' + BW_ARTEFAKT_HZ + ' Hz begrenzt)';
+  function h1cBwArtefakt(series, i) {
+    var w = function (c) { var a = series[c]; return a ? a[i] : NaN; };
+    return zahl(w('h1h2c')) && (w('bw1') < BW_ARTEFAKT_HZ || w('bw2') < BW_ARTEFAKT_HZ || w('bw3') < BW_ARTEFAKT_HZ);
+  }
+  // Anteil der Rahmen im H1*−H2*-Median, die eine Artefakt-Bandbreite enthielten; ältere Auswertungen kennen ihn nicht.
+  function h1cBwZusatz(s) {
+    var h = s && s.h1h2c;
+    if (!h || !zahl(h.med)) return '';
+    if (!Object.prototype.hasOwnProperty.call(h, 'bwArtefaktShare')) return ' <span class="small muted">(ältere Auswertung: Anteil mit Bandbreite unter ' + BW_ARTEFAKT_HZ + ' Hz nicht gespeichert)</span>';
+    return zahl(h.bwArtefaktShare) && h.bwArtefaktShare > 0 ? ' · H1*−H2* in ' + prozentHtml(h.bwArtefaktShare) + ' % der Rahmen mit ' + BANDBREITE_TEXT + ' gerechnet (auf ' + BW_ARTEFAKT_HZ + ' Hz begrenzt)' : '';
+  }
 
   // Anteil in Prozent; ein kleiner, aber vorhandener Anteil heißt „< 1“, nicht „0“. Ins HTML nur maskiert.
   function prozent(x) { return (x > 0 && x < 0.01) ? '< 1' : fmt(x * 100); }
@@ -149,6 +190,25 @@
     return ' <span class="rust">· unsicher in ' + prozentHtml(s.shrUnsureShare) + ' %: bis ' + fmt(s.shrUnsureMax, 1) + ' dB' + (zahl(s.shrOtherMax) ? ', anderes Raster bis ' + fmt(s.shrOtherMax, 1) + ' dB' : '') + '</span>';
   }
   function shrUnsicher(s) { return zahl(s.shrUnsureShare) && s.shrUnsureShare > 0.5; }
+  /* SFR und CPP: Rahmen mit Rauschanteil im Fenster (Kern 4.1, Grund 'rauschanteil': Konsonant oder Hauch neben dem
+     Vokal) stehen nicht im Median; ihr Anteil in Rost daneben. Ältere Auswertungen trennen sie nicht. */
+  var RAUSCHANTEIL_TEXT = 'Rauschanteil im Fenster';
+  function rauschText(grund) { return grund === 'rauschanteil' ? RAUSCHANTEIL_TEXT : 'Grund unbekannt'; }
+  function rauschZusatz(x) {
+    if (!zahl(x)) return ' <span class="small muted">(ältere Auswertung: Rahmen mit Rauschanteil nicht getrennt)</span>';
+    return x > 0 ? ' <span class="rust">· ' + RAUSCHANTEIL_TEXT + ' in ' + prozentHtml(x) + ' % der Rahmen, nicht im Median</span>' : '';
+  }
+  /* Teiltonabstand über 250 Hz (Grundton, bei unsicherem 2·F0): ΔF3–4 und ΔF4–5 sind dort nicht messbar, ein Formant
+     nur auf etwa ± halben Abstand; über 375 Hz ist kein Formant messbar (dsp.js TEILTON_DIFF_HZ, TEILTON_SLOT_HZ). */
+  var TT_DIFF = (D && D.TEILTON_DIFF_HZ) || 250, TT_SLOT = (D && D.TEILTON_SLOT_HZ) || 375;
+  function teiltonZusatz(f) {
+    return f && zahl(f.teiltonShare) && f.teiltonShare > 0 ? ' <span class="rust">· in ' + prozentHtml(f.teiltonShare) + ' % Teiltonabstand über ' + TT_DIFF + ' Hz: nur auf etwa ± halben Abstand genau</span>' : '';
+  }
+  function hoheLage(s) {
+    if (!zahl(s.teiltonShare) || !(s.teiltonShare > 0)) return '';
+    return 'Teiltonabstand über ' + TT_DIFF + ' Hz in ' + prozentHtml(s.teiltonShare) + ' % der Rahmen: ΔF3–4 und ΔF4–5 dort nicht messbar, Formanten nur auf etwa ± halben Abstand genau'
+      + (zahl(s.teiltonHochShare) && s.teiltonHochShare > 0 ? ' · über ' + TT_SLOT + ' Hz in ' + prozentHtml(s.teiltonHochShare) + ' %: kein Formant messbar' : '');
+  }
   function listeUnsicher(x, was) {
     return (zahl(x) && x > 0) ? ' <span class="rust small" title="' + was + ' in ' + prozentHtml(x) + ' % der stimmhaften Rahmen, nicht im Wert">' + prozentHtml(x) + ' % unsicher</span>' : '';
   }
@@ -199,13 +259,14 @@
       var s = t.summary || {}, old = t.analysis && t.analysis.kernelVersion !== D.VERSION, thr = f3Schwelle(t), f3u = f3Unter(t);
       var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(t) : '';
       h += '<tr data-id="' + esc(t.id) + '">' +
-        '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span></td>' +
+        '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span>'
+          + (A.lueckenhaft(t) ? ' <span class="tag rust" title="' + esc(lueckenText(t)) + '">Signallücke</span>' : '') + '</td>' +
         '<td class="mono">' + esc(t.vowelIntent || '–') + ' / ' + esc(s.vowel && s.vowel.dominant || '–') + '</td>' +
-        '<td class="num">' + (s.f0 ? fmt(s.f0.med) + ' ' + esc(s.f0.note) + listeUnsicher(s.f0UnsureShare, 'Grundton unsicher') : '–') + '</td>' +
+        '<td class="num">' + (s.f0 ? fmt(s.f0.med) + (noteText(s.f0.med, s.f0.note) ? ' ' + esc(s.f0.note) : '') + listeUnsicher(s.f0UnsureShare, 'Grundton unsicher') : '–') + '</td>' +
         '<td><canvas class="bars" height="28"></canvas></td>' +
         '<td class="num">' + (s.d34stable && s.d34stable.n ? statRange(s.d34stable) : (f3u ? '<span class="muted" title="nicht gewertet: F3 stabil unter dem Mindestwert dieses Takes">–</span>' : '<span class="rust">–</span>')) + '</td>' +
         '<td class="num">' + (s.f3stable && s.f3stable.n ? (f3u ? '<span class="befund" title="unter dem F3-Mindestwert ' + fmt(thr) + ' Hz dieses Takes, ΔF3–4 dort nicht gewertet">' : (thr == null ? '<span title="F3-Mindestwert dieses Takes nicht gespeichert">' : '<span>')) + fmt(s.f3stable.med) + '</span>' : '–') + '</td>' +
-        '<td class="num">' + (s.sfr ? fmt(s.sfr.med, 1) : '–') + '</td>' +
+        '<td class="num">' + (s.sfr ? fmt(s.sfr.med, 1) + listeUnsicher(s.sfrUnsureShare, RAUSCHANTEIL_TEXT) : '–') + '</td>' +
         '<td class="num">' + (s.shr ? (shrBefund(s) ? '<span class="befund" title="über der Warnschwelle ' + String(SHR_WARN_DB).replace('-', '−') + ' dB">' : '<span>') + fmt(s.shr.max, 1) + '</span>' + listeUnsicher(s.shrUnsureShare, 'SHR-Raster oder Grundton unsicher') : '–') + '</td>' +
         '<td class="num">' + fmt((s.validShare || 0) * 100) + ' %</td>' +
         '<td class="small">' + esc(t.analysis && t.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">alt</span>' : '') + (uv ? ' <span class="tag" title="' + esc(uv) + '">anders gerechnet</span>' : '') + '</td>' +
@@ -316,7 +377,7 @@
     var fl = series.flags[i], F = A.FLAG, rost = function (t) { return '<span class="rust">' + esc(t) + '</span>'; };
     var grund = function (feld) { var a = series[feld]; return a ? A.textAus(feld, a[i]) : ''; };
     var f0z = [];
-    if (fl & F.F0UNSURE) f0z.push('Grundton unsicher: ' + f0GrundText(grund('f0Grund'), wert('f0Cep')));
+    if (fl & F.F0UNSURE) f0z.push('Grundton unsicher: ' + f0GrundText(grund('f0Grund'), wert('f0Cep'), wert('fensterF0Lo'), wert('fensterF0Hi')));
     if (fl & F.OCTAMBIG) f0z.push(oktavText(fl & F.OCTUNTER));
     var f0 = f0z.length ? rost('F0 ' + v('f0', 1) + ' (' + f0z.join('; ') + ')') : esc('F0 ' + v('f0', 1));
     if (fl & F.F0KORR) f0 += esc(' (' + f0KorrText(grund('f0Korrektur'), wert('f0Yin')) + ')');
@@ -324,9 +385,10 @@
     var shr = 'SHR ' + v('shr', 1);
     if (fl & F.SHRUNSURE) {
       var g = wert('shrGrid'), f0v = wert('f0'), anders = (zahl(g) && g > 1.5 * f0v) ? f0v : 2 * f0v;
-      shr = rost(shr + ' (Raster ' + fmt(g) + ' Hz)' + (zahl(wert('shrOther')) ? ' / ' + v('shrOther', 1) + ' (Raster ' + fmt(anders) + ' Hz)' : '') + ', unsicher: ' + shrGrundText(grund('shrGrund'), wert('shrKamm'), wert('shrZweitpuls')));
+      shr = rost(shr + ' (Raster ' + fmt(g) + ' Hz)' + (zahl(wert('shrOther')) ? ' / ' + v('shrOther', 1) + ' (Raster ' + fmt(anders) + ' Hz)' : '') + ', unsicher: ' + shrGrundText(grund('shrGrund'), wert('shrKamm'), wert('shrZweitpuls'),
+        { pegelDb: wert('fensterPegelDb'), f0Lo: wert('fensterF0Lo'), f0Hi: wert('fensterF0Hi'), boden: wert('shrBoden') }));
     } else shr = esc(shr);
-    var h12 = 'H1−H2 ' + v('h1h2', 1) + ((fl & F.H1H2UNSURE) ? ' (filtergetrieben)' : '');
+    var h12 = 'H1−H2 ' + v('h1h2', 1) + ((fl & F.H1H2UNSURE) ? ' (filtergetrieben)' : '') + ' · H1*−H2* ' + v('h1h2c', 1) + (h1cBwArtefakt(series, i) ? ' (' + BANDBREITE_TEXT + ', auf ' + BW_ARTEFAKT_HZ + ' Hz begrenzt)' : '');
     h12 = (fl & F.F0UNSURE) ? rost(h12 + ' (Grundton unsicher)') : esc(h12);
     /* Formanten: ein ungültiger Wert in Rost mit seinen Gründen (formantGruende, wie live). Der Grund je
        Slot kommt aus den Masken der Serie (slotUnsure, slotVerschmolzen, rauschBoden); in Pausen gibt es
@@ -337,19 +399,39 @@
       if (!stimmhaft) return esc(txt + valid(k));
       var bw = wert('bw' + (k + 1)), bwT = (zahl(bw) && bw < BW_ARTEFAKT_HZ) ? esc(' (' + BANDBREITE_TEXT + ')') : '';
       if (series.valid[i] & (1 << k)) return esc(txt) + bwT;
-      var b = 1 << k, uns = series.slotUnsure ? (series.slotUnsure[i] & b) : 0;
-      var grund = !uns ? '' : (series.slotVerschmolzen ? ((series.slotVerschmolzen[i] & b) ? 'verschmolzen' : 'nummer') : '?');
-      var gr = formantGruende({ F: wert('f' + (k + 1)), grund: grund, rauschBoden: series.rauschBoden ? !!(series.rauschBoden[i] & b) : null,
-        sdWin: wert('sdw' + (k + 1)), sdOrder: wert('sdo' + (k + 1)), smax: smax, nWin: null, nOrders: null });
+      // Grund aus den Masken (analysis.js slotGrundAus: auch 'teilton' und 'wechsel', ältere Serien '?').
+      var b = 1 << k, sg = A.slotGrundAus(series, i, k);
+      // Fensterzahl aus der Serie (analysis.js nWin); ältere Serien kennen sie nicht (null), dann wird sie erschlossen.
+      var gr = formantGruende({ F: wert('f' + (k + 1)), grund: sg, teiltonHz: wert('teiltonHz'), rauschBoden: series.rauschBoden ? !!(series.rauschBoden[i] & b) : null,
+        sdWin: wert('sdw' + (k + 1)), sdOrder: wert('sdo' + (k + 1)), smax: smax, nWin: A.nWinAus ? A.nWinAus(series, i, k) : null, nOrders: null });
       return rost(txt + '? (' + gr.join(', ') + ')') + bwT;
     };
     var d34 = 'ΔF3–4 ' + v('d34') + (isFinite(series.score[i]) ? ' (gewertet)' : '');
-    d34 = (stimmhaft && !(fl & F.D34VALID)) ? rost(d34 + '?') : esc(d34);
+    // ΔF3–4 nicht messbar bei Teiltonabstand über 250 Hz (d34Grund 'teilton'): den Grund nennen.
+    d34 = (stimmhaft && !(fl & F.D34VALID)) ? rost(d34 + '?' + (grund('d34Grund') === 'teilton' ? ' (' + teiltonText(wert('teiltonHz')) + ', nicht messbar)' : '')) : esc(d34);
+    // SFR und CPP mit Rauschanteil im Fenster (Code ≠ 0): in Rost mit Grund.
+    var rauschWert = function (name, col, feld) {
+      var t = name + ' ' + v(col, 1), c = series[feld] ? series[feld][i] : 0;
+      return (stimmhaft && c) ? rost(t + ' (unsicher: ' + rauschText(grund(feld)) + ')') : esc(t);
+    };
+    // Ein Rahmen an einer Naht ist keine Pause, sondern eine Stelle ohne Signal: sagen, nicht still „Pause“.
+    if (F.NAHT && (fl & F.NAHT)) return esc('t ' + v('t', 2) + ' s · ') + rost('Signallücke: Rahmen an einer Naht, nicht gemessen, als Pause gewertet');
     return esc('t ' + v('t', 2) + ' s · ' + ['Pause', 'Übergang', 'stabil'][series.gate[i]] + (series.cls[i] >= 0 ? ' /' + V.CENTROIDS[series.cls[i]].cls + '/' : '')) + ' · ' + f0 +
-      ' · ' + [0, 1, 2, 3, 4].map(formant).join(' ') + ' · ' + d34 + esc(' · SFR ' + v('sfr', 1)) +
-      ' · ' + shr + esc(' · CPP ' + v('cpp', 1)) + ' · ' + h12 + esc(' · ' + v('rms', 1) + ' dBFS');
+      ' · ' + [0, 1, 2, 3, 4].map(formant).join(' ') + ' · ' + d34 + ' · ' + rauschWert('SFR', 'sfr', 'sfrGrund') +
+      ' · ' + shr + ' · ' + rauschWert('CPP', 'cpp', 'cppGrund') + ' · ' + h12 + esc(' · ' + v('rms', 1) + ' dBFS');
   }
 
+  /* Signallücken eines Takes als Satz (app.js signalLuecken, recorder.js): wo, wie lang, was daraus folgt.
+     '' ohne Lücke; ältere Takes ohne Prüfung haben keine Angabe und bekommen keinen Satz. */
+  function sek(x) { return zahl(x) ? fmt(x, 1).replace('.', ',') + ' s' : '? s'; }
+  function lueckenText(take) {
+    var l = take && take.signalLuecken;
+    if (!l || !l.length) return '';
+    var teile = l.map(function (x) {
+      return x.art === 'anfang' ? 'am Anfang fehlen ' + sek(x.dauerS) : x.art === 'ende' ? 'am Ende fehlen ' + sek(x.dauerS) : 'bei ' + sek(x.beiS) + ' fehlen ' + sek(x.dauerS);
+    });
+    return 'Signal unterbrochen: ' + teile.join(', ') + '. Die Teile stoßen ohne Pause aneinander; jede Naht gilt als Pause. Take lückenhaft, keine Referenz.';
+  }
   /* Bestes Segment eines Vokals; ein Segment, dessen Rahmen überwiegend zweideutig zugeordnet sind,
      wird nicht Bestsegment (analysis.js) — dann sagen, warum hier keins steht. */
   function bestSegmentText(k, pv) {
@@ -372,8 +454,9 @@
     return '<div class="grid">' +
       cell('Dauer · Rahmen', fmt(take.durationS, 1) + ' s · ' + fmt(s.nFrames)) +
       cell('stimmhaft · gültig · stabil', fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' %') +
-      cell('F0 Median [q1–q3]', statRange(s.f0) + ' ' + esc(s.f0 && s.f0.note || '') + f0Zusatz(s), f0Unsicher(s)) +
-      cell('F1', statRangeShare(s, s.F && s.F[0]), s.F && s.F[0] && validShareOf(s, s.F[0]) < 0.5) + cell('F2', statRangeShare(s, s.F && s.F[1]), s.F && s.F[1] && validShareOf(s, s.F[1]) < 0.5) + cell('F3', statRangeShare(s, s.F && s.F[2]), s.F && s.F[2] && validShareOf(s, s.F[2]) < 0.5) + cell('F4', statRangeShare(s, s.F && s.F[3]), s.F && s.F[3] && validShareOf(s, s.F[3]) < 0.5) + cell('F5', statRangeShare(s, s.F && s.F[4]), s.F && s.F[4] && validShareOf(s, s.F[4]) < 0.5) +
+      cell('F0 Median [q1–q3]', statRange(s.f0) + (s.f0 && noteText(s.f0.med, s.f0.note) ? ' ' + esc(s.f0.note) : '') + f0Zusatz(s), f0Unsicher(s)) +
+      [0, 1, 2, 3, 4].map(function (k) { var f = s.F && s.F[k]; return cell('F' + (k + 1), statRangeShare(s, f) + teiltonZusatz(f), formantSchwach(s, f)); }).join('') +
+      (hoheLage(s) ? cell('Hohe Lage', '<span class="rust">' + hoheLage(s) + '</span>', s.teiltonShare > 0.5) : '') +
       cell('ΔF3–4 alle gültigen', statRange(s.d34)) +
       // Keine Wertung, weil F3 sicher unter dem Mindestwert liegt, ist ein Befund, kein unsicherer Wert.
       ((s.d34stable && s.d34stable.n) ? cell('ΔF3–4 stabil, F3 ≥ ' + (thr != null ? fmt(thr) + ' Hz' : 'Minimum'), statRange(s.d34stable) + ' n=' + fmt(s.d34stable.n))
@@ -383,9 +466,9 @@
       (zahl(s.vowelAmbiguousShare) ? cell('Vokal zweideutig zugeordnet', fmt(s.vowelAmbiguousShare * 100) + ' % der stabilen Rahmen', s.vowelAmbiguousShare > 0.5) : '') +
       cell('ΔF4–5', statRange(s.d45)) +
       // SHR: Median und Maximum aus Rahmen ohne Rasterzweifel; Warnung (Gold) nur daraus, nie aus einem unsicheren Wert.
-      cell('SFR dB', statRange(s.sfr)) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–') + shrZusatz(s), shrUnsicher(s), shrBefund(s)) +
-      cell('CPP dB (eigene Skala)', statRange(s.cpp)) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben'
-        + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozentHtml(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')', s.h1h2 && s.h1h2.unsureShare > 0.5) +
+      cell('SFR dB', statRange(s.sfr) + rauschZusatz(s.sfrUnsureShare), zahl(s.sfrUnsureShare) && s.sfrUnsureShare > 0.5) + cell('SHR dB (Median / max)', (s.shr ? fmt(s.shr.med, 1) + ' / ' + fmt(s.shr.max, 1) : '–') + shrZusatz(s), shrUnsicher(s), shrBefund(s)) +
+      cell('CPP dB (eigene Skala)', statRange(s.cpp) + rauschZusatz(s.cppUnsureShare), zahl(s.cppUnsureShare) && s.cppUnsureShare > 0.5) + cell('H1−H2 · H1*−H2*', fmt(s.h1h2 && s.h1h2.med, 1) + ' · ' + fmt(s.h1h2c && s.h1h2c.med, 1) + ' (' + fmt((s.h1h2 && s.h1h2.unsureShare || 0) * 100) + ' % filtergetrieben'
+        + (zahl(s.f0UnsureShare) && s.f0UnsureShare > 0 ? ', ohne ' + prozentHtml(s.f0UnsureShare) + ' % mit unsicherem Grundton' : '') + ')' + h1cBwZusatz(s), s.h1h2 && s.h1h2.unsureShare > 0.5) +
       cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorSource === 'unknown' ? NaN : s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
       (s.floorSource === 'unknown' ? cell('Stimmschwelle', 'angenommen: ' + fmt(stimmBoden(s) + 12, 1) + ' dBFS (Boden unbekannt, kein Messwert)') : '') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
@@ -396,7 +479,9 @@
       /* Gezählt wird nur Weite und Dauer. Ein legato gesungener Melodiesprung erfüllt dieselbe
          Bedingung wie ein Registerbruch; ob es einer ist, zeigt erst ein Qualitätseinbruch am
          Übergang. Deshalb neutrale Namen, nicht „Registerwechsel“. */
-      cell('Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms', s.spruenge ? fmt(s.spruenge.gehalten) + ' (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' /s)' : '– (ältere Auswertung)', false, !!(s.spruenge && s.spruenge.gehalten > 0)) +
+      /* Bei einer Signallücke ist offen, was in der Lücke gesungen wurde: die Zahl gilt nur für das Aufgenommene. */
+      cell('Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms', (s.spruenge ? fmt(s.spruenge.gehalten) + ' (λ ' + fmt(s.spruenge.lambdaGehalten, 3) + ' /s)' : '– (ältere Auswertung)') + (A.lueckenhaft(take) ? ' — nur das Aufgenommene, Take lückenhaft' : ''),
+        A.lueckenhaft(take), !!(s.spruenge && s.spruenge.gehalten > 0)) +
       cell('kurze Kanten unter 90 ms', s.spruenge ? fmt(s.spruenge.kante) + ' (λ ' + fmt(s.spruenge.lambdaKante, 3) + ' /s)' : '– (ältere Auswertung)') +
       '</div>';
   }
@@ -446,9 +531,11 @@
     var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(take) : '';
     var intents = [''].concat(V.CENTROIDS.map(function (c) { return c.cls; }));
     el.innerHTML = '<div class="panel"><a href="#/chronik">← Chronik</a>' +
+      '<p id="d-veraltet" class="rust" hidden></p>' +   // app.js: inzwischen neu analysiert (Nachweis N9)
       '<h2>' + esc(take.code) + ' <span id="d-label-view">' + esc(take.label) + '</span></h2>' +
       '<div class="small muted">' + esc(dateShort(take.createdAt)) + ' · ' + esc(take.deviceLabel || '') + ' · ' + fmt(take.sampleRate) + ' Hz · Kern ' + esc(take.analysis && take.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">älterer Kern</span>' : '') + (s.floorSource === 'calibration' ? ' · kalibriert' : ' · <span class="rust">Rauschboden ' + (s.floorSource === 'unknown' ? 'unbekannt' : 'geschätzt') + '</span>') + '</div>' +
       '<div class="small">' + kontextZeile(take) + '</div>' +
+      (A.lueckenhaft(take) ? '<div class="small rust">' + esc(lueckenText(take)) + '</div>' : '') +
       '<div class="row"><label>Bezeichnung <input type="text" id="d-label" value="' + esc(take.label) + '" size="24"></label>' +
       '<label>Vokalabsicht <select id="d-intent">' + intents.map(function (v) { return '<option value="' + esc(v) + '"' + (v === (take.vowelIntent || '') ? ' selected' : '') + '>' + (v ? '/' + esc(v) + '/' : '–') + '</option>'; }).join('') + '</select></label>' +
       '<label>Einsing-Status <select id="d-warmup">' +
@@ -461,6 +548,7 @@
       '<div class="panel"><canvas id="d-lanes" height="420"></canvas><div id="d-hover" class="mono small muted hover-zeile">Maus über die Spuren bewegen.</div></div>' +
       '<div class="panel actions"><button id="d-frames">Rahmen-CSV</button><button id="d-row">CSV-Zeile</button>' + (hasAudio ? '<button id="d-wav">WAV</button><button id="d-re">Neu analysieren (Kern ' + esc(D.VERSION) + ')</button>' : '<span class="small muted">kein Audio gespeichert — Neu-Analyse nicht möglich</span> ') +
       (uv ? '<span class="small muted">Nicht als Referenz wählbar — anders gerechnet als jetzt eingestellt: ' + esc(uv) + '.</span> '
+        : A.lueckenhaft(take) ? '<span class="small muted">Nicht als Referenz wählbar — Signallücke im Take.</span> '
         : Object.keys(s.perVowel || {}).map(function (k) { return s.perVowel[k].bestSegment ? '<button data-pin="' + esc(k) + '">Als Referenz für /' + esc(k) + '/ anpinnen</button>' : ''; }).join('')) +
       '<button id="d-del" class="danger">Take löschen</button></div>' +
       (take.history && take.history.length ? '<div class="panel small muted">Frühere Auswertungen: ' + take.history.map(historieText).join(', ')
@@ -488,5 +576,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, teiltonText: teiltonText, rauschText: rauschText, rauschZusatz: rauschZusatz, hoheLage: hoheLage, RAUSCHANTEIL_TEXT: RAUSCHANTEIL_TEXT, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, H1C_BW_TEXT: H1C_BW_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

@@ -12,20 +12,28 @@
      Abgeleitete; F0KORR = YIN-Wert durch die Gegenprobe ersetzt (sichtbar, nicht unsicher);
      SHRUNSURE = Raster zweifelhaft oder Grundton unsicher; OCTUNTER = Reihe unter 60 Hz, nicht geteilt
      (dann auch OCTAMBIG). SUBGRID heißt seit dem SHR-Raster aus dem Kamm „Hauptwert auf 2·F0“.
-     Frei in Uint16: 8192, 16384, 32768. */
+     NAHT = das Fenster des Rahmens überdeckt eine Stelle, an der Abtastwerte fehlen (Signallücke): kein Messwert,
+     als Pause geführt. Frei in Uint16: 16384, 32768. SFR- und CPP-Zweifel (Kern 4.1) stehen nicht als Bit, sondern
+     nur als Code (sfrGrund, cppGrund ≠ 0 ⇔ unsicher, im Kern immer gemeinsam gesetzt): verlustfrei, und die
+     beiden letzten Bits bleiben frei — jedes weitere Bit hieße ein breiteres Feld, also ein neues Serienformat. */
   var FLAG = { VOICED: 1, OCTAVE: 2, SUBGRID: 4, H1H2UNSURE: 8, D34VALID: 16, D45VALID: 32, SCORE: 64, OCTAMBIG: 128, VOWELAMBIG: 256,
-    F0UNSURE: 512, F0KORR: 1024, SHRUNSURE: 2048, OCTUNTER: 4096 };
+    F0UNSURE: 512, F0KORR: 1024, SHRUNSURE: 2048, OCTUNTER: 4096, NAHT: 8192 };
 
   /* Gründe je Rahmen als kleine Codes (Uint8), nicht als Text: Texte in einem gewöhnlichen Array
      kosteten bei einer Stunde (360 000 Rahmen) ein Vielfaches und überstünden keine Sicherung als
      typisiertes Feld. Gespeicherte Serien tragen die Nummern, deshalb werden die Listen nur
      verlängert, nie umgestellt. f0Grund und f0Korrektur: Index in der Liste. shrGrund: Bitmaske über
      die Teile, in dieser Reihenfolge mit '+' verbunden (dsp.js: 'kamm+zweitpuls', 'zweitpuls+grundton').
-     Ein Text, den diese Fassung nicht kennt, wird CODE_UNBEKANNT und als '?' gelesen — nie still ''. */
+     Ein Text, den diese Fassung nicht kennt, wird CODE_UNBEKANNT und als '?' gelesen — nie still ''.
+     Kern 4.1: f0Grund 'wechsel' (Mischwert am Tonwechsel) und 'oktave' (Reihe bei F0/2 teilweise belegt); shrGrund
+     'rand', 'wechsel', 'rauschen' (Fensterprobe, Zwischenpegel); ΔF3–4/ΔF4–5 'teilton' (Teiltonabstand über 250 Hz);
+     SFR und CPP 'rauschanteil' (Rauschteil im Fenster). */
   var GRUND = {
-    f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum'],
+    f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum', 'wechsel', 'oktave'],
     f0Korrektur: ['', 'teiltonreihe', 'cepstrum'],
-    shrGrund: ['kamm', 'zweitpuls', 'grundton']
+    shrGrund: ['kamm', 'zweitpuls', 'grundton', 'rand', 'wechsel', 'rauschen'],
+    d34Grund: ['', 'teilton'], d45Grund: ['', 'teilton'],
+    sfrGrund: ['', 'rauschanteil'], cppGrund: ['', 'rauschanteil']
   };
   var CODE_UNBEKANNT = 255;
   function codeAus(feld, text) {
@@ -103,22 +111,47 @@
     return { db: Math.max(-95, levels[0] - 24), known: false, gapDb: gap };
   }
 
-  /* Speicher je Rahmen: 39 Float32, 10 Byte-Felder und die Flags (Uint16), 168 Byte (vorher 139). Eine Stunde bei 10 ms
-     sind 360 000 Rahmen, also 60 MB statt 50 MB im Speicher; die Gründe kosten als Codes 3 Byte. Ältere
-     gespeicherte Serien haben die Felder f0Cep … shrGrund, slotVerschmolzen und rauschBoden nicht: Wer sie
+  /* Speicher je Rahmen: 39 Float32, 10 Byte-Felder, die Flags und nWin (je Uint16), 170 Byte (vorher 139). Eine Stunde
+     bei 10 ms sind 360 000 Rahmen, also 61 MB statt 50 MB im Speicher; die Gründe kosten als Codes 3 Byte. Ältere
+     gespeicherte Serien haben die Felder f0Cep … shrGrund, slotVerschmolzen, rauschBoden und nWin nicht: Wer sie
      liest, muss das Fehlen als „nicht gemessen“ behandeln, nicht als 0 (csv.js, chronik.js).
      Warum ein Slot unsicher ist (dsp.js slotGrund), steht als Maske wie valid und slotUnsure, Bit k für Fk+1:
      slotVerschmolzen = Grund 'verschmolzen' (zwei Resonanzen in einem Gipfel möglich); ein gesetztes
-     slotUnsure-Bit ohne dieses Bit heißt 'nummer'. rauschBoden = Gipfel im Rauschboden, unabhängig davon. */
+     slotUnsure-Bit ohne dieses Bit heißt 'nummer'. rauschBoden = Gipfel im Rauschboden, unabhängig davon.
+     nWin = in wie vielen Analysefenstern jeder Formant stand (dsp.js nWin), je Slot 3 Bit, Slot k in Bit 3k…3k+2
+     (nWinAus). Ohne sie ließ sich „nur in 2 Fenstern“ nur erschließen, wenn sonst kein Grund vorlag; neben einem
+     anderen Grund fehlte er in Hover und CSV.
+     Kern 4.1 (C2): slotTeilton und slotWechsel sind die Masken der Slot-Gründe 'teilton' und 'wechsel' (der Kern
+     vergibt je Slot genau einen Grund); dazu die Belege shrBoden, fensterPegelDb, fensterF0Lo/Hi, teiltonHz,
+     huellAbstandDb, fensterRauschAp, fensterRauschHochDb und die Codes d34Grund, d45Grund, sfrGrund, cppGrund.
+     Damit 47 Float32 und 16 Byte-Felder, 208 Byte je Rahmen (75 MB je Stunde bei 10 ms). Serien ohne slotTeilton
+     stammen aus Kern 4.0, der nur 'nummer' und 'verschmolzen' kannte. */
   function makeSeries(n) {
-    var f = function () { return new Float32Array(n); };
+    var f = function () { return new Float32Array(n); }, b = function () { return new Uint8Array(n); };
     var s = { t: f(), f0: f(), ap: f(), rms: f(), d34: f(), d45: f(), score: f(), sfr: f(), sfrn: f(), shr: f(), cpp: f(), h1h2: f(), h1h2c: f(),
       f0Cep: f(), f0Yin: f(), shrGrid: f(), shrOther: f(), shrKamm: f(), shrZweitpuls: f(),
-      f0Grund: new Uint8Array(n), f0Korrektur: new Uint8Array(n), shrGrund: new Uint8Array(n),
-      valid: new Uint8Array(n), slotUnsure: new Uint8Array(n), slotVerschmolzen: new Uint8Array(n), rauschBoden: new Uint8Array(n), nPeaks: new Uint8Array(n),
-      gate: new Uint8Array(n), flags: new Uint16Array(n), cls: new Int8Array(n) };
+      shrBoden: f(), fensterPegelDb: f(), fensterF0Lo: f(), fensterF0Hi: f(), teiltonHz: f(), huellAbstandDb: f(), fensterRauschAp: f(), fensterRauschHochDb: f(),
+      f0Grund: b(), f0Korrektur: b(), shrGrund: b(), d34Grund: b(), d45Grund: b(), sfrGrund: b(), cppGrund: b(),
+      valid: b(), slotUnsure: b(), slotVerschmolzen: b(), slotTeilton: b(), slotWechsel: b(), rauschBoden: b(), nPeaks: b(),
+      gate: b(), flags: new Uint16Array(n), nWin: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
     return s;
+  }
+
+  // Zahl der Fenster, in denen Formant k+1 im Rahmen i stand; null, wenn die Serie sie nicht kennt (ältere Fassung).
+  function nWinAus(series, i, k) { return series && series.nWin ? (series.nWin[i] >> (3 * k)) & 7 : null; }
+  /* Grund des unsicheren Slots k im Rahmen i als Text des Kerns, aus den Masken: '' (Nummer eindeutig), 'nummer',
+     'verschmolzen', 'teilton', 'wechsel', oder '?', wenn die Serie den Grund nicht trägt (vor Kern 4.0). Eine Serie
+     mit slotVerschmolzen, aber ohne slotTeilton stammt aus Kern 4.0: Der kannte nur 'nummer' und 'verschmolzen'.
+     Dieselbe Regel steht in csv.js (ohne Abhängigkeit); n_zusammen.js prüft, dass beide gleich lesen. */
+  function slotGrundAus(series, i, k) {
+    var b = 1 << k;
+    if (!series.slotUnsure || !(series.slotUnsure[i] & b)) return '';
+    if (!series.slotVerschmolzen) return '?';
+    if (series.slotVerschmolzen[i] & b) return 'verschmolzen';
+    if (series.slotTeilton && (series.slotTeilton[i] & b)) return 'teilton';
+    if (series.slotWechsel && (series.slotWechsel[i] & b)) return 'wechsel';
+    return 'nummer';
   }
 
   function applyGate(series, states) {
@@ -140,19 +173,32 @@
       if (r.valid[k]) vmask |= (1 << k);
     }
     series.valid[i] = vmask;
-    var umask = 0, vmerk = 0, bmask = 0;
+    var umask = 0, vmerk = 0, bmask = 0, tmask = 0, wmask = 0;
     for (var u = 0; u < 5; u++) {
+      var sg = r.slotGrund ? r.slotGrund[u] : '';
       if (r.slotUnsure && r.slotUnsure[u]) umask |= (1 << u);
-      if (r.slotGrund && r.slotGrund[u] === 'verschmolzen') vmerk |= (1 << u);
+      if (sg === 'verschmolzen') vmerk |= (1 << u);
+      else if (sg === 'teilton') tmask |= (1 << u);
+      else if (sg === 'wechsel') wmask |= (1 << u);
       if (r.rauschBoden && r.rauschBoden[u]) bmask |= (1 << u);
     }
-    series.slotUnsure[i] = umask; series.slotVerschmolzen[i] = vmerk; series.rauschBoden[i] = bmask;
+    series.slotUnsure[i] = umask; series.slotVerschmolzen[i] = vmerk; series.slotTeilton[i] = tmask; series.slotWechsel[i] = wmask; series.rauschBoden[i] = bmask;
+    var nw = 0;
+    for (var w = 0; w < 5; w++) nw |= Math.min(7, (r.nWin && r.nWin[w]) || 0) << (3 * w);
+    series.nWin[i] = nw;
     series.nPeaks[i] = r.nPeaksRef;
     series.d34[i] = r.d34; series.d45[i] = r.d45; series.sfr[i] = r.sfr; series.shr[i] = r.shr; series.cpp[i] = r.cpp; series.h1h2[i] = r.h1h2; series.h1h2c[i] = r.h1h2c;
     // Gegenprobe und SHR-Raster: was den Wert unsicher macht oder ändert, gehört zum Rahmen.
     series.f0Cep[i] = r.f0Cep; series.f0Yin[i] = r.f0Yin;
     series.shrGrid[i] = r.shrGrid; series.shrOther[i] = r.shrOther; series.shrKamm[i] = r.shrKamm; series.shrZweitpuls[i] = r.shrZweitpuls;
     series.f0Grund[i] = codeAus('f0Grund', r.f0Grund); series.f0Korrektur[i] = codeAus('f0Korrektur', r.f0Korrektur); series.shrGrund[i] = codeAus('shrGrund', r.shrGrund);
+    // Kern 4.1: Belege der Fensterprobe und des Teiltonabstands, Gründe für ΔF3–4/ΔF4–5, SFR und CPP.
+    series.shrBoden[i] = r.shrBoden; series.fensterPegelDb[i] = r.fensterPegelDb; series.fensterF0Lo[i] = r.fensterF0Lo; series.fensterF0Hi[i] = r.fensterF0Hi;
+    series.teiltonHz[i] = r.teiltonHz; series.huellAbstandDb[i] = r.huellAbstandDb; series.fensterRauschAp[i] = r.fensterRauschAp; series.fensterRauschHochDb[i] = r.fensterRauschHochDb;
+    series.d34Grund[i] = codeAus('d34Grund', r.d34Grund); series.d45Grund[i] = codeAus('d45Grund', r.d45Grund);
+    // Unsicher steckt im Code: Meldete der Kern es einmal ohne Grund, steht '?' da, nicht still „sicher“.
+    series.sfrGrund[i] = (r.sfrUnsure && !r.sfrGrund) ? CODE_UNBEKANNT : codeAus('sfrGrund', r.sfrGrund);
+    series.cppGrund[i] = (r.cppUnsure && !r.cppGrund) ? CODE_UNBEKANNT : codeAus('cppGrund', r.cppGrund);
     var fl = 0;
     if (r.voiced) fl |= FLAG.VOICED;
     if (r.octaveCorrected) fl |= FLAG.OCTAVE;
@@ -229,7 +275,13 @@
        Dort sind Ton und halber Ton zwei vertretbare Lesarten, kein gerissener Wert; der Anteil steht
        in octaveAmbiguousShare. */
     var f0sicher = function (j) { return !(series.flags[j] & FLAG.F0UNSURE); };
-    var anteil = function (maske) { var c = 0; for (var q = 0; q < voicedIdx.length; q++) if (series.flags[voicedIdx[q]] & maske) c++; return voicedIdx.length ? c / voicedIdx.length : 0; };
+    var anteilWenn = function (bed) { var c = 0; for (var q = 0; q < voicedIdx.length; q++) if (bed(voicedIdx[q])) c++; return voicedIdx.length ? c / voicedIdx.length : 0; };
+    var anteil = function (maske) { return anteilWenn(function (j) { return series.flags[j] & maske; }); };
+    /* Teiltonabstand (dsp.js teiltonHz: F0, bei unsicherem Grundton 2·F0): darüber 250 Hz sind ΔF3–4 und ΔF4–5 nicht
+       messbar, ein Formant ist nur auf etwa ± Abstand/2 bestimmt; über 375 Hz ist kein Formant messbar. Ältere Serien
+       kennen den Abstand nicht: NaN, kein erfundenes 0. */
+    var tt = series.teiltonHz, TD = D.TEILTON_DIFF_HZ || 250, TS = D.TEILTON_SLOT_HZ || 375;
+    var ueberTD = function (j) { return tt[j] > TD; };
     s.f0 = stats(pick('f0', voicedIdx, f0sicher)); s.f0.note = D.hzToNote(s.f0.med);
     s.f0UnsureShare = anteil(FLAG.F0UNSURE);
     s.f0KorrekturShare = anteil(FLAG.F0KORR);
@@ -237,8 +289,11 @@
     var validAll = 0;
     for (var k = 0; k < 5; k++) {
       (function (kk) {
-        var fst = stats(pick('f' + (kk + 1), voicedIdx, function (j) { return series.valid[j] & (1 << kk); }));
+        var gilt = function (j) { return series.valid[j] & (1 << kk); };
+        var fst = stats(pick('f' + (kk + 1), voicedIdx, gilt));
         fst.share = voicedIdx.length ? fst.n / voicedIdx.length : 0;   // in wie vielen stimmhaften Rahmen war er überhaupt gültig
+        // Anteil der Rahmen in diesem Median, deren Formant nur auf ± Abstand/2 bestimmt ist (Teiltonabstand über 250 Hz)
+        fst.teiltonShare = (tt && fst.n) ? pick('f' + (kk + 1), voicedIdx, function (j) { return gilt(j) && ueberTD(j) && isFinite(series['f' + (kk + 1)][j]); }).length / fst.n : NaN;
         s.F.push(fst);
       })(k);
     }
@@ -253,7 +308,16 @@
     // liegen, und ein Take mit F3 durchgehend bei 2370 Hz zeigte „–“ statt der Zahl.
     s.f3stable = stats(pick('f3', stabilIdx, function (j) { return series.valid[j] & 4; }));
     s.f3scored = stats(pick('f3', stabilIdx, function (j) { return series.flags[j] & FLAG.SCORE; }));
-    s.sfr = stats(pick('sfr', voicedIdx)); s.cpp = stats(pick('cpp', voicedIdx));
+    /* SFR und CPP: Median und Quartile nur aus Rahmen ohne Rauschanteil im Fenster (dsp.js sfrUnsure, cppUnsure, Grund
+       'rauschanteil'). Ein Frikativ im Fenster hob SFR bis +25 dB und senkte CPP bis −16 dB (Befund N16); gemischt
+       stünde ein Konsonant als Stimmklang im Median. Die Rahmen behalten Wert und Marke, der Anteil steht daneben.
+       Ältere Serien ohne die Codes kennen die Marke nicht: Anteil NaN, alle Rahmen im Median wie damals. */
+    s.sfr = stats(pick('sfr', voicedIdx, function (j) { return !(series.sfrGrund && series.sfrGrund[j]); }));
+    s.cpp = stats(pick('cpp', voicedIdx, function (j) { return !(series.cppGrund && series.cppGrund[j]); }));
+    s.sfrUnsureShare = series.sfrGrund ? anteilWenn(function (j) { return series.sfrGrund[j]; }) : NaN;
+    s.cppUnsureShare = series.cppGrund ? anteilWenn(function (j) { return series.cppGrund[j]; }) : NaN;
+    s.teiltonShare = tt ? anteilWenn(ueberTD) : NaN;
+    s.teiltonHochShare = tt ? anteilWenn(function (j) { return tt[j] > TS; }) : NaN;
     /* SHR: Median und Maximum nur aus Rahmen ohne shrUnsure (Raster zweifelhaft oder Grundton
        unsicher). Vorher zählten sie mit, und ein Wert, dessen Raster offen ist, konnte als „Warnung“
        im Maximum stehen (Bericht 1, Befunde 3 und 4). Die unsicheren Rahmen verschwinden nicht:
@@ -267,6 +331,17 @@
     s.h1h2 = stats(pick('h1h2', voicedIdx, function (j) { return !(series.flags[j] & FLAG.H1H2UNSURE) && f0sicher(j); }));
     s.h1h2.unsureShare = anteil(FLAG.H1H2UNSURE);   // filtergetrieben (F1 nahe H1/H2), nicht Grundton
     s.h1h2c = stats(pick('h1h2c', voicedIdx, f0sicher));
+    /* H1*−H2* rechnet mit den Bandbreiten von F1–F3; eine LPC-Bandbreite unter 40 Hz ist Artefakt und geht auf 40 Hz
+       begrenzt ein (physik.md 7.2, dsp.js h1h2cArtifact). Der Wert bleibt im Median, der Anteil steht daneben — über
+       dieselben Rahmen wie der Median, aus bw1…bw3 der Serie (dsp.js: bwArtifact = Bandbreite < BW_ARTIFACT_HZ). */
+    var bwGrenze = D.BW_ARTIFACT_HZ || 40, h1cN = 0, h1cArt = 0;
+    for (i = 0; i < voicedIdx.length; i++) {
+      var hj = voicedIdx[i];
+      if (!f0sicher(hj) || !isFinite(series.h1h2c[hj])) continue;
+      h1cN++;
+      if (series.bw1[hj] < bwGrenze || series.bw2[hj] < bwGrenze || series.bw3[hj] < bwGrenze) h1cArt++;
+    }
+    s.h1h2c.bwArtefaktShare = h1cN ? h1cArt / h1cN : NaN;
     var rmsAll = []; for (i = 0; i < n; i++) rmsAll.push(series.rms[i]);
     s.rms = stats(rmsAll, true);
     var lvl = D.median(pick('rms', voicedIdx));
@@ -330,12 +405,13 @@
      Der Halbton kommt aus F0. Ein Rahmen mit unsicherem Grundton (F0UNSURE) steht womöglich in der
      falschen Gruppe und geht deshalb in keinen Median ein (wie in summarise). Seinen eigenen Wert
      bekommt er gegen den Median der Gruppe seines gemeldeten Tons, mit der Marke im Rahmen; gibt es
-     dort keinen sicheren Rahmen, bleibt er NaN statt gegen einen erfundenen Bezug gerechnet. */
+     dort keinen sicheren Rahmen, bleibt er NaN statt gegen einen erfundenen Bezug gerechnet. Ebenso ein Rahmen, dessen
+     SFR selbst unsicher ist (Rauschanteil im Fenster, sfrGrund): Er verschöbe den Median seines Halbtons. */
   function normaliseSfr(series) {
     var n = series.t.length, groups = {}, i;
     for (i = 0; i < n; i++) {
       if (!(series.flags[i] & FLAG.VOICED) || !isFinite(series.sfr[i])) { series.sfrn[i] = NaN; continue; }
-      if (series.flags[i] & FLAG.F0UNSURE) continue;
+      if ((series.flags[i] & FLAG.F0UNSURE) || (series.sfrGrund && series.sfrGrund[i])) continue;
       var m = Math.round(D.hzToMidi(series.f0[i]));
       (groups[m] || (groups[m] = [])).push(series.sfr[i]);
     }
@@ -349,16 +425,44 @@
     return med;
   }
 
+  /* Rahmen an einer Naht: Sein Fenster enthält Signal von beiden Seiten einer Lücke, also keinen gesungenen
+     Zustand. Er wird nicht gemessen, sondern als stimmloser Rahmen ohne jeden Wert geführt (Pause), mit NAHT. */
+  function nahtRahmen() {
+    var nan5 = [NaN, NaN, NaN, NaN, NaN], nein5 = [false, false, false, false, false];
+    return { voiced: false, f0: NaN, ap: NaN, rmsDb: NaN, F: nan5, sdOrder: nan5, sdWin: nan5, BW: nan5, valid: nein5, slotUnsure: nein5, slotGrund: ['', '', '', '', ''], rauschBoden: nein5,
+      nPeaksRef: 0, d34: NaN, d45: NaN, d34valid: false, d45valid: false, sfr: NaN, shr: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
+      f0Cep: NaN, f0Yin: NaN, shrGrid: NaN, shrOther: NaN, shrKamm: NaN, shrZweitpuls: NaN, f0Grund: '', f0Korrektur: '', shrGrund: '',
+      shrBoden: NaN, fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, teiltonHz: NaN, huellAbstandDb: NaN, fensterRauschAp: NaN, fensterRauschHochDb: NaN,
+      d34Grund: '', d45Grund: '', sfrUnsure: false, sfrGrund: '', cppUnsure: false, cppGrund: '',
+      octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, f0Unsure: false, shrUnsure: false };
+  }
+
   /* Hauptaufruf. samples: Float32Array/Float64Array bei sr. Liefert Promise<{ summary, series, meta }>.
      onProgress(done, total) wird je Block gerufen; zwischen Blöcken gibt die Funktion den Faden frei.
      o.abbrechen (Funktion): liefert sie vor einem Block true, endet die Analyse ohne Ergebnis — das Promise
      wird mit einem Fehler verworfen, der abgebrochen = true trägt. So lässt sich ein langer Take mitten in
-     der Rechnung abbrechen, ohne dass halbe Werte entstehen. */
+     der Rechnung abbrechen, ohne dass halbe Werte entstehen.
+     o.naehteS (Sekunden im Signal): Stellen, an denen Abtastwerte fehlen (Signallücke, app.js). Dort ist das
+     Signal ohne Pause aneinandergesetzt; über einer Atempause entstand so ein gehaltener Tonsprung, der als
+     sicherer Befund dastand (Befund N7). Jede Naht gilt als Pause: Rahmen, deren längstes Fenster sie
+     überdeckt, werden nicht gemessen (NAHT, Pause), und die Feinspur samt Sprungsuche läuft je Abschnitt
+     zwischen den Nähten — kein Bezugston und kein Sprung reicht über eine Naht. Ein Eintrag [von, bis] ist eine Naht,
+     deren Stelle nur auf diese Spanne bekannt ist (Kontext stand, recorder.js spanneS): Die ganze Spanne gilt als Naht,
+     die Feinspur läuft nur davor und danach. */
   function analyseTake(samples, sr, o, onProgress) {
     var opts = {};
     for (var k in DEFAULTS) opts[k] = (o && o[k] != null) ? o[k] : DEFAULTS[k];
     var abbrechen = (o && typeof o.abbrechen === 'function') ? o.abbrechen : null;
-    var TSR = D.TARGET_SR;
+    var TSR = D.TARGET_SR, dauer = samples.length / sr, naehte = [], spannen = [];
+    ((o && o.naehteS) || []).forEach(function (x) {
+      var von = typeof x === 'number' ? x : (x && typeof x[0] === 'number' ? x[0] : NaN), bis = typeof x === 'number' ? x : (x && typeof x[1] === 'number' ? x[1] : NaN);
+      if (von > 0 && von < dauer && bis >= von) { naehte.push(x); spannen.push([von, Math.min(bis, dauer)]); }
+    });
+    function vonS(x) { return typeof x === 'number' ? x : x[0]; }
+    naehte.sort(function (a, b) { return vonS(a) - vonS(b); });
+    spannen.sort(function (a, b) { return a[0] - b[0]; });
+    var nahtRand = Math.max.apply(null, D.WINDOWS.concat([D.MAIN_WINDOW])) / 2 + 1 / TSR;
+    function anNaht(t) { for (var q = 0; q < spannen.length; q++) if (t > spannen[q][0] - nahtRand && t < spannen[q][1] + nahtRand) return true; return false; }
     var ds = D.resample(samples, sr, TSR);
     var hop = Math.max(1, Math.round(opts.hopS * TSR)), half = Math.round(0.03 * TSR);
     var centres = [];
@@ -375,14 +479,18 @@
           if (abbrechen && abbrechen()) { var ab = new Error('Analyse abgebrochen'); ab.abgebrochen = true; reject(ab); return; }
           var end = Math.min(centres.length, i + opts.chunk);
           for (; i < end; i++) {
-            var t = centres[i] / TSR, r = D.analyseAt(ds, TSR, centres[i], frameOpts);
+            var t = centres[i] / TSR, naht = anNaht(t), r = naht ? nahtRahmen() : D.analyseAt(ds, TSR, centres[i], frameOpts);
             var inp = { t: t, voiced: r.voiced, F1: r.F[0], F2: r.F[1], F3: r.F[2], valid1: r.valid[0], valid2: r.valid[1], d34: r.d34, d34valid: r.d34valid };
             inputs.push(inp);
             fillFrame(series, i, t, r);
+            if (naht) series.flags[i] |= FLAG.NAHT;
           }
           if (onProgress) onProgress(i, centres.length);
           if (i < centres.length) { setTimeout(step, opts.yieldMs); return; }
           applyGate(series, V.gateOffline(inputs, opts.gate || {}));
+          // Ein Rahmen an der Naht ist Pause, auch wenn das Gatter ihn in einem stabilen Fenster mitzählt: kein
+          // Segment und keine Wertung reicht über eine Naht.
+          for (var q = 0; q < centres.length; q++) if (series.flags[q] & FLAG.NAHT) { series.gate[q] = 0; series.cls[q] = -1; series.score[q] = NaN; series.flags[q] &= ~(FLAG.SCORE | FLAG.VOWELAMBIG); }
           var sfrByNote = normaliseSfr(series);
           /* Zweite Tonhöhenspur mit kurzem Fenster: die Hauptspur misst auf mindestens 60 ms und
              verliert dadurch Kiekser unter etwa 90 ms vollständig. Unterschieden wird nur nach Dauer —
@@ -390,9 +498,16 @@
              gehaltener Sprung (ab 5 Halbtönen) ist nicht automatisch ein Registerwechsel: Ein legato
              gesungener Melodiesprung (Quarte bis Oktave) zählt genauso. Einen Registerbruch zeigt
              erst ein Qualitätseinbruch am Übergang, und den prüft diese Zählung nicht. */
-          var fein = D.pitchTrackFine(ds, TSR, opts.fine || {});
-          var spruenge = D.detectJumps(fein, opts.jumps || {});
-          var meta = { hopS: opts.hopS, durationS: samples.length / sr, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
+          // Abschnitte zwischen den Nähten; die Spanne einer ungenau bekannten Naht gehört zu keinem.
+          var grenzen = [0], fein = null, spruenge = [];
+          for (var g = 0; g < spannen.length; g++) grenzen.push(Math.min(ds.length, Math.round(spannen[g][0] * TSR)), Math.min(ds.length, Math.round(spannen[g][1] * TSR)));
+          grenzen.push(ds.length);
+          for (g = 0; g + 1 < grenzen.length; g += 2) {
+            var spur = D.pitchTrackFine(ds.subarray(grenzen[g], grenzen[g + 1]), TSR, opts.fine || {}), ab = grenzen[g] / TSR;
+            if (!fein) fein = spur;
+            D.detectJumps(spur, opts.jumps || {}).forEach(function (e) { e.startS += ab; spruenge.push(e); });
+          }
+          var meta = { hopS: opts.hopS, durationS: samples.length / sr, naehteS: naehte, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
           var summary = summarise(series, meta);
           summary.sfrByNote = sfrByNote;
           var stimmSek = summary.voicedShare * meta.durationS;
@@ -432,10 +547,15 @@
   ];
   function istZahl(v) { return typeof v === 'number' && isFinite(v); }
   function zahlGleich(a, b) { return istZahl(a) && istZahl(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)); }
+  /* Eine Abweichung in zwei Fassungen: statt = „Name alt statt jetzt“ (unvergleichbar), pfeil = „Name alt → neu“
+     (aenderungen, Meldung nach der Neu-Analyse). Beide aus derselben Prüfung, damit die Neu-Analyse nie
+     „gleiche Einstellungen“ meldet, wo die Vergleichsprüfung eine Abweichung sieht (Befund N20). */
   function abweichung(name, alt, neu, einheit) {
     var txt = function (v) { return String(v).replace('.', ','); };
-    return istZahl(alt) ? name + ' ' + txt(alt) + ' statt ' + txt(neu) + einheit : name + ' nicht gespeichert';
+    return { statt: istZahl(alt) ? name + ' ' + txt(alt) + ' statt ' + txt(neu) + einheit : name + ' nicht gespeichert',
+      pfeil: name + ' ' + (istZahl(alt) ? txt(alt) : 'nicht gespeichert') + ' → ' + txt(neu) + einheit };
   }
+  function beides(t) { return { statt: t, pfeil: t }; }
   function zentroideGleich(a, b) {
     if (!a || !b || a.length !== b.length) return false;
     for (var i = 0; i < a.length; i++) if (!a[i] || !b[i] || a[i].cls !== b[i].cls || !zahlGleich(a[i].F1, b[i].F1) || !zahlGleich(a[i].F2, b[i].F2)) return false;
@@ -444,25 +564,33 @@
   /* '' = vergleichbar, sonst die Abweichungen als Text. aktuell = { kernelVersion, gate, spreadMaxHz,
      hopS }: was analyseTake jetzt bekäme; fehlende Angaben gelten wie dort als Vorgabe. Ohne aktuell
      wird nichts geprüft. */
-  function unvergleichbar(take, aktuell) {
-    if (!aktuell) return '';
+  function abweichungen(take, aktuell) {
     var an = take && take.analysis, su = take && take.summary, ag = aktuell.gate || {}, d = [], i;
-    if (!an) return 'Rechenweise nicht gespeichert';
+    if (!an) return [beides('Rechenweise nicht gespeichert')];
     var kern = aktuell.kernelVersion != null ? aktuell.kernelVersion : D.VERSION;
-    if (an.kernelVersion !== kern) d.push(an.kernelVersion ? 'Kern ' + an.kernelVersion + ' statt ' + kern : 'Kernversion nicht gespeichert');
+    if (an.kernelVersion !== kern) d.push({ statt: an.kernelVersion ? 'Kern ' + an.kernelVersion + ' statt ' + kern : 'Kernversion nicht gespeichert', pfeil: 'Kern ' + (an.kernelVersion || 'nicht gespeichert') + ' → ' + kern });
     var sv = su && su.summaryVersion != null ? su.summaryVersion : 1;
-    if (sv !== SUMMARY_VERSION) d.push('Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (Object.prototype.hasOwnProperty.call(FASSUNG_FEHLT, sv) ? ' (' + FASSUNG_FEHLT[sv] + ')' : ''));
+    if (sv !== SUMMARY_VERSION) d.push({ statt: 'Zusammenfassung Fassung ' + sv + ' statt ' + SUMMARY_VERSION + (Object.prototype.hasOwnProperty.call(FASSUNG_FEHLT, sv) ? ' (' + FASSUNG_FEHLT[sv] + ')' : ''), pfeil: 'Zusammenfassung Fassung ' + sv + ' → ' + SUMMARY_VERSION });
     var hop = aktuell.hopS != null ? aktuell.hopS : DEFAULTS.hopS, spr = aktuell.spreadMaxHz != null ? aktuell.spreadMaxHz : DEFAULTS.spreadMaxHz;
     if (!zahlGleich(an.hopS, hop)) d.push(abweichung('Rahmenabstand', an.hopS, hop, ' s'));
     if (!zahlGleich(an.spreadMaxHz, spr)) d.push(abweichung('Gültigkeitsgrenze Streuung', an.spreadMaxHz, spr, ' Hz'));
     var tg = an.gate;
-    if (!tg) { d.push('Gatterwerte nicht gespeichert'); return d.join(', '); }
+    if (!tg) { d.push(beides('Gatterwerte nicht gespeichert')); return d; }
     for (i = 0; i < GATTER_VERGLEICH.length; i++) {
       var f = GATTER_VERGLEICH[i], soll = ag[f[0]] != null ? ag[f[0]] : V.DEFAULTS[f[0]];
       if (!zahlGleich(tg[f[0]], soll)) d.push(abweichung(f[1], tg[f[0]], soll, f[2]));
     }
-    if (!zentroideGleich(tg.centroids, ag.centroids || V.CENTROIDS)) d.push(tg.centroids ? 'andere Vokalzentroide' : 'Vokalzentroide nicht gespeichert');
-    return d.join(', ');
+    if (!zentroideGleich(tg.centroids, ag.centroids || V.CENTROIDS)) d.push(tg.centroids ? { statt: 'andere Vokalzentroide', pfeil: 'Vokalzentroide geändert' } : beides('Vokalzentroide nicht gespeichert'));
+    return d;
+  }
+  function unvergleichbar(take, aktuell) {
+    if (!aktuell) return '';
+    return abweichungen(take, aktuell).map(function (e) { return e.statt; }).join(', ');
+  }
+  /* Was sich an der Rechenweise geändert hat, wenn ein Take jetzt mit aktuell gerechnet wird: Liste „Name alt → neu“,
+     leer bei gleicher Rechenweise. Dieselben Größen wie unvergleichbar, also auch alle Gatterwerte und Zentroide. */
+  function aenderungen(take, aktuell) {
+    return aktuell ? abweichungen(take, aktuell).map(function (e) { return e.pfeil; }) : [];
   }
 
   function refAus(t, b, pinned) {
@@ -483,9 +611,19 @@
     return r;
   }
 
+  /* Ein Take mit Signallücke (app.js signalLuecken, recorder.js) ist eine unvollständige Aufnahme: Was in der
+     Lücke gesungen wurde, fehlt. Er bleibt in der Chronik, sichtbar gekennzeichnet, ist aber keine Referenz. */
+  function lueckenhaft(take) { var l = take && take.signalLuecken; return !!(l && l.length); }
+  /* Nähte eines Takes für analyseTake (o.naehteS) aus seinen Signallücken (recorder.js): nur Stellen, an denen die Teile
+     aneinanderstoßen; eine nur ungefähr bekannte Stelle (spanneS) als Spanne [von, bis]. */
+  function nahtStellen(luecken) {
+    return (luecken || []).filter(function (l) { return l && l.art === 'naht' && typeof l.beiS === 'number'; })
+      .map(function (l) { return l.spanneS > 0 ? [l.beiS, l.beiS + l.spanneS] : l.beiS; });
+  }
+
   /* Referenzen je Vokal: engstes Bestsegment über alle Takes, mit Herkunft. aktuell (optional, siehe
      unvergleichbar): Takes, die anders gerechnet sind, zählen nicht. Ohne aktuell wird die
-     Rechenweise nicht geprüft. */
+     Rechenweise nicht geprüft. Takes mit Signallücke zählen nie. */
   function computeRefs(takes, previous, aktuell) {
     var refs = {};
     /* Eine angepinnte Referenz wird nach einer Neu-Analyse aus dem neuen Bestsegment desselben Takes
@@ -503,6 +641,7 @@
       var uv = host ? unvergleichbar(host, aktuell) : '';
       if (!host) grund = wer + ' ist gelöscht.';
       else if (uv) grund = wer + ' ist anders gerechnet als jetzt eingestellt: ' + uv + '.';
+      else if (lueckenhaft(host)) grund = wer + ' hat eine Signallücke (Aufnahme unvollständig).';
       else if (!hb || !isFinite(hb.d34Med)) grund = wer + ' hat in seiner letzten Auswertung ' + (pv && pv.segmentsAmbiguous ? 'für /' + p + '/ nur zweideutig zugeordnete Segmente, kein Bestsegment.' : 'kein Bestsegment für /' + p + '/.');
       else if (hb.ambiguousShare > AMBIG_MAX_SHARE) grund = wer + ': das Bestsegment für /' + p + '/ ist zweideutig zugeordnet (' + Math.round(100 * hb.ambiguousShare) + ' % der Rahmen).';
       refs[p] = grund ? verwaist(pr, host, grund) : refAus(host, hb, true);
@@ -511,7 +650,7 @@
       var t = takes[i], per = t.summary && t.summary.perVowel;
       if (!per) continue;
       // Bericht 2, Befund 2: ein Take mit gesenkter F3-Schwelle machte sein tiefes, enges Cluster zur Zielmarke.
-      if (unvergleichbar(t, aktuell)) continue;
+      if (unvergleichbar(t, aktuell) || lueckenhaft(t)) continue;
       for (var cls in per) {
         var b = per[cls].bestSegment;
         if (!b || !isFinite(b.d34Med)) continue;
@@ -533,14 +672,28 @@
     for (var i = 0; i < c.length; i++) { var d = c.charCodeAt(i) - 64; if (d < 1 || d > 26) return -1; n = n * 26 + d; }
     return n - 1;
   }
+  /* Codes, die verbreitete CSV-Leser nicht als denselben Text zurückgeben, werden nicht vergeben (Befund N18). Der Code
+     ist die Verbindung zwischen Take-CSV, Rahmen-CSV (Dateiname) und Notizen; geht er still verloren, fällt der Take
+     aus jeder Gruppierung nach Code. Geprüft mit pandas 3.0.6 und seinen Vorgaben, Standard und Excel DE:
+     - NA, NULL: gelesen als fehlend (NaN), auch zwischen anderen Codes. R (read.csv) liest NA ebenso.
+     - INF, INFINITY: gelesen als Zahl ∞, wenn die Spalte nur diesen Code enthält (CSV-Zeile eines Takes).
+     - TRUE, FALSE: gelesen als Wahrheitswert, wenn die Spalte nur diesen Code enthält; Excel liest TRUE/FALSE
+       (englisch) und WAHR/FALSCH (deutsch) als Wahrheitswert (bekanntes Verhalten, hier nicht nachgeprüft).
+     - NAN, NONE: Großschreibung der pandas-Marken NaN und None. pandas 3.0.6 lässt sie als Text; ein Leser, der
+       ohne Groß- und Kleinschreibung vergleicht, nicht.
+     Erreichbar ist davon praktisch NA (365. Take), INF (6454.) und NAN (9504.). Ein Take, der einen solchen Code
+     schon trägt (ältere Fassung, Import), behält ihn: umbenannt wird nie. */
+  var CODES_GESPERRT = ['NA', 'NULL', 'INF', 'INFINITY', 'TRUE', 'FALSE', 'WAHR', 'FALSCH', 'NAN', 'NONE'];
+  var GESPERRT_INDEX = CODES_GESPERRT.map(indexFromCode);
   function nextCodeIndex(takes, stored) {
     var m = stored || 0;
     for (var i = 0; i < (takes || []).length; i++) { var k = indexFromCode(takes[i].code); if (k >= 0 && k + 1 > m) m = k + 1; }
+    while (GESPERRT_INDEX.indexOf(m) >= 0) m++;
     return m;
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, makeSeries: makeSeries, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, nahtStellen: nahtStellen, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, slotGrundAus: slotGrundAus, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

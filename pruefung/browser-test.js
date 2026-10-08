@@ -62,9 +62,19 @@ const WAV = path.join(SP, 'fake.wav');
   const KORPUS = JSON.stringify({ format: 'vare-korpus', version: 1, stand: '2026-10-03', notiz: 'Testkorpus',
     marken: { d34: [{ hz: 404, text: 'erfundener Prueftwert' }, { hz: 707 }, { hz: 1111 }] },
     gatter: { f3MinHz: 2500, spreadMaxHz: 130 } });
+  // Anfragen mit dem richtigen Token, die den Korpus ausliefern: vor der Verbindung muss es 0 sein.
+  let korpusAusgeliefert = 0;
+  // Ablage der Kalibrierung: PUT nach data/input/ im privaten Repo. Mitgeschrieben, nie echt geschickt.
+  const ablagePuts = [];
   const korpusRoute = route => {
     const auth = route.request().headers()['authorization'] || '';
     if (auth !== 'Bearer ' + TOKEN) { route.fulfill({ status: 401, contentType: 'application/json', body: '{"message":"Bad credentials"}' }); return; }
+    if (route.request().method() === 'PUT') {
+      ablagePuts.push({ url: route.request().url(), body: route.request().postData() || '' });
+      route.fulfill({ status: 201, contentType: 'application/json', body: '{"content":{}}' });
+      return;
+    }
+    korpusAusgeliefert++;
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ content: Buffer.from(KORPUS, 'utf8').toString('base64'), encoding: 'base64' }) });
   };
   await ctx.route('https://api.github.com/**', korpusRoute);
@@ -73,23 +83,53 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForFunction(() => document.getElementById('anmeldung') && !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
     check('Oeffentliche Huelle: vor der Verbindung nur die Token-Eingabe', await page.isHidden('#app') && await page.isHidden('#nav') && await page.isVisible('#token'));
     check('Huelle nennt das private Repo', (await page.textContent('#korpus-repo')).includes('vare-tools'), await page.textContent('#korpus-repo'));
-    // Die Seite nennt ihre Adresse (#origin-name). Der freie Port kann selbst 404 oder 1111 enthalten
-    // und täuschte dann ein Leck vor; geprüft wird deshalb der Inhalt ohne die Portnummer.
-    // Ebenso die Geräte-IDs im Mikrofonmenü: Chromium vergibt je Profil zufällige 64 Hexziffern, die in etwa jedem
-    // 20. Lauf „404“ enthalten (Sonde: 2 von 40 Ladevorgängen). Eine Marke stünde als Text da, nicht als solche ID.
-    const port = String(server.address().port), ohnePort = (await page.content()).split(port).join('').replace(/\b[0-9a-f]{64}\b/g, '<Geräte-ID>');
-    const markeBei = ['404', '1111'].map(m => ohnePort.indexOf(m) >= 0 ? m + ': …' + ohnePort.slice(Math.max(0, ohnePort.indexOf(m) - 60), ohnePort.indexOf(m) + 20).replace(/\s+/g, ' ') + '…' : '').filter(Boolean);
-    check('Huelle enthaelt die Marken nicht im Quelltext', !markeBei.length, 'Port ' + port + (markeBei.length ? ' | ' + markeBei.join(' | ') : ''));
+    /* Vor der Verbindung steht nichts aus dem Korpus in der Seite. Gesucht wird nach ALLEN Marken des Testkorpus und
+       nach Stand, Notiz und Markentext, aus KORPUS abgeleitet statt von Hand aufgezählt (früher nur 404 und 1111, 707
+       fehlte). Gesucht wird überall, wo die Seite sie ablegen könnte: Quelltext der Seite (auch verborgene Teile und
+       Attribute), sichtbarer Text, Eingabewerte, localStorage, sessionStorage und der Korpus im Seitenzustand; vor und
+       nach einem falschen Token. Eine Marke zählt nur als eigene Zahl: Port der Prüfseite (frei vergeben) und die
+       Geräte-IDs im Mikrofonmenü (64 zufällige Hexziffern, in etwa jedem 20. Lauf mit „404“ darin) täuschten sonst ein
+       Leck vor. Ob die Suche greift, zeigt die Gegenprobe nach der Verbindung: Dort findet sie jede Marke im Zustand und
+       den Stand in der Kopfzeile. */
+    const KO = JSON.parse(KORPUS), MARKEN = KO.marken.d34.map(m => String(m.hz)), KTEXTE = [KO.stand, KO.notiz].concat(KO.marken.d34.map(m => m.text).filter(Boolean));
+    const zahlRe = z => new RegExp('(?<![\\w.,])' + z + '(?!\\w)');
+    async function korpusFunde() {
+      const port = String(server.address().port);
+      const orte = await page.evaluate(() => {
+        const speicher = s => { const o = []; for (let i = 0; i < s.length; i++) o.push(s.key(i) + '=' + s.getItem(s.key(i))); return o.join('\n'); };
+        return { quelltext: document.documentElement.outerHTML, text: document.body.innerText,
+          eingaben: Array.from(document.querySelectorAll('input, textarea, select')).map(e => e.id + '=' + e.value).join('\n'),
+          localStorage: speicher(localStorage), sessionStorage: speicher(sessionStorage),
+          zustand: JSON.stringify((window.VAREAPP && VAREAPP.state && VAREAPP.state.korpus) || null) };
+      });
+      const funde = [];
+      for (const wo of Object.keys(orte)) {
+        const inhalt = orte[wo].split(port).join('<Port>'), stelle = i => '…' + inhalt.slice(Math.max(0, i - 50), i + 20).replace(/\s+/g, ' ') + '…';
+        for (const z of MARKEN) { const m = zahlRe(z).exec(inhalt); if (m) funde.push({ wo, was: z, wie: stelle(m.index) }); }
+        for (const t of KTEXTE) { const i = inhalt.indexOf(t); if (i >= 0) funde.push({ wo, was: t, wie: stelle(i) }); }
+      }
+      return funde;
+    }
+    const zeigeFunde = f => f.map(x => x.wo + ' ' + x.was + ': ' + x.wie).join(' | ');
+    const fundeVorher = await korpusFunde();
     await page.fill('#token', 'falsches-token-mit-genug-zeichen');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => (document.getElementById('anmeldung-fehler').textContent || '').length > 0, null, { timeout: 10000 });
     check('Falsches Token: Meldung, Oberflaeche bleibt zu', await page.isHidden('#app'), (await page.textContent('#anmeldung-fehler')).slice(0, 80));
+    const fundeFalsch = await korpusFunde();
+    check('Huelle enthaelt keine Korpusdaten (alle Marken, Stand, Notiz; Quelltext, Text, Eingaben, Speicher, Zustand), vor und nach falschem Token; kein Korpus ausgeliefert',
+      !fundeVorher.length && !fundeFalsch.length && korpusAusgeliefert === 0,
+      'gesucht ' + MARKEN.join('/') + ' und ' + KTEXTE.length + ' Texte, Korpus ausgeliefert ' + korpusAusgeliefert + (fundeVorher.length ? ' | vorher: ' + zeigeFunde(fundeVorher) : '') + (fundeFalsch.length ? ' | nach falschem Token: ' + zeigeFunde(fundeFalsch) : ''));
     await page.fill('#token', TOKEN);
     await page.check('#token-merken');
     await page.click('#btn-verbinden');
     await page.waitForFunction(() => !document.getElementById('app').hidden, null, { timeout: 10000 });
     check('Richtiges Token: Oberflaeche erscheint', await page.isVisible('#nav'));
     check('Korpus-Stand in der Kopfzeile', /Marken/.test(await page.textContent('#korpus-stand')), await page.textContent('#korpus-stand'));
+    const fundeNach = await korpusFunde(), imZustand = new Set(fundeNach.filter(f => f.wo === 'zustand').map(f => f.was));
+    check('Gegenprobe der Korpussuche: nach der Verbindung findet sie jede Marke, Stand und Notiz im Zustand und den Stand im Quelltext',
+      MARKEN.concat(KTEXTE).every(w => imZustand.has(w)) && fundeNach.some(f => f.wo === 'quelltext' && f.was === KO.stand) && korpusAusgeliefert >= 1,
+      'im Zustand: ' + [...imZustand].join(', ') + ' | Quelltext: ' + fundeNach.filter(f => f.wo === 'quelltext').map(f => f.was).join(', '));
     await page.waitForFunction(() => document.getElementById('kernel-version').textContent !== '–', null, { timeout: 10000 });
     check('Seite lädt, Kern-Version sichtbar', true, await page.textContent('#kernel-version'));
     check('file://-Hinweis über http verborgen', await page.isHidden('#notice-file'));
@@ -112,20 +152,61 @@ const WAV = path.join(SP, 'fake.wav');
     const m = /Rauschboden (-?[\d,.]+) dBFS · \/a\/ (-?[\d,.]+) dBFS · SNR ([\d,.]+) dB/.exec(cal);
     if (m) check('Kalibrierung: Boden < -55, /a/ um -19, SNR > 30', parseFloat(m[1]) < -55 && parseFloat(m[2]) > -30 && parseFloat(m[3]) > 30, m.slice(1).join(' / '));
     else check('Kalibrierung: Zahlen lesbar', false, cal);
+    // Ablage: genau eine Datei mit den Messwerten nach data/input/, ohne Gerätenamen.
+    await page.waitForFunction(() => /abgelegt/.test((document.getElementById('ablage-status') || {}).textContent || ''), null, { timeout: 5000 }).catch(() => {});
+    {
+      const put = ablagePuts[0];
+      let datei = null;
+      try { datei = JSON.parse(Buffer.from(JSON.parse(put.body).content, 'base64').toString('utf8')); } catch (e) { }
+      check('Kalibrierung: eine Datei nach data/input/ im privaten Repo abgelegt', ablagePuts.length === 1 && /\/repos\/benedictcberg-hue\/vare-tools\/contents\/data\/input\/kalibrierung-\d{8}-\d{6}-[A-Za-z0-9]+\.json$/.test(put && put.url || ''), ablagePuts.map(x => x.url).join(' | '));
+      check('Ablage: Datei enthält Messwerte und Uhrzeit, keinen Gerätenamen', !!datei && datei.format === 'vare-kalibrierung' && typeof datei.snrDb === 'number' && typeof datei.rauschbodenDbfs === 'number' && /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(datei.zeitLokal) && !/Fake|deviceLabel|geraet/i.test(JSON.stringify(datei)), datei ? Object.keys(datei).join(',') : 'nicht lesbar');
+      check('Ablage: Anzeige meldet „abgelegt“', /abgelegt/.test(await page.textContent('#ablage-status')), await page.textContent('#ablage-status'));
+    }
     await page.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 5000 });
     await page.waitForTimeout(1200);
     await page.fill('#take-label', 'E2E /a/ G3');
     await page.selectOption('#take-intent', 'a');
     await page.fill('#take-comment', 'automatischer Durchlauf');
+    /* Live-Anzeige über die ganze Aufnahme mitschreiben, jede Änderung mit Zeit: Gatterwort, ΔF3–4-Text und -Klasse.
+       Früher las die Prüfung einen einzigen Augenblick 3 s nach dem Start. Fiel dort ein kurzer Aussetzer des
+       nachgestellten Mikrofons hinein, stand ΔF3–4 120–160 ms richtig in Rost als „nicht gewertet“, und die Prüfung riss
+       (I2, 1 von 8 Läufen). */
+    await page.evaluate(() => {
+      const log = window.__liveLog = [], t0 = window.__liveT0 = performance.now(), $ = id => document.getElementById(id);
+      const nimm = () => { const e = { g: $('gate-state').textContent, d: $('v-d34').textContent, k: $('st-d34').className }, l = log[log.length - 1]; if (!l || l.g !== e.g || l.d !== e.d || l.k !== e.k) { e.t = performance.now() - t0; log.push(e); } };
+      window.__liveBeob = new MutationObserver(nimm);
+      for (const id of ['gate-state', 'v-d34', 'st-d34']) window.__liveBeob.observe($(id), { childList: true, characterData: true, subtree: true, attributes: true });
+      nimm();
+    });
     await page.click('#btn-take');
     await page.waitForTimeout(3000);
     const live = await page.evaluate(() => ({ state: document.getElementById('gate-state').textContent, f0: document.getElementById('v-f0').textContent, f1: document.getElementById('v-f1').textContent, f3: document.getElementById('v-f3').textContent, d34: document.getElementById('v-d34').textContent, ref: document.getElementById('live-ref').textContent, sfr: document.getElementById('v-sfr').textContent, shr: document.getElementById('v-shr').textContent, floor: document.getElementById('v-floor').textContent }));
     check('Live während /a/: stimmhaft, F0 ≈ 196', /19[4-8]/.test(live.f0), JSON.stringify(live));
-    // Nur „<Zahl> Hz gewertet“ zählt; /gewertet/ allein traf auch „— nicht gewertet: …“ und prüfte nichts.
-    check('Live: Gatter stabil /a/ und ΔF3–4 gewertet', /stabil \/a\//.test(live.state) && /^\s*-?\d[\d.,]* Hz gewertet\s*$/.test(live.d34), live.state + ' | ' + live.d34);
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
+    const liveLog = await page.evaluate(() => { window.__liveBeob.disconnect(); window.__liveLog.push({ t: performance.now() - window.__liveT0, ende: true }); return window.__liveLog; });
     await page.click('#btn-take');
+    {
+      /* Über das Zeitfenster der Aufnahme: Das Gatter steht zusammen mindestens 1,5 s, davon mindestens 0,5 s am Stück,
+         auf „stabil /a/“ mit „<Zahl> Hz gewertet“ (mehr als ein Augenblick; ein Aussetzer von 150 ms bricht das nicht).
+         Jede Wertung liegt beim wahren ΔF3–4 des Prüfsignals (3300 − 2500 = 800 Hz, ±60), nie in Rost und nie außerhalb
+         von „stabil /a/“. Nur „<Zahl> Hz gewertet“ zählt; /gewertet/ allein traf auch „— nicht gewertet: …“. */
+      const gew = e => /^\s*-?\d[\d.,]* Hz gewertet\s*$/.test(e.d), stabA = e => /stabil \/a\//.test(e.g);
+      let lauf = 0, laengster = 0, summe = 0, stuecke = 0;
+      const falsch = [];
+      for (let i = 0; i + 1 < liveLog.length; i++) {
+        const e = liveLog[i], dauer = liveLog[i + 1].t - e.t;
+        if (gew(e) && stabA(e)) { if (!lauf) stuecke++; lauf += dauer; summe += dauer; laengster = Math.max(laengster, lauf); } else lauf = 0;
+        if (gew(e)) {
+          const hz = parseFloat(e.d.replace(',', '.'));
+          if (!stabA(e) || /\bunsure\b/.test(e.k) || !(Math.abs(hz - 800) <= 60)) falsch.push((e.t / 1000).toFixed(2) + ' s: ' + e.g + ' | ' + e.d + ' (' + e.k + ')');
+        }
+      }
+      check('Live: Gatter stabil /a/ und ΔF3–4 gewertet, zusammen mindestens 1,5 s, am Stück mindestens 0,5 s; jede Wertung bei 800 ± 60 Hz, nie in Rost, nie außerhalb von stabil /a/',
+        summe >= 1500 && laengster >= 500 && !falsch.length,
+        'zusammen ' + (summe / 1000).toFixed(2) + ' s in ' + stuecke + ' Stück(en), am Stück ' + (laengster / 1000).toFixed(2) + ' s, ' + liveLog.length + ' Änderungen' + (falsch.length ? ' | falsch: ' + falsch.slice(0, 4).join(' | ') : '') +
+        (summe < 1500 || laengster < 500 ? ' | Verlauf: ' + liveLog.slice(0, 40).map(e => (e.t / 1000).toFixed(2) + ' ' + (e.g || '') + ' / ' + (e.d || '')).join(' ; ').slice(0, 900) : ''));
+    }
     // Während der Analyse schon den nächsten Take beschriften: das gehört nicht in diesen Take.
     const busyBeiEingabe = await page.evaluate(() => VAREAPP.state.busy);
     await page.fill('#take-label', 'NAECHSTER');
@@ -152,6 +233,9 @@ const WAV = path.join(SP, 'fake.wav');
     }
     const hasAudio = await page.evaluate(id => VARESTORE.hasAudio(id), takes[0].id);
     check('Audio (WAV) mitgespeichert', hasAudio === true);
+    // Keine vorgetäuschte Lücke: Über das echte AudioWorklet kommt der Take lückenlos an.
+    check('Take ohne Aussetzer: keine Signallücke erkannt (Rahmenzähler und Uhrzeit aus dem AudioWorklet)', Array.isArray(takes[0].signalLuecken) && takes[0].signalLuecken.length === 0 && takes[0].signalLueckeS === 0,
+      JSON.stringify({ luecken: takes[0].signalLuecken, summe: takes[0].signalLueckeS }));
     await page.screenshot({ path: path.join(SP, 'shot-result.png'), fullPage: true });
     // Prüfsignal
     await page.click('#btn-pruef');
@@ -436,6 +520,182 @@ const WAV = path.join(SP, 'fake.wav');
     check('Erneut verbunden, Haken nicht angefasst: Token nicht im localStorage; Mikrofon aus, Knopf sagt „Mikrofon starten“',
       neu.lokal === null && neu.knopf === 'Mikrofon starten' && !neu.mic && neu.kalibrieren, JSON.stringify(neu));
     await ctx2.close();
+
+    // ---------- Aufnahme vor der Analyse gesichert, Neuladen mitten in der Analyse, Datenbank Version 1 → 2 ----------
+    // Wirft ein Schritt (fehlt etwa die Anzeige), reißen die offenen Prüfungen dieses Abschnitts, und der Durchgang läuft weiter.
+    const NEULADEN_NAMEN = ['Datenbank Version 1 → 2: die vorhandene Chronik bleibt, der Laden für unvollendete Analysen ist da',
+      'Neuladen während der Analyse: Aufnahme vor der Analyse in IndexedDB, Rückfrage beim Verlassen, danach als unvollendete Analyse angeboten',
+      'Fortsetzen nach dem Neuladen: derselbe Take mit Bezeichnung, Stelle in der Sitzung, WAV und Rahmenverlauf; nichts mehr offen',
+      'Aussetzer von 1,5 s mitten im Take: als Signallücke erkannt, Take gespeichert und in Ergebnis, Detail und CSV als lückenhaft gekennzeichnet'];
+    const neuladenErledigt = [], neuladenCheck = (k, ok, d) => { neuladenErledigt.push(k); check(NEULADEN_NAMEN[k], ok, d); };
+    /* page.waitForFunction wartet nicht auf ein Promise: Gibt die Bedingung eines zurück, gilt sie sofort als erfüllt
+       (Playwright: Promise.resolve(false) war nach 31 ms „erfüllt“). Das Warten auf den fortgesetzten Take endete deshalb
+       sofort; ob er gespeichert war, hing daran, ob die Analyse beim folgenden Warten auf !busy schon lief — unter Last
+       riss „Fortsetzen nach dem Neuladen“ zufällig. Bedingungen, die IndexedDB lesen, laufen über evaluate. */
+    const bisWahr = async (seite, fn, ms) => { const t0 = Date.now(); for (;;) { if (await seite.evaluate(fn).catch(() => false)) return true; if (Date.now() - t0 > ms) return false; await seite.waitForTimeout(300); } };
+    let ctx4 = null;
+    try {
+      ctx4 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
+      await ctx4.route('https://api.github.com/**', korpusRoute);
+      // Aussetzer nachstellen: Solange window.__drop gilt, kommen die Nachrichten des AudioWorklets nicht an (wie ein
+      // übergelaufener Eingangspuffer bei einem Gerätewechsel); der Kontext läuft weiter.
+      await ctx4.addInitScript(() => {
+        /* Anhalten: Solange window.__halt gilt, wartet jeder fällige Zeitgeber der Seite. So steht eine Analyse
+           zwischen zwei Blöcken still, und das Neuladen trifft sie sicher mitten darin, wie lange sie auch dauert. */
+        window.__halt = false;
+        const zeitgeber = window.setTimeout.bind(window);
+        window.setTimeout = function (f, ms) {
+          const rest = Array.prototype.slice.call(arguments, 2);
+          return zeitgeber(function lauf() { if (window.__halt) { zeitgeber(lauf, 20); return; } if (typeof f === 'function') f.apply(null, rest); }, ms);
+        };
+        window.__drop = false;
+        const Orig = window.AudioWorkletNode;
+        if (!Orig) return;
+        window.AudioWorkletNode = function (c, name, opts) {
+          const node = new Orig(c, name, opts), port = node.port; let h = null;
+          Object.defineProperty(port, 'onmessage', { configurable: true, get() { return h; }, set(fn) { h = fn; port.addEventListener('message', ev => { if (!window.__drop) h.call(port, ev); }); port.start(); } });
+          return node;
+        };
+        window.AudioWorkletNode.prototype = Orig.prototype;
+      });
+      const p4 = await ctx4.newPage();
+      p4.on('pageerror', e => errors.push(String(e && e.stack || e)));
+      // Rückfragen beim Verlassen werden mitgeschrieben und abgelehnt, außer der Ablauf erlaubt das Verlassen ausdrücklich.
+      const dialoge = []; let verlassenErlaubt = false;
+      p4.on('dialog', d => { dialoge.push(d.type()); if (d.type() === 'beforeunload' && verlassenErlaubt) d.accept(); else d.dismiss(); });
+      // Eine Chronik der Datenbankversion 1 (vor dem Laden pending) unter derselben Adresse anlegen.
+      await p4.goto(BASE + '/README.md');
+      await p4.evaluate(() => new Promise((ok, fehler) => {
+        const r = indexedDB.open('vare', 1);
+        r.onupgradeneeded = () => { const db = r.result, t = db.createObjectStore('takes', { keyPath: 'id' }); t.createIndex('createdAt', 'createdAt'); t.createIndex('code', 'code'); db.createObjectStore('series', { keyPath: 'takeId' }); db.createObjectStore('audio', { keyPath: 'takeId' }); db.createObjectStore('calibrations', { keyPath: 'id' }).createIndex('createdAt', 'createdAt'); db.createObjectStore('meta', { keyPath: 'key' }); };
+        r.onsuccess = () => { const db = r.result, tx = db.transaction('takes', 'readwrite'); tx.objectStore('takes').put({ id: 'v1-take', code: 'C', label: 'aus Version 1', createdAt: '2026-01-01T10:00:00.000Z', analysis: { kernelVersion: '4.0.0' }, summary: {}, history: [] }); tx.oncomplete = () => { db.close(); ok(); }; tx.onerror = () => fehler(tx.error); };
+        r.onerror = () => fehler(r.error);
+      }));
+      await p4.goto(BASE + '/index.html#/aufnahme');
+      await p4.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+      await p4.fill('#token', TOKEN); await p4.uncheck('#token-merken'); await p4.click('#btn-verbinden');
+      await p4.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 10000 });
+      const v1 = await p4.evaluate(() => Promise.all([VARESTORE.allTakes(), VARESTORE.allPending()]).then(r => ({ takes: r[0].map(t => t.id), pending: r[1].length })));
+      neuladenCheck(0, v1.takes.includes('v1-take') && v1.pending === 0, JSON.stringify(v1));
+      // Ohne Kalibrierpflicht (Schalter in den Einstellungen); ein Take von 3 s, die Analyse wird mittendrin angehalten.
+      await p4.$eval('#s-requireCal', el => { el.checked = false; el.dispatchEvent(new Event('change')); });
+      await p4.click('#btn-mic');
+      await p4.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
+      await p4.waitForTimeout(500);
+      await p4.fill('#take-label', 'Neuladen-Probe');
+      await p4.click('#btn-take'); await p4.waitForTimeout(3000); await p4.click('#btn-take');
+      await p4.waitForFunction(() => /Analyse \d+ \/ \d+ Rahmen/.test((document.getElementById('take-progress-text') || {}).textContent || '') && (window.__halt = true), null, { timeout: 30000, polling: 'raf' });
+      const vor = await p4.evaluate(() => Promise.all([VARESTORE.allPending(), VARESTORE.audioIds(), VARESTORE.allTakes()]).then(r => ({ pending: r[0].map(o => o.id), audio: r[1], takes: r[2].length, busy: VAREAPP.state.busy })));
+      // Neuladen mitten in der Analyse: Der Browser fragt nach; abgelehnt, läuft die Analyse weiter.
+      await p4.evaluate(() => { location.reload(); });
+      await p4.waitForTimeout(800);
+      const nachAbgelehnt = await p4.evaluate(() => ({ busy: VAREAPP.state.busy, gespeichert: /Gespeichert als/.test(document.getElementById('take-result').textContent) }));
+      const abgelehntGeblieben = dialoge.includes('beforeunload') && (nachAbgelehnt.busy || nachAbgelehnt.gespeichert);
+      // Dann bestätigt neu laden, solange die Analyse noch läuft.
+      const nochInAnalyse = await p4.evaluate(() => VAREAPP.state.busy);
+      verlassenErlaubt = true;
+      await p4.reload();
+      verlassenErlaubt = false;
+      await p4.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 15000 });
+      await p4.waitForFunction(() => !document.getElementById('offene-analysen').hidden, null, { timeout: 10000 }).catch(() => { });
+      const angebot = await p4.evaluate(() => { const b = document.getElementById('offene-analysen'); return { sichtbar: !b.hidden, text: b.textContent, knoepfe: Array.from(b.querySelectorAll('button')).map(x => x.textContent) }; });
+      neuladenCheck(1,
+        vor.busy && vor.pending.length === 1 && vor.audio.includes(vor.pending[0]) && vor.takes === 1 && abgelehntGeblieben && nochInAnalyse
+        && angebot.sichtbar && /Neuladen-Probe/.test(angebot.text) && angebot.knoepfe.join('|') === 'Analyse fortsetzen|WAV sichern|Verwerfen',
+        JSON.stringify({ vor, dialoge, nachAbgelehnt, nochInAnalyse, angebot: angebot.text.slice(0, 90), knoepfe: angebot.knoepfe }));
+      await p4.click('#offene-analysen button[data-offen="weiter"]').catch(() => { });
+      await bisWahr(p4, () => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Neuladen-Probe')), 60000);
+      await p4.waitForFunction(() => !VAREAPP.state.busy, null, { timeout: 30000 }).catch(() => { });
+      const nach = await p4.evaluate(id => Promise.all([VARESTORE.getTake(id), VARESTORE.allPending(), VARESTORE.hasAudio(id), VARESTORE.getSeries(id)]).then(r => ({ code: r[0] && r[0].code, label: r[0] && r[0].label, pos: r[0] && r[0].sitzung && r[0].sitzung.position, pending: r[1].length, audio: r[2], serie: !!r[3], angebotWeg: document.getElementById('offene-analysen').hidden, ergebnis: document.getElementById('take-result').textContent.slice(0, 40) })), vor.pending[0] || '');
+      neuladenCheck(2,
+        nach.label === 'Neuladen-Probe' && nach.code === 'D' && nach.pos === 1 && nach.pending === 0 && nach.audio && nach.serie && nach.angebotWeg && /Gespeichert als D/.test(nach.ergebnis), JSON.stringify(nach));
+      // Aussetzer: 2 s nach dem Start kommen 1,5 s lang keine Abtastwerte an, dann wieder.
+      await p4.click('#btn-mic');
+      await p4.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
+      await p4.waitForTimeout(500);
+      await p4.fill('#take-label', 'Aussetzer-Probe');
+      await p4.click('#btn-take');
+      await p4.waitForTimeout(2000); await p4.evaluate(() => { window.__drop = true; });
+      await p4.waitForTimeout(1500); await p4.evaluate(() => { window.__drop = false; });
+      await p4.waitForTimeout(1500); await p4.click('#btn-take');
+      await bisWahr(p4, () => VARESTORE.allTakes().then(ts => ts.some(t => t.label === 'Aussetzer-Probe')), 60000);
+      await p4.waitForFunction(() => !VAREAPP.state.busy, null, { timeout: 30000 }).catch(() => { });
+      const lk = await p4.evaluate(() => VARESTORE.allTakes().then(ts => { const t = ts.find(x => x.label === 'Aussetzer-Probe'); if (!t) return null;
+        const csv = VARECSV.takesToCsv([t], 'standard').split(/\r?\n/), kopf = csv[0].split(','), wert = csv[1].split(',')[kopf.indexOf('signal_gap_s')];
+        const rost = document.querySelector('#take-result .rust');
+        return { id: t.id, luecken: t.signalLuecken, summe: t.signalLueckeS, csv: wert, ergebnis: rost ? { text: rost.textContent, farbe: getComputedStyle(rost).color } : null }; }));
+      let detailZeile = null;
+      if (lk) {
+        await p4.evaluate(id => { location.hash = '#/take/' + id; }, lk.id);
+        await p4.waitForFunction(() => document.querySelector('#take-detail .grid'), null, { timeout: 10000 }).catch(() => { });
+        detailZeile = await p4.evaluate(() => { const e = document.querySelector('#take-detail .small.rust'); return e ? { text: e.textContent, farbe: getComputedStyle(e).color } : null; });
+      }
+      const eineNaht = !!lk && Array.isArray(lk.luecken) && lk.luecken.length === 1 && lk.luecken[0].art === 'naht' && lk.luecken[0].dauerS > 1.3 && lk.luecken[0].dauerS < 1.8;
+      neuladenCheck(3,
+        eineNaht && Math.abs(Number(lk.csv) - lk.summe) < 0.006 && !!lk.ergebnis && lk.ergebnis.farbe === 'rgb(168, 90, 60)' && /Signal unterbrochen/.test(lk.ergebnis.text)
+        && !!detailZeile && detailZeile.farbe === 'rgb(168, 90, 60)' && /Signal unterbrochen/.test(detailZeile.text),
+        JSON.stringify({ luecken: lk && lk.luecken, csv: lk && lk.csv, ergebnis: lk && lk.ergebnis, detail: detailZeile }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+    } catch (e) { NEULADEN_NAMEN.forEach((n, k) => { if (neuladenErledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
+    if (ctx4) await ctx4.close();
+
+    // ---------- B2: Take-Ergebnis mit schwach belegten Formanten; Neu-Analyse nach verstellten Gatter-Reglern ----------
+    const B2_NAMEN = ['Take-Ergebnis im Browser: schwach belegte Formanten in Rost mit Anteil, die übrigen ohne, wie im Detail (N8)',
+      'Neu-Analyse nach verstellten Gatter-Reglern: Meldung nennt jede Änderung, der Take-Knopf ist währenddessen gesperrt (N20)'];
+    const b2Erledigt = [], b2Check = (k, ok, d) => { b2Erledigt.push(k); check(B2_NAMEN[k], ok, d); };
+    let ctx5 = null;
+    try {
+      ctx5 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
+      await ctx5.route('https://api.github.com/**', korpusRoute);
+      // Anhalten wie oben: Solange window.__halt gilt, wartet jeder fällige Zeitgeber, die Analyse steht zwischen zwei Blöcken.
+      await ctx5.addInitScript(() => {
+        window.__halt = false;
+        const zeitgeber = window.setTimeout.bind(window);
+        window.setTimeout = function (f, ms) {
+          const rest = Array.prototype.slice.call(arguments, 2);
+          return zeitgeber(function lauf() { if (window.__halt) { zeitgeber(lauf, 20); return; } if (typeof f === 'function') f.apply(null, rest); }, ms);
+        };
+      });
+      const p5 = await ctx5.newPage();
+      p5.on('pageerror', e => errors.push(String(e && e.stack || e)));
+      p5.on('dialog', d => d.dismiss());
+      await p5.goto(BASE + '/index.html#/aufnahme');
+      await p5.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
+      await p5.fill('#token', TOKEN); await p5.uncheck('#token-merken'); await p5.click('#btn-verbinden');
+      await p5.waitForFunction(() => !document.getElementById('app').hidden && VAREAPP.state.takesGeladen, null, { timeout: 10000 });
+      await p5.$eval('#s-requireCal', el => { el.checked = false; el.dispatchEvent(new Event('change')); });
+      await p5.click('#btn-mic');
+      await p5.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 15000 });
+      // /o/ auf A2, 2,5 s nach 0,5 s Raumrauschen, Rauschen 30 dB unter dem Vokal: F3 und F4 nur in einem Teil der Rahmen gültig.
+      const sr = 48000, o = D.synthVowel(110, [430, 800, 2450, 3200, 4000], [60, 80, 120, 150, 200], 2.5, sr, { gain: 0.3 });
+      let x = 7, pe = 0; for (const v of o) pe += v * v; pe /= o.length;
+      const amp = Math.sqrt(pe / Math.pow(10, 30 / 10) * 3), sam = new Array(o.length + sr / 2);
+      for (let i = 0; i < sam.length; i++) { x = (x * 1664525 + 1013904223) >>> 0; sam[i] = amp * ((x / 4294967296) * 2 - 1) + (i >= sr / 2 ? o[i - sr / 2] : 0); }
+      await p5.evaluate(a => { VAREAPP.finishTake(new Float32Array(a), 48000); }, sam);
+      await p5.waitForFunction(() => !VAREAPP.state.busy && document.querySelector('#take-result .notice'), null, { timeout: 120000 });
+      const r8 = await p5.evaluate(() => VARESTORE.allTakes().then(ts => {
+        const t = ts[0], s = t.summary, k = Array.from(document.querySelectorAll('#take-result .stat')).find(e => /F1–F5/.test(e.textContent));
+        const rost = k ? Array.from(k.querySelectorAll('.rust')).map(e => ({ text: e.textContent, farbe: getComputedStyle(e).color })) : [];
+        return { id: t.id, F: s.F.map(f => ({ n: f.n, share: f.share, med: f.med })), text: k ? k.querySelector('.v').textContent : '', rost };
+      }));
+      const schwach = r8.F.map((f, k) => (!(f.n >= 10) || !(f.share >= 0.5)) ? k : -1).filter(k => k >= 0);
+      await p5.evaluate(id => { location.hash = '#/take/' + id; }, r8.id);
+      await p5.waitForFunction(() => document.querySelector('#take-detail .grid'), null, { timeout: 10000 });
+      const detailSchwach = await p5.evaluate(() => Array.from(document.querySelectorAll('#take-detail .stat')).map(e => [(e.querySelector('.k') || {}).textContent, e.className]).filter(z => /^F[1-5]$/.test(z[0]) && /\bunsure\b/.test(z[1])).map(z => +z[0].slice(1) - 1));
+      b2Check(0, schwach.length > 0 && schwach.length < 5 && r8.rost.length === schwach.length && r8.rost.every(e => e.farbe === 'rgb(168, 90, 60)' && /gültig in/.test(e.text)) && detailSchwach.join() === schwach.join(),
+        JSON.stringify({ schwach: schwach.map(k => 'F' + (k + 1)), text: r8.text, rost: r8.rost, detail: detailSchwach.map(k => 'F' + (k + 1)) }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+      // Regler so bewegen, wie es die Hand tut, dann „Neu analysieren“ im Detail; mitten in der Neu-Analyse anhalten.
+      for (const [id, v] of [['#s-windowS', '0.6'], ['#s-sdF2Max', '40'], ['#s-minValidShare', '1']]) await p5.$eval(id, (el, w) => { el.value = w; el.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+      await p5.waitForSelector('#d-re', { timeout: 10000 });
+      await p5.click('#d-re');
+      await p5.waitForFunction(() => VAREAPP.state.busy && (window.__halt = true), null, { timeout: 10000, polling: 'raf' });
+      const waehrend = await p5.evaluate(() => document.getElementById('btn-take').disabled);
+      await p5.evaluate(() => { window.__halt = false; });
+      await p5.waitForFunction(() => !VAREAPP.state.busy && /Neu analysiert|fehlgeschlagen/.test((document.querySelector('[role=status]') || {}).textContent || ''), null, { timeout: 120000 });
+      const r20 = await p5.evaluate(id => VARESTORE.getTake(id).then(t => ({ status: document.querySelector('[role=status]').textContent, note: t.reanalysisNote, frei: !document.getElementById('btn-take').disabled })), r8.id);
+      b2Check(1, waehrend === true && r20.frei && ['Gatter-Fenster 0,3 → 0,6 s', 'F2-Bewegungsgrenze 100 → 40 Hz', 'Mindestanteil gültiger F1/F2 0,8 → 1'].every(t => r20.status.indexOf(t) >= 0 && r20.note.indexOf(t) >= 0) && !/gleiche Einstellungen/.test(r20.status),
+        JSON.stringify({ gesperrtWaehrend: waehrend, freiDanach: r20.frei, status: r20.status, note: r20.note }));
+    } catch (e) { B2_NAMEN.forEach((n, k) => { if (b2Erledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
+    if (ctx5) await ctx5.close();
 
     // ---------- Sicherung mit nie Gemessenem, Befund statt Rost, Sprünge, verwaiste Referenz ----------
     const C = require(path.join(ROOT, 'csv.js'));
