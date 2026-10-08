@@ -241,27 +241,29 @@ node test_dsp.js
 
 Erst die eingebauten Kriterien T1–T27 in `test_dsp.js`, danach jedes Modul unter
 `pruefung/kriterien/` in alphabetischer Reihenfolge (Format: `pruefung/kriterien/README.md`).
-Stand Kern 4.0.0: 451 Kriterien gegen synthetische Signale mit bekannter Wahrheit. Exit-Code 1,
+Kriterien gegen synthetische Signale mit bekannter Wahrheit; wie viele, nennt die letzte Zeile des Laufs. Exit-Code 1,
 sobald eines reißt. **Reißt ein Kriterium, ist das ein Befund, keine Toleranzfrage — melden, nicht
 die Schwelle anheben.** Läuft in CI auf `ubuntu-latest` und `windows-latest` mit Node 22.
 
-Laufzeit unter Linux mit Node 22: rund 4 Minuten, davon `k_kern.js` allein knapp zwei Minuten. Unter
+Laufzeit unter Linux mit Node 22: rund 9 Minuten, davon `n_kern.js` und `k_kern.js` zusammen knapp sechs. Unter
 Windows länger.
 
 | Modul | IDs | prüft | Linux |
 |---|---|---|---|
 | eingebaut in `test_dsp.js` | T1–T27 | Abnahmetabelle, Sweeps, Gatter, Sprünge, CSV-Grundlagen, Schritt 0 | 8 s |
-| `k_kern.js` | K1–K4 | Feinspur und Tonsprünge; Nummerierung, Lesarten, Verschmelzung, Rauschboden; Gegenprobe des Grundtons; SHR-Raster | 114 s |
-| `v_auswertung.js` | V1–V3 | Live-Gatter im Vokalwechsel und bei Vibrato; Grenzvokal, Referenzen, Pins; lange Takes, „stabil“, Boden ohne Stille | 24 s |
-| `u_oberflaeche.js` | U1–U3 | `app.js` in einer nachgebauten Seite: Schritt 0, Löschen, Import, Gerätewechsel, Token, Sicherung, Rost und Gold, Historie | 17 s |
-| `i3_gruende.js` | I3 | Grund je Slot in Serie, CSV, Live und Hover; Live-Boden; angenommene Stimmschwelle | 15 s |
-| `t1_pruefstaerke.js` | P1 | ob jede Regel für gültig, stimmhaft und stabil wirklich entscheidet (gegen Mutanten) | 9 s |
-| `i4_rechenweise.js` | I4 | Kern-Fingerabdruck je Version, „Alle neu analysieren“, Formelschutz, Sicherung Version 3 | 7 s |
-| `i2_durchreichen.js` | I2 | Grundton- und SHR-Unsicherheit bis Zusammenfassung, CSV und Anzeige | 6 s |
+| `n_kern.js` | A1–A4 | Nachprüfung des Kerns: Feinspur mit Oktavkontrolle, Mischrahmen am Tonwechsel, Atempause im Raum und mit Brumm, digitale Stille; SHR an Rändern, Tonwechseln und bei Hauch; Formanten nach dem Teiltonabstand (hohe Lage), enge Cluster, Vokalwechsel; Grundton bei starkem Hauch (Unterton, Oktave offen); SFR/CPP neben Frikativen | 181 s |
+| `k_kern.js` | K1–K4 | Feinspur und Tonsprünge; Nummerierung, Lesarten, Verschmelzung, Rauschboden; Gegenprobe des Grundtons; SHR-Raster | 162 s |
+| `v_auswertung.js` | V1–V3 | Live-Gatter im Vokalwechsel und bei Vibrato; Grenzvokal, Referenzen, Pins; lange Takes, „stabil“, Boden ohne Stille | 30 s |
+| `u_oberflaeche.js` | U1–U3 | `app.js` in einer nachgebauten Seite: Schritt 0, Löschen, Import, Gerätewechsel, Token, Sicherung, Rost und Gold, Historie | 22 s |
+| `i3_gruende.js` | I3 | Grund je Slot in Serie, CSV, Live und Hover; Live-Boden; angenommene Stimmschwelle | 18 s |
+| `t1_pruefstaerke.js` | P1 | ob jede Regel für gültig, stimmhaft und stabil wirklich entscheidet (gegen Mutanten) | 10 s |
+| `i4_rechenweise.js` | I4 | Kern-Fingerabdruck je Version, „Alle neu analysieren“, Formelschutz, Sicherung Version 3 | 10 s |
+| `i2_durchreichen.js` | I2 | Grundton- und SHR-Unsicherheit bis Zusammenfassung, CSV und Anzeige | 8 s |
 | `i1_versoehnen.js` | I1 | Nummerierung über alle Fenster an Vokalwechseln | 4 s |
-| `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 2 s |
+| `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 4 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
-| `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 38 s |
+| `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 47 s |
+| `n_zusammen.js` | C1 | Kern und Oberfläche zusammen: Marken und Grundcodes passen in die Serie (auch NAHT neben neuen Kernmarken), Rahmen an einer Naht in jedem Serienfeld und jeder CSV-Spalte nicht gemessen, Feinspur und Sprungsuche je Abschnitt mit der Sprungerkennung des Kerns | 9 s |
 
 Jede Änderung am Kern, die einen Rahmenwert ändert, erhöht `VERSION` in `dsp.js` und trägt einen neuen
 Fingerabdruck in `i4_rechenweise.js` ein; sonst reißt I4a.
