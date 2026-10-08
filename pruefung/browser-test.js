@@ -64,9 +64,16 @@ const WAV = path.join(SP, 'fake.wav');
     gatter: { f3MinHz: 2500, spreadMaxHz: 130 } });
   // Anfragen mit dem richtigen Token, die den Korpus ausliefern: vor der Verbindung muss es 0 sein.
   let korpusAusgeliefert = 0;
+  // Ablage der Kalibrierung: PUT nach data/input/ im privaten Repo. Mitgeschrieben, nie echt geschickt.
+  const ablagePuts = [];
   const korpusRoute = route => {
     const auth = route.request().headers()['authorization'] || '';
     if (auth !== 'Bearer ' + TOKEN) { route.fulfill({ status: 401, contentType: 'application/json', body: '{"message":"Bad credentials"}' }); return; }
+    if (route.request().method() === 'PUT') {
+      ablagePuts.push({ url: route.request().url(), body: route.request().postData() || '' });
+      route.fulfill({ status: 201, contentType: 'application/json', body: '{"content":{}}' });
+      return;
+    }
     korpusAusgeliefert++;
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ content: Buffer.from(KORPUS, 'utf8').toString('base64'), encoding: 'base64' }) });
   };
@@ -145,6 +152,16 @@ const WAV = path.join(SP, 'fake.wav');
     const m = /Rauschboden (-?[\d,.]+) dBFS · \/a\/ (-?[\d,.]+) dBFS · SNR ([\d,.]+) dB/.exec(cal);
     if (m) check('Kalibrierung: Boden < -55, /a/ um -19, SNR > 30', parseFloat(m[1]) < -55 && parseFloat(m[2]) > -30 && parseFloat(m[3]) > 30, m.slice(1).join(' / '));
     else check('Kalibrierung: Zahlen lesbar', false, cal);
+    // Ablage: genau eine Datei mit den Messwerten nach data/input/, ohne Gerätenamen.
+    await page.waitForFunction(() => /abgelegt/.test((document.getElementById('ablage-status') || {}).textContent || ''), null, { timeout: 5000 }).catch(() => {});
+    {
+      const put = ablagePuts[0];
+      let datei = null;
+      try { datei = JSON.parse(Buffer.from(JSON.parse(put.body).content, 'base64').toString('utf8')); } catch (e) { }
+      check('Kalibrierung: eine Datei nach data/input/ im privaten Repo abgelegt', ablagePuts.length === 1 && /\/repos\/benedictcberg-hue\/vare-tools\/contents\/data\/input\/kalibrierung-\d{8}-\d{6}-[A-Za-z0-9]+\.json$/.test(put && put.url || ''), ablagePuts.map(x => x.url).join(' | '));
+      check('Ablage: Datei enthält Messwerte und Uhrzeit, keinen Gerätenamen', !!datei && datei.format === 'vare-kalibrierung' && typeof datei.snrDb === 'number' && typeof datei.rauschbodenDbfs === 'number' && /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(datei.zeitLokal) && !/Fake|deviceLabel|geraet/i.test(JSON.stringify(datei)), datei ? Object.keys(datei).join(',') : 'nicht lesbar');
+      check('Ablage: Anzeige meldet „abgelegt“', /abgelegt/.test(await page.textContent('#ablage-status')), await page.textContent('#ablage-status'));
+    }
     await page.waitForFunction(() => !document.getElementById('btn-take').disabled, null, { timeout: 5000 });
     await page.waitForTimeout(1200);
     await page.fill('#take-label', 'E2E /a/ G3');
