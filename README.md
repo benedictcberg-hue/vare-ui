@@ -84,7 +84,8 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
 
-Die Zahlen und Regeln in diesem README gelten für **Kern 4.0.0** (`dsp.js`, `VERSION`).
+Die Zahlen und Regeln in diesem README gelten für **Kern 4.1.0** (`dsp.js`, `VERSION`). Wo eine Messung
+mit einem früheren Kern entstand, steht es dabei.
 
 ## Was „ungültig“ heißt
 
@@ -114,6 +115,8 @@ Verläufe ohne sie zeigen „nur in 2 Fenstern“ allein dann, wenn kein anderer
 | Streuung über Fenster N Hz, Streuung über Ordnungen N Hz | Die Streuung erreicht die Grenze (Vorgabe 130 Hz, Einstellung „Gültigkeitsgrenze Streuung“). |
 | nur in einem Fenster, nur in 2 Fenstern | Zu wenige Fensterlängen sehen ihn. |
 | in weniger als 2 Ordnungen | Zu wenige LPC-Ordnungen sehen ihn. |
+| Teiltonabstand N Hz zu groß · Teiltonabstand zu groß | Die Teiltöne liegen weiter als 250 Hz auseinander (Grundton, bei unsicherem Grundton sein Doppeltes). Die LPC-Hüllkurve sieht eine Resonanz nur an den Teiltönen; ihr Gipfel sitzt womöglich auf dem nächsten Teilton statt auf der Resonanz. Siehe „Grenze: Formanten in hoher Lage“. |
+| Vokalwechsel im Fenster | Die Hüllkurven der beiden Fensterhälften weichen um mehr als 5 dB voneinander ab: Im Fenster wechselt der Vokal, der Wert mischt zwei Vokale. |
 | nicht gefunden | Kein Gipfel für diesen Slot. |
 | Zuordnung unsicher, Grund nicht gespeichert · Grund nicht gespeichert | Ältere Rahmenverläufe ohne die Gründe; nach „Neu analysieren“ steht der genaue Grund da. |
 | Grund unbekannt | Keiner der Gründe trifft zu. Das darf nicht vorkommen und wäre selbst ein Befund. |
@@ -126,12 +129,19 @@ Grundton und SHR folgen derselben Regel:
 - **Grundton unsicher.** Der YIN-Wert muss eine Gegenprobe bestehen: die eigene Teiltonreihe und
   das Cepstrum. Fällt er durch und lässt er sich nicht geprüft ersetzen, steht er in Rost mit Grund
   („eigene Teiltonreihe fehlt“, „Cepstrum zeigt … Hz“, „keine Gegenprobe möglich“) und geht in keinen
-  Median ein (F0, Note, H1−H2, SFR je Halbton). Ein geprüft ersetzter Wert ist nicht unsicher: Er steht
+  Median ein (F0, Note, H1−H2, SFR je Halbton). Ebenso unsicher: ein Mischwert zweier Töne am Tonwechsel
+  („Mischwert am Tonwechsel“, mit den Tönen der Teilfenster) und eine teilweise belegte Reihe bei F0/2
+  („womöglich eine Oktave tiefer“). Ein geprüft ersetzter Wert ist nicht unsicher: Er steht
   mit dem alten YIN-Wert da, in der F0-Spur in Gold. Die Teilerkontrolle teilt nie unter 60 Hz; eine
   Teiltonreihe darunter heißt „Oktave unsicher“.
 - **SHR unsicher.** Das Raster liegt zwischen F0 und 2·F0. Ist es zweifelhaft (Kammkontrast der
   Teiltöne, zweite Anregung im LPC-Restsignal), stehen beide Werte in Rost mit Grund. Die Warnung in
-  Gold (über −15 dB) gibt es nur ohne Zweifel.
+  Gold (über −15 dB) gibt es nur ohne Zweifel. Siehe „Grenze: SHR an Rändern, Tonwechseln und bei Hauch“.
+- **SFR und CPP unsicher.** Liegt neben dem Vokal ein hörbarer, nicht periodischer Teil mit mehr Hochton im
+  Fenster (Konsonant, starker Hauch), stehen SFR und CPP in Rost mit „Rauschanteil im Fenster“. Ohne diese
+  Marke stand ein Frikativ im Median als Stimmklang da. Bei stark behauchter Stimme trägt ein kleiner Teil der
+  Rahmen die Marke, ohne dass ein Konsonant da ist.
+- **ΔF3–4 und ΔF4–5 nicht messbar** bei einem Teiltonabstand über 250 Hz (Grund „Teiltonabstand zu groß“).
 
 In Zusammenfassung und CSV behält jeder Rahmen Wert und Marke; die Zusammenfassung lässt unsichere
 Rahmen aus und nennt ihren Anteil daneben.
@@ -169,15 +179,40 @@ dann die ehrliche Anzeige, kein Defekt. Eine weitere Beweisquelle für F5 gibt e
 offene Entwurfsfrage. Echte Aufnahmen sind nicht geprüft — die Zahlen gelten für synthetische
 Signale.
 
-## Bekannter Fehler: SHR an Ein- und Aussätzen
+## Grenze: Formanten in hoher Lage
 
-An einem harten Ein- oder Aussatz steigt SHR in den Rahmen, deren Analysefenster die Kante
-überdeckt, ohne dass Kammkontrast oder zweite Anregung anschlagen. Der Rahmen gilt dann als sicher.
-Gemessen (Kern 4.0.0) an einem sauberen synthetischen /a/ bei 196 Hz mit Stille davor und danach:
-10 Rahmen über −25 dB, Höchstwert −11,7 dB; die Zusammenfassung meldet „SHR max“ dann als sichere
-Warnung in Gold. Bis der Kern das behebt, ist ein SHR-Höchstwert über −15 dB an Silbenkanten, im
-Staccato oder an Phrasengrenzen kein Beleg. Ob die Spitze an einer Kante liegt, zeigt die Rahmen-CSV
-(`t_s`, `shr_db`, `rms_dbfs`).
+Die LPC-Hüllkurve sieht eine Resonanz nur an den Teiltönen. Liegen sie weit auseinander, sitzt der Gipfel
+auf dem nächsten Teilton, bis zum halben Teiltonabstand neben der Resonanz. Der Kern rechnet mit dem
+Teiltonabstand (Grundton, bei unsicherem Grundton sein Doppeltes; CSV `teilton_hz`):
+
+- **über 250 Hz:** ΔF3–4 und ΔF4–5 sind nie gültig (Grund „Teiltonabstand zu groß“, CSV `d34_grund`,
+  `d45_grund`). Ein Formant gilt nur, wenn kein Nachbargipfel näher als das 1,5-Fache des Abstands liegt,
+  und ist auch dann meist nur auf etwa ± halben Teiltonabstand bestimmt. Die Zusammenfassung nennt je Formant den
+  Anteil solcher Rahmen im Median (CSV `fK_teilton_share`), das Detail steht in Rost daneben.
+- **über 375 Hz:** kein Formant ist messbar (alle Slots ungültig). Darüber liegen im Analyseband weniger
+  Teiltöne, als die LPC Koeffizienten hat.
+
+Gilt für hohe Töne, Kiekser und Brüche in die obere Lage. Anteile je Take: CSV `teilton_share` (über
+250 Hz) und `teilton_hoch_share` (über 375 Hz), im Detail „Hohe Lage“. Offen: Zwischen 250 und 375 Hz lagen
+an synthetischen Vokalen rund 1,5 % der gültigen Formanten weiter daneben, bis etwa einen ganzen
+Teiltonabstand. Sie sind als gültig markiert; dort hilft nur der Anteil in Rost als Warnung.
+
+## Grenze: SHR an Rändern, Tonwechseln und bei Hauch
+
+Der frühere bekannte Fehler (SHR stieg an harten Ein- und Aussätzen ohne Marke und erschien als sichere
+Warnung) ist behoben. SHR gilt jetzt als unsicher, mit Grund in Rost:
+
+- **Ein- oder Aussatz im Fenster:** Die Pegel der 20-ms-Blöcke im längsten Fenster liegen 12 dB oder mehr
+  auseinander (CSV `fenster_pegel_db`). Das schlägt auch bei einem raschen Decrescendo an: mehr unsichere
+  Rahmen, kein falscher Wert.
+- **Tonwechsel im Fenster:** Die Teilfenster gehören nicht zum selben Ton (CSV `fenster_f0_lo_hz`,
+  `fenster_f0_hi_hz`). Schritte unter etwa 1,5 HT und Wechsel ganz am Fensterrand erkennt die Probe nicht.
+- **Hauch:** SHR liegt über −25 dB, aber weniger als 8 dB über dem Pegel zwischen den Teiltönen (CSV
+  `shr_boden_db`). Der Wert bleibt stehen, ist aber nur eine Obergrenze. Eine echte Subharmonische in
+  behauchter Stimme lässt sich davon nicht trennen. Bei sehr starkem Hauch ist SHR praktisch nicht messbar.
+
+Einzelne Rahmen mit kurzzeitiger Alternation (Jitter um 1–2 % in tiefer Lage) können SHR bis etwa −20 dB
+ohne Marke erreichen. Die Werte stammen aus synthetischen Signalen.
 
 ## Tonsprünge: zwei Spuren
 
@@ -209,6 +244,15 @@ Gezählt wird nur Weite und Dauer, ohne Urteil (`dsp.js` `detectJumps`):
   gestörte Übergänge.
 - Vibrato und Portamento ab 300 ms lösen nichts aus. Schnelles Gleiten über 80–200 ms zählt
   teilweise als Sprung.
+- Die Feinspur prüft die Oktave über die Teiltonreihe. Rahmen am Tonwechsel, die zwischen den Tönen davor und
+  danach liegen, gelten als stimmlos. Eine Atempause erkennt die Sprungsuche auch im Nachhall und bei Brumm
+  am Pegel gegenüber dem eigenen Ton; ein Fenster mit digitaler Stille (exakte Nullen ab 5 ms) gilt als
+  stimmlos.
+- **Restkanten:** Einzelne kurze Kanten bleiben, vor allem im Ausklang eines Raums mit langem Nachhall und
+  bei Schritten knapp unter 5 HT mit Vibrato. Eine Atempause von nur 0,2 s im stark halligen Raum kann einen
+  gehaltenen Scheinsprung ergeben; die Grenze der Pausentiefe hat dort nach beiden Seiten wenig Abstand. Ein
+  leiser, gehaltener Oktavbruch am Phrasenende kann als Ausklang entfallen. Die Grenzen sind an
+  synthetischen Räumen und Stimmen gemessen.
 
 ## Signallücken
 
@@ -263,7 +307,7 @@ Windows länger.
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 4 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
 | `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 47 s |
-| `n_zusammen.js` | C1 | Kern und Oberfläche zusammen: Marken und Grundcodes passen in die Serie (auch NAHT neben neuen Kernmarken), Rahmen an einer Naht in jedem Serienfeld und jeder CSV-Spalte nicht gemessen, Feinspur und Sprungsuche je Abschnitt mit der Sprungerkennung des Kerns | 9 s |
+| `n_zusammen.js` | C1–C2 | Kern und Oberfläche zusammen: Marken und Grundcodes passen in die Serie (auch NAHT neben neuen Kernmarken), Rahmen an einer Naht in jedem Serienfeld und jeder CSV-Spalte nicht gemessen, Feinspur und Sprungsuche je Abschnitt mit der Sprungerkennung des Kerns; jeder Grund und Beleg des Kerns 4.1 in Serie, Sicherung, Zusammenfassung, CSV, live, Hover, Detail, Liste und Ergebnis | 9 s |
 
 Jede Änderung am Kern, die einen Rahmenwert ändert, erhöht `VERSION` in `dsp.js` und trägt einen neuen
 Fingerabdruck in `i4_rechenweise.js` ein; sonst reißt I4a.
@@ -279,7 +323,8 @@ Linux: `NODE_PATH="$(npm root -g)" node pruefung/browser-test.js`
 Windows (PowerShell): `$env:NODE_PATH = (npm root -g); node pruefung\browser-test.js`
 
 Chromium kommt aus der Umgebungsvariablen `VARE_CHROMIUM`, sonst aus `/opt/pw-browsers/chromium`, falls
-vorhanden, sonst aus der Playwright-Installation. 76 Prüfungen, Laufzeit rund 2 Minuten: Token-Tor (leere Hülle
+vorhanden, sonst aus der Playwright-Installation. Laufzeit rund 2 Minuten; wie viele Prüfungen, nennt die
+letzte Zeile des Laufs. Geprüft: Token-Tor (leere Hülle
 ohne Token: keine Marke, kein Stand, keine Notiz des Testkorpus in Quelltext, Text, Eingaben, Speicher oder
 Zustand, vor und nach falschem Token, mit Gegenprobe nach der Verbindung; Meldung bei falschem Token,
 Oberfläche erst nach Verbindung), Mikrofon über das AudioWorklet, Kalibrierung, Take gegen bekannte
@@ -320,7 +365,19 @@ die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`
 Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
 (nicht gemessen, als Pause geführt).
 
-Stand Kern 4.0.0: 102 Spalten je Take, 74 je Rahmen. Neu mit Kern 4.0.0:
+Stand Kern 4.1.0: 111 Spalten je Take, 88 je Rahmen. Neu mit Kern 4.1.0:
+
+- **Take:** `sfr_unsure_share`, `cpp_unsure_share` (SFR und CPP stehen nur aus Rahmen ohne Rauschanteil im
+  Median), `teilton_share`, `teilton_hoch_share` (Teiltonabstand über 250 bzw. 375 Hz) und `f1…f5_teilton_share`
+  (Anteil der gültigen Rahmen im Median mit Teiltonabstand über 250 Hz). Ältere Auswertungen: −99.
+- **Rahmen:** `slot_grund1…5` auch `teilton` und `wechsel`; `teilton_hz`, `d34_grund`, `d45_grund`
+  (`teilton`), `huell_abstand_db` (über 5 dB: Vokalwechsel); `f0_grund` auch `wechsel` und `oktave`;
+  `shr_grund` auch `rand`, `wechsel`, `rauschen`, mit den Belegen `shr_boden_db`, `fenster_pegel_db`,
+  `fenster_f0_lo_hz`, `fenster_f0_hi_hz`; `sfr_unsure`, `sfr_grund`, `cpp_unsure`, `cpp_grund`
+  (`rauschanteil`) mit `fenster_rausch_ap` und `fenster_rausch_hoch_db`. Marken und Gründe in stimmlosen
+  Rahmen −99 bzw. leer.
+
+Neu mit Kern 4.0.0:
 
 - **Take:** `f0_unsure_share`, `f0_korrektur_share`, `shr_unsure_share`, `shr_unsure_max_db`,
   `shr_other_max_db`, `voicing_floor_dbfs`. F0, Note, SHR und H1−H2 kommen nur aus sicheren Rahmen; die
