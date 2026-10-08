@@ -90,7 +90,7 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    10 Hz gerundet (CSV und Chronik behalten die vollen Werte). Eine Zahl steht nur, wenn der Wert in
    mindestens 60 % der stimmhaften Rahmen trägt, sonst „– · Grund“ in Kurzform (Teilton, verschmolzen,
    mehrdeutig, im Rauschen, streut …). ΔF3–4 heißt „gewertet“ nur bei stehendem Vokal und wenn das Gatter
-   in der Mehrheit der Rahmen gewertet hat. Einstellung „Ruhige Live-Anzeige“ aus: jeder Einzelrahmen mit
+   in mindestens der Hälfte der stimmhaften Rahmen gewertet hat. Einstellung „Ruhige Live-Anzeige“ aus: jeder Einzelrahmen mit
    allen Gründen, zur Fehlersuche.
 2. **Session-Recorder mit Chronik.** Take aufnehmen, Analyse im 10-ms-Raster mit Ordnungs-
    und Fensterlängensweep, Zusammenfassung und Rahmenverlauf und WAV in IndexedDB,
@@ -102,10 +102,10 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    Seite währenddessen neu geladen oder geschlossen, bietet sie die Aufnahme danach unter „Unvollendete
    Analyse“ an (fortsetzen, WAV sichern, verwerfen); während Aufnahme und Analyse fragt der Browser vor
    dem Verlassen nach. Take und Rahmenverlauf (und das WAV) werden in einer Transaktion gespeichert.
-3. **Kalibrierpflicht.** Vor dem ersten Take, gut 20 s zum Mitmachen: 3 s Vorlauf (nicht aufgenommen),
+3. **Kalibrierpflicht.** Vor dem ersten Take, rund 18 s zum Mitmachen: 3 s Vorlauf (nicht aufgenommen),
    6 s Stille, 2 s Einatmen (nicht ausgewertet), 5 s /a/, 2 s Aufhören und still bleiben. Jede Phase
    steht groß mit Countdown und Balken da; „Abbrechen“ verwirft die Aufnahme. Ausgewertet wird die
-   Stille ab 0,5 s bis 0,3 s vor ihrem Ende und das /a/ ab 0,5 s nach seinem Beginn. Rauschboden,
+   Stille ab 0,5 s bis 0,3 s vor ihrem Ende und das /a/ ab 0,5 s nach seinem Beginn bis 0,2 s vor seinem Ende. Rauschboden,
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
 
@@ -199,8 +199,8 @@ ohne die Lesarten-Prüfung:
 - Einzelne Formanten, Impulsfolge mit Rauschen: gültig F1 1084, F2 820, F3 72, F4 55, F5 47 von 1560,
   keiner falsch. Kern 3.0.0 hatte 4063 gültige, davon 467 mehr als 130 Hz daneben.
 
-Folge: In einem normalen Raum wertet das Live-Gatter selten. „nicht gewertet: F3/F4 unsicher“ ist
-dann die ehrliche Anzeige, kein Defekt. Eine weitere Beweisquelle für F5 gibt es nicht; das ist eine
+Folge: In einem normalen Raum wertet das Live-Gatter selten. „nicht gewertet“ (ruhige Anzeige: „– · mehrdeutig“ o. ä.; Einzeltakt:
+„nicht gewertet: F3/F4 unsicher“) ist dann die ehrliche Anzeige, kein Defekt. Eine weitere Beweisquelle für F5 gibt es nicht; das ist eine
 offene Entwurfsfrage. Echte Aufnahmen sind nicht geprüft — die Zahlen gelten für synthetische
 Signale.
 
@@ -481,8 +481,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   heißt nicht „Pause“, sondern „kein Periodenbezug“.
 - Ohne Kalibrierung und ohne Stille ist der Rauschboden unbekannt. Dann steht „unbekannt ·
   Stimmschwelle angenommen“, nie eine Annahme als Rauschboden.
-- Die Glättung wirkt nur auf die Anzeige, beginnt nach jeder Lücke neu und ist per Regler
-  veränderbar. Messwerte werden nie geglättet gespeichert.
+- Die Glättung wirkt nur auf die Einzeltakt-Anzeige (Einstellung „Ruhige Live-Anzeige“ aus), beginnt
+  nach jeder Lücke neu und ist per Regler veränderbar; die ruhige Anzeige nimmt stattdessen den Median der
+  letzten Sekunde. Messwerte werden nie geglättet gespeichert.
 - H1−H2 ist bei F1 ≈ F0 filtergetrieben und wird so beschriftet. Bandbreiten unter 40 Hz
   sind laut Physik Artefakt und werden als solche gekennzeichnet — am Formanten und bei H1*−H2*, das mit den
   Bandbreiten von F1–F3 rechnet und eine solche auf 40 Hz begrenzt (live, im Hover, im Detail als Anteil, in der

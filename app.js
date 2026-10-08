@@ -18,7 +18,7 @@
     { key: 'sdF2Max', label: 'F2 darf sich im Fenster bewegen (Hz) — Vorgabe 100', min: 40, max: 300, step: 10 },
     { key: 'minValidShare', label: 'Mindestanteil gültiger F1/F2 im Fenster — Vorgabe 0,80', min: 0.5, max: 1, step: 0.05, dec: 2 },
     { key: 'f3MinHz', label: 'F3 mindestens (Hz), sonst keine ΔF3–4-Wertung — Vorgabe 2500', min: 2000, max: 3000, step: 50 },
-    { key: 'smooth', label: 'Glättung der Formantanzeige (Faktor, 1 = keine) — Vorgabe 0,35', min: 0.1, max: 1, step: 0.05, dec: 2 },
+    { key: 'smooth', label: 'Glättung der Formantanzeige im Einzeltakt (Faktor, 1 = keine) — Vorgabe 0,35', min: 0.1, max: 1, step: 0.05, dec: 2 },
     { key: 'spreadMaxHz', label: 'Gültigkeitsgrenze Streuung (Hz) — Vorgabe 130, bitte nicht anheben', min: 60, max: 250, step: 10 },
     { key: 'hopS', label: 'Rahmenabstand Offline-Analyse (s) — Vorgabe 0,010', min: 0.005, max: 0.05, step: 0.005, dec: 3 },
     { key: 'storeAudio', type: 'check', label: 'Audio (WAV) mit speichern — nötig für Neu-Analyse nach Kernänderungen' },
@@ -337,7 +337,7 @@
     setStat('f3', fText(2) + (f3Low ? ' · unter ' + st.settings.f3MinHz : ''), !F[2].traegt, false, f3Low);
     setStat('f4', fText(3), !F[3].traegt);
     setStat('f5', fText(4), !F[4].traegt);
-    // ΔF3–4: gewertet heißt, das Gatter hat in der Mehrheit der Rahmen gewertet.
+    // ΔF3–4: gewertet heißt, das Gatter hat in mindestens der Hälfte der stimmhaften Rahmen gewertet.
     var sc = V.map(function (e) { return e.score; }).filter(isFinite), aggScore = NaN;
     var d34 = ueberFenster(V, function (fr) { return fr.d34; }, function (fr) { return !!fr.d34valid; }, function (fr) { return fr.d34Grund === 'teilton' ? 'Teilton' : (formantGrundKurz(fr, fr.valid[2] ? 3 : 2)); });
     // Nur bei stehendem Vokal: im Übergang hieße „gewertet“ aus dem Fenster etwas anderes als das Gatterwort daneben.

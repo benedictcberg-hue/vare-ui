@@ -54,7 +54,7 @@
     return 10 * Math.log10(s + 1e-20);
   }
 
-  /* samples bei sr, aufgenommen über die drei Phasen hintereinander (Gesamtlänge ≥ totalSeconds). */
+  /* samples bei sr, aufgenommen über die Phasen in PHASES hintereinander, ohne Vorlauf (Gesamtlänge ≥ totalSeconds). */
   function analyseCalibration(samples, sr, meta) {
     var TSR = D.TARGET_SR, ds = D.resample(samples, sr, TSR);
     var hopS = 0.01, hop = Math.round(hopS * TSR), n = Math.round(D.MAIN_WINDOW * TSR);
