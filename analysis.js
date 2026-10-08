@@ -13,7 +13,9 @@
      SHRUNSURE = Raster zweifelhaft oder Grundton unsicher; OCTUNTER = Reihe unter 60 Hz, nicht geteilt
      (dann auch OCTAMBIG). SUBGRID heißt seit dem SHR-Raster aus dem Kamm „Hauptwert auf 2·F0“.
      NAHT = das Fenster des Rahmens überdeckt eine Stelle, an der Abtastwerte fehlen (Signallücke): kein Messwert,
-     als Pause geführt. Frei in Uint16: 16384, 32768. */
+     als Pause geführt. Frei in Uint16: 16384, 32768. SFR- und CPP-Zweifel (Kern 4.1) stehen nicht als Bit, sondern
+     nur als Code (sfrGrund, cppGrund ≠ 0 ⇔ unsicher, im Kern immer gemeinsam gesetzt): verlustfrei, und die
+     beiden letzten Bits bleiben frei — jedes weitere Bit hieße ein breiteres Feld, also ein neues Serienformat. */
   var FLAG = { VOICED: 1, OCTAVE: 2, SUBGRID: 4, H1H2UNSURE: 8, D34VALID: 16, D45VALID: 32, SCORE: 64, OCTAMBIG: 128, VOWELAMBIG: 256,
     F0UNSURE: 512, F0KORR: 1024, SHRUNSURE: 2048, OCTUNTER: 4096, NAHT: 8192 };
 
@@ -22,11 +24,16 @@
      typisiertes Feld. Gespeicherte Serien tragen die Nummern, deshalb werden die Listen nur
      verlängert, nie umgestellt. f0Grund und f0Korrektur: Index in der Liste. shrGrund: Bitmaske über
      die Teile, in dieser Reihenfolge mit '+' verbunden (dsp.js: 'kamm+zweitpuls', 'zweitpuls+grundton').
-     Ein Text, den diese Fassung nicht kennt, wird CODE_UNBEKANNT und als '?' gelesen — nie still ''. */
+     Ein Text, den diese Fassung nicht kennt, wird CODE_UNBEKANNT und als '?' gelesen — nie still ''.
+     Kern 4.1: f0Grund 'wechsel' (Mischwert am Tonwechsel) und 'oktave' (Reihe bei F0/2 teilweise belegt); shrGrund
+     'rand', 'wechsel', 'rauschen' (Fensterprobe, Zwischenpegel); ΔF3–4/ΔF4–5 'teilton' (Teiltonabstand über 250 Hz);
+     SFR und CPP 'rauschanteil' (Rauschteil im Fenster). */
   var GRUND = {
-    f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum'],
+    f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum', 'wechsel', 'oktave'],
     f0Korrektur: ['', 'teiltonreihe', 'cepstrum'],
-    shrGrund: ['kamm', 'zweitpuls', 'grundton']
+    shrGrund: ['kamm', 'zweitpuls', 'grundton', 'rand', 'wechsel', 'rauschen'],
+    d34Grund: ['', 'teilton'], d45Grund: ['', 'teilton'],
+    sfrGrund: ['', 'rauschanteil'], cppGrund: ['', 'rauschanteil']
   };
   var CODE_UNBEKANNT = 255;
   function codeAus(feld, text) {
@@ -113,20 +120,39 @@
      slotUnsure-Bit ohne dieses Bit heißt 'nummer'. rauschBoden = Gipfel im Rauschboden, unabhängig davon.
      nWin = in wie vielen Analysefenstern jeder Formant stand (dsp.js nWin), je Slot 3 Bit, Slot k in Bit 3k…3k+2
      (nWinAus). Ohne sie ließ sich „nur in 2 Fenstern“ nur erschließen, wenn sonst kein Grund vorlag; neben einem
-     anderen Grund fehlte er in Hover und CSV. */
+     anderen Grund fehlte er in Hover und CSV.
+     Kern 4.1 (C2): slotTeilton und slotWechsel sind die Masken der Slot-Gründe 'teilton' und 'wechsel' (der Kern
+     vergibt je Slot genau einen Grund); dazu die Belege shrBoden, fensterPegelDb, fensterF0Lo/Hi, teiltonHz,
+     huellAbstandDb, fensterRauschAp, fensterRauschHochDb und die Codes d34Grund, d45Grund, sfrGrund, cppGrund.
+     Damit 47 Float32 und 16 Byte-Felder, 208 Byte je Rahmen (75 MB je Stunde bei 10 ms). Serien ohne slotTeilton
+     stammen aus Kern 4.0, der nur 'nummer' und 'verschmolzen' kannte. */
   function makeSeries(n) {
-    var f = function () { return new Float32Array(n); };
+    var f = function () { return new Float32Array(n); }, b = function () { return new Uint8Array(n); };
     var s = { t: f(), f0: f(), ap: f(), rms: f(), d34: f(), d45: f(), score: f(), sfr: f(), sfrn: f(), shr: f(), cpp: f(), h1h2: f(), h1h2c: f(),
       f0Cep: f(), f0Yin: f(), shrGrid: f(), shrOther: f(), shrKamm: f(), shrZweitpuls: f(),
-      f0Grund: new Uint8Array(n), f0Korrektur: new Uint8Array(n), shrGrund: new Uint8Array(n),
-      valid: new Uint8Array(n), slotUnsure: new Uint8Array(n), slotVerschmolzen: new Uint8Array(n), rauschBoden: new Uint8Array(n), nPeaks: new Uint8Array(n),
-      gate: new Uint8Array(n), flags: new Uint16Array(n), nWin: new Uint16Array(n), cls: new Int8Array(n) };
+      shrBoden: f(), fensterPegelDb: f(), fensterF0Lo: f(), fensterF0Hi: f(), teiltonHz: f(), huellAbstandDb: f(), fensterRauschAp: f(), fensterRauschHochDb: f(),
+      f0Grund: b(), f0Korrektur: b(), shrGrund: b(), d34Grund: b(), d45Grund: b(), sfrGrund: b(), cppGrund: b(),
+      valid: b(), slotUnsure: b(), slotVerschmolzen: b(), slotTeilton: b(), slotWechsel: b(), rauschBoden: b(), nPeaks: b(),
+      gate: b(), flags: new Uint16Array(n), nWin: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
     return s;
   }
 
   // Zahl der Fenster, in denen Formant k+1 im Rahmen i stand; null, wenn die Serie sie nicht kennt (ältere Fassung).
   function nWinAus(series, i, k) { return series && series.nWin ? (series.nWin[i] >> (3 * k)) & 7 : null; }
+  /* Grund des unsicheren Slots k im Rahmen i als Text des Kerns, aus den Masken: '' (Nummer eindeutig), 'nummer',
+     'verschmolzen', 'teilton', 'wechsel', oder '?', wenn die Serie den Grund nicht trägt (vor Kern 4.0). Eine Serie
+     mit slotVerschmolzen, aber ohne slotTeilton stammt aus Kern 4.0: Der kannte nur 'nummer' und 'verschmolzen'.
+     Dieselbe Regel steht in csv.js (ohne Abhängigkeit); n_zusammen.js prüft, dass beide gleich lesen. */
+  function slotGrundAus(series, i, k) {
+    var b = 1 << k;
+    if (!series.slotUnsure || !(series.slotUnsure[i] & b)) return '';
+    if (!series.slotVerschmolzen) return '?';
+    if (series.slotVerschmolzen[i] & b) return 'verschmolzen';
+    if (series.slotTeilton && (series.slotTeilton[i] & b)) return 'teilton';
+    if (series.slotWechsel && (series.slotWechsel[i] & b)) return 'wechsel';
+    return 'nummer';
+  }
 
   function applyGate(series, states) {
     for (var i = 0; i < states.length; i++) {
@@ -147,13 +173,16 @@
       if (r.valid[k]) vmask |= (1 << k);
     }
     series.valid[i] = vmask;
-    var umask = 0, vmerk = 0, bmask = 0;
+    var umask = 0, vmerk = 0, bmask = 0, tmask = 0, wmask = 0;
     for (var u = 0; u < 5; u++) {
+      var sg = r.slotGrund ? r.slotGrund[u] : '';
       if (r.slotUnsure && r.slotUnsure[u]) umask |= (1 << u);
-      if (r.slotGrund && r.slotGrund[u] === 'verschmolzen') vmerk |= (1 << u);
+      if (sg === 'verschmolzen') vmerk |= (1 << u);
+      else if (sg === 'teilton') tmask |= (1 << u);
+      else if (sg === 'wechsel') wmask |= (1 << u);
       if (r.rauschBoden && r.rauschBoden[u]) bmask |= (1 << u);
     }
-    series.slotUnsure[i] = umask; series.slotVerschmolzen[i] = vmerk; series.rauschBoden[i] = bmask;
+    series.slotUnsure[i] = umask; series.slotVerschmolzen[i] = vmerk; series.slotTeilton[i] = tmask; series.slotWechsel[i] = wmask; series.rauschBoden[i] = bmask;
     var nw = 0;
     for (var w = 0; w < 5; w++) nw |= Math.min(7, (r.nWin && r.nWin[w]) || 0) << (3 * w);
     series.nWin[i] = nw;
@@ -163,6 +192,13 @@
     series.f0Cep[i] = r.f0Cep; series.f0Yin[i] = r.f0Yin;
     series.shrGrid[i] = r.shrGrid; series.shrOther[i] = r.shrOther; series.shrKamm[i] = r.shrKamm; series.shrZweitpuls[i] = r.shrZweitpuls;
     series.f0Grund[i] = codeAus('f0Grund', r.f0Grund); series.f0Korrektur[i] = codeAus('f0Korrektur', r.f0Korrektur); series.shrGrund[i] = codeAus('shrGrund', r.shrGrund);
+    // Kern 4.1: Belege der Fensterprobe und des Teiltonabstands, Gründe für ΔF3–4/ΔF4–5, SFR und CPP.
+    series.shrBoden[i] = r.shrBoden; series.fensterPegelDb[i] = r.fensterPegelDb; series.fensterF0Lo[i] = r.fensterF0Lo; series.fensterF0Hi[i] = r.fensterF0Hi;
+    series.teiltonHz[i] = r.teiltonHz; series.huellAbstandDb[i] = r.huellAbstandDb; series.fensterRauschAp[i] = r.fensterRauschAp; series.fensterRauschHochDb[i] = r.fensterRauschHochDb;
+    series.d34Grund[i] = codeAus('d34Grund', r.d34Grund); series.d45Grund[i] = codeAus('d45Grund', r.d45Grund);
+    // Unsicher steckt im Code: Meldete der Kern es einmal ohne Grund, steht '?' da, nicht still „sicher“.
+    series.sfrGrund[i] = (r.sfrUnsure && !r.sfrGrund) ? CODE_UNBEKANNT : codeAus('sfrGrund', r.sfrGrund);
+    series.cppGrund[i] = (r.cppUnsure && !r.cppGrund) ? CODE_UNBEKANNT : codeAus('cppGrund', r.cppGrund);
     var fl = 0;
     if (r.voiced) fl |= FLAG.VOICED;
     if (r.octaveCorrected) fl |= FLAG.OCTAVE;
@@ -239,7 +275,13 @@
        Dort sind Ton und halber Ton zwei vertretbare Lesarten, kein gerissener Wert; der Anteil steht
        in octaveAmbiguousShare. */
     var f0sicher = function (j) { return !(series.flags[j] & FLAG.F0UNSURE); };
-    var anteil = function (maske) { var c = 0; for (var q = 0; q < voicedIdx.length; q++) if (series.flags[voicedIdx[q]] & maske) c++; return voicedIdx.length ? c / voicedIdx.length : 0; };
+    var anteilWenn = function (bed) { var c = 0; for (var q = 0; q < voicedIdx.length; q++) if (bed(voicedIdx[q])) c++; return voicedIdx.length ? c / voicedIdx.length : 0; };
+    var anteil = function (maske) { return anteilWenn(function (j) { return series.flags[j] & maske; }); };
+    /* Teiltonabstand (dsp.js teiltonHz: F0, bei unsicherem Grundton 2·F0): darüber 250 Hz sind ΔF3–4 und ΔF4–5 nicht
+       messbar, ein Formant ist nur auf etwa ± Abstand/2 bestimmt; über 375 Hz ist kein Formant messbar. Ältere Serien
+       kennen den Abstand nicht: NaN, kein erfundenes 0. */
+    var tt = series.teiltonHz, TD = D.TEILTON_DIFF_HZ || 250, TS = D.TEILTON_SLOT_HZ || 375;
+    var ueberTD = function (j) { return tt[j] > TD; };
     s.f0 = stats(pick('f0', voicedIdx, f0sicher)); s.f0.note = D.hzToNote(s.f0.med);
     s.f0UnsureShare = anteil(FLAG.F0UNSURE);
     s.f0KorrekturShare = anteil(FLAG.F0KORR);
@@ -247,8 +289,11 @@
     var validAll = 0;
     for (var k = 0; k < 5; k++) {
       (function (kk) {
-        var fst = stats(pick('f' + (kk + 1), voicedIdx, function (j) { return series.valid[j] & (1 << kk); }));
+        var gilt = function (j) { return series.valid[j] & (1 << kk); };
+        var fst = stats(pick('f' + (kk + 1), voicedIdx, gilt));
         fst.share = voicedIdx.length ? fst.n / voicedIdx.length : 0;   // in wie vielen stimmhaften Rahmen war er überhaupt gültig
+        // Anteil der Rahmen in diesem Median, deren Formant nur auf ± Abstand/2 bestimmt ist (Teiltonabstand über 250 Hz)
+        fst.teiltonShare = (tt && fst.n) ? pick('f' + (kk + 1), voicedIdx, function (j) { return gilt(j) && ueberTD(j) && isFinite(series['f' + (kk + 1)][j]); }).length / fst.n : NaN;
         s.F.push(fst);
       })(k);
     }
@@ -263,7 +308,16 @@
     // liegen, und ein Take mit F3 durchgehend bei 2370 Hz zeigte „–“ statt der Zahl.
     s.f3stable = stats(pick('f3', stabilIdx, function (j) { return series.valid[j] & 4; }));
     s.f3scored = stats(pick('f3', stabilIdx, function (j) { return series.flags[j] & FLAG.SCORE; }));
-    s.sfr = stats(pick('sfr', voicedIdx)); s.cpp = stats(pick('cpp', voicedIdx));
+    /* SFR und CPP: Median und Quartile nur aus Rahmen ohne Rauschanteil im Fenster (dsp.js sfrUnsure, cppUnsure, Grund
+       'rauschanteil'). Ein Frikativ im Fenster hob SFR bis +25 dB und senkte CPP bis −16 dB (Befund N16); gemischt
+       stünde ein Konsonant als Stimmklang im Median. Die Rahmen behalten Wert und Marke, der Anteil steht daneben.
+       Ältere Serien ohne die Codes kennen die Marke nicht: Anteil NaN, alle Rahmen im Median wie damals. */
+    s.sfr = stats(pick('sfr', voicedIdx, function (j) { return !(series.sfrGrund && series.sfrGrund[j]); }));
+    s.cpp = stats(pick('cpp', voicedIdx, function (j) { return !(series.cppGrund && series.cppGrund[j]); }));
+    s.sfrUnsureShare = series.sfrGrund ? anteilWenn(function (j) { return series.sfrGrund[j]; }) : NaN;
+    s.cppUnsureShare = series.cppGrund ? anteilWenn(function (j) { return series.cppGrund[j]; }) : NaN;
+    s.teiltonShare = tt ? anteilWenn(ueberTD) : NaN;
+    s.teiltonHochShare = tt ? anteilWenn(function (j) { return tt[j] > TS; }) : NaN;
     /* SHR: Median und Maximum nur aus Rahmen ohne shrUnsure (Raster zweifelhaft oder Grundton
        unsicher). Vorher zählten sie mit, und ein Wert, dessen Raster offen ist, konnte als „Warnung“
        im Maximum stehen (Bericht 1, Befunde 3 und 4). Die unsicheren Rahmen verschwinden nicht:
@@ -351,12 +405,13 @@
      Der Halbton kommt aus F0. Ein Rahmen mit unsicherem Grundton (F0UNSURE) steht womöglich in der
      falschen Gruppe und geht deshalb in keinen Median ein (wie in summarise). Seinen eigenen Wert
      bekommt er gegen den Median der Gruppe seines gemeldeten Tons, mit der Marke im Rahmen; gibt es
-     dort keinen sicheren Rahmen, bleibt er NaN statt gegen einen erfundenen Bezug gerechnet. */
+     dort keinen sicheren Rahmen, bleibt er NaN statt gegen einen erfundenen Bezug gerechnet. Ebenso ein Rahmen, dessen
+     SFR selbst unsicher ist (Rauschanteil im Fenster, sfrGrund): Er verschöbe den Median seines Halbtons. */
   function normaliseSfr(series) {
     var n = series.t.length, groups = {}, i;
     for (i = 0; i < n; i++) {
       if (!(series.flags[i] & FLAG.VOICED) || !isFinite(series.sfr[i])) { series.sfrn[i] = NaN; continue; }
-      if (series.flags[i] & FLAG.F0UNSURE) continue;
+      if ((series.flags[i] & FLAG.F0UNSURE) || (series.sfrGrund && series.sfrGrund[i])) continue;
       var m = Math.round(D.hzToMidi(series.f0[i]));
       (groups[m] || (groups[m] = [])).push(series.sfr[i]);
     }
@@ -377,6 +432,8 @@
     return { voiced: false, f0: NaN, ap: NaN, rmsDb: NaN, F: nan5, sdOrder: nan5, sdWin: nan5, BW: nan5, valid: nein5, slotUnsure: nein5, slotGrund: ['', '', '', '', ''], rauschBoden: nein5,
       nPeaksRef: 0, d34: NaN, d45: NaN, d34valid: false, d45valid: false, sfr: NaN, shr: NaN, cpp: NaN, h1h2: NaN, h1h2c: NaN, h1h2unsure: false,
       f0Cep: NaN, f0Yin: NaN, shrGrid: NaN, shrOther: NaN, shrKamm: NaN, shrZweitpuls: NaN, f0Grund: '', f0Korrektur: '', shrGrund: '',
+      shrBoden: NaN, fensterPegelDb: NaN, fensterF0Lo: NaN, fensterF0Hi: NaN, teiltonHz: NaN, huellAbstandDb: NaN, fensterRauschAp: NaN, fensterRauschHochDb: NaN,
+      d34Grund: '', d45Grund: '', sfrUnsure: false, sfrGrund: '', cppUnsure: false, cppGrund: '',
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, f0Unsure: false, shrUnsure: false };
   }
 
@@ -622,7 +679,7 @@
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, slotGrundAus: slotGrundAus, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);
