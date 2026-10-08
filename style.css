@@ -104,3 +104,16 @@ th.spalte-breit { min-width: 180px; }
 .cal-ansage.p-ausklang .cal-wort { color: var(--rust); }
 .cal-ansage.p-ausklang #cal-balken-fuell { background: var(--rust); }
 @media (max-width: 480px) { .cal-wort { font-size: 2.1rem; } }
+
+/* Live: eine große Zahl, der Rest zugeklappt. */
+.live-hero { margin: .5rem 0; }
+.live-hero .k { display: block; color: var(--muted); font-size: .9rem; }
+.hero-zahl { display: block; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 3.2rem; line-height: 1.1; min-height: 1.1em; }
+.hero-zahl.unsure { color: var(--rust); font-size: 1.6rem; }
+.hero-zahl.befund { color: var(--gold); }
+.hero-zahl.frozen { color: var(--muted); }
+.hero-f0 { display: block; color: var(--muted); font-size: 1.1rem; min-height: 1.3em; }
+.live-mehr { margin-top: .75rem; }
+.live-mehr > summary { cursor: pointer; color: var(--muted); line-height: 46px; }
+.hero-rest { font-size: 1.1rem; color: var(--muted); margin-left: .4rem; }
+@media (max-width: 480px) { .hero-zahl { font-size: 2.6rem; } }

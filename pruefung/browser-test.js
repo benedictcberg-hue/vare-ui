@@ -196,6 +196,12 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForTimeout(3000);
     const live = await page.evaluate(() => ({ state: document.getElementById('gate-state').textContent, f0: document.getElementById('v-f0').textContent, f1: document.getElementById('v-f1').textContent, f3: document.getElementById('v-f3').textContent, d34: document.getElementById('v-d34').textContent, ref: document.getElementById('live-ref').textContent, sfr: document.getElementById('v-sfr').textContent, shr: document.getElementById('v-shr').textContent, floor: document.getElementById('v-floor').textContent }));
     check('Live während /a/: stimmhaft, F0 ≈ 196', /19[4-8]/.test(live.f0), JSON.stringify(live));
+    {
+      // Sichtbar ist nur die große Zahl mit Grundton; alle übrigen Kacheln liegen zugeklappt unter „Alle Messwerte“.
+      const h = await page.evaluate(() => ({ zahl: document.getElementById('hero-d34').textContent, kachel: document.getElementById('v-d34').textContent, f0: document.getElementById('hero-f0').textContent, zu: !document.getElementById('live-mehr').open }));
+      h.gridSichtbar = await page.isVisible('#live-grid');
+      check('Live einfach: große ΔF3–4-Zahl wie die Kachel, Grundton darunter, übrige Kacheln zugeklappt', h.zahl === h.kachel && /^F0 19[4-8]/.test(h.f0) && h.zu && !h.gridSichtbar, JSON.stringify(h));
+    }
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
     const liveLog = await page.evaluate(() => { window.__liveBeob.disconnect(); window.__liveLog.push({ t: performance.now() - window.__liveT0, ende: true }); return window.__liveLog; });
@@ -222,13 +228,13 @@ const WAV = path.join(SP, 'fake.wav');
         (summe < 1500 || laengster < 500 ? ' | Verlauf: ' + liveLog.slice(0, 40).map(e => (e.t / 1000).toFixed(2) + ' ' + (e.g || '') + ' / ' + (e.d || '')).join(' ; ').slice(0, 900) : ''));
     }
     {
-      /* Ruhige Anzeige (Vorgabe): die Kacheln zeigen viermal pro Sekunde den Median der letzten 0,6 s.
-         Der ΔF3–4-Text darf sich deshalb höchstens etwa fünfmal pro Sekunde ändern — vorher sprang er
+      /* Ruhige Anzeige (Vorgabe): die Kacheln zeigen zweimal pro Sekunde den Median der letzten Sekunde.
+         Der ΔF3–4-Text darf sich deshalb höchstens etwa dreimal pro Sekunde ändern — vorher sprang er
          mit jedem Takt (bis 25-mal pro Sekunde). */
       let wechsel = 0;
       for (let i = 1; i < liveLog.length; i++) if (liveLog[i].d !== undefined && liveLog[i].d !== liveLog[i - 1].d) wechsel++;
       const dauer = (liveLog[liveLog.length - 1].t - liveLog[0].t) / 1000;
-      check('Live ruhig: ΔF3–4-Text ändert sich höchstens 5-mal pro Sekunde', dauer > 3 && wechsel / dauer <= 5, wechsel + ' Wechsel in ' + dauer.toFixed(1) + ' s');
+      check('Live ruhig: ΔF3–4-Text ändert sich höchstens 3-mal pro Sekunde', dauer > 3 && wechsel / dauer <= 3, wechsel + ' Wechsel in ' + dauer.toFixed(1) + ' s');
     }
     // Während der Analyse schon den nächsten Take beschriften: das gehört nicht in diesen Take.
     const busyBeiEingabe = await page.evaluate(() => VAREAPP.state.busy);
@@ -497,6 +503,8 @@ const WAV = path.join(SP, 'fake.wav');
     const liveFall = a => page.evaluate(async a => {
       const D = window.VAREDSP;
       if (!window.__echteAnalyse) window.__echteAnalyse = D.analyseAt;
+      // Geprüft werden die langen Gründe je Rahmen: Einzeltakt-Anzeige (die ruhige prüfen n_ruhig.js und „Live einfach“).
+      VAREAPP.state.settings.ruhig = false;
       const sig = D.resample(D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 0.4, 48000), 48000, D.TARGET_SR);
       const fr = Object.assign({}, window.__echteAnalyse(sig, D.TARGET_SR, sig.length - 1, { align: 'end', wantSpectrum: true, floorDb: -70 }), a);
       for (const k in a) if (a[k] === null) fr[k] = NaN;
@@ -510,7 +518,7 @@ const WAV = path.join(SP, 'fake.wav');
     const lK = await liveFall({ f0Korrektur: 'teiltonreihe', f0Yin: 98 });
     const lS = await liveFall({ shr: -10, shrGrid: 392, shrOther: -48.7, shrUnsure: true, shrGrund: 'kamm+zweitpuls', shrKamm: -10.1, shrZweitpuls: 0.79 });
     const lW = await liveFall({ shr: -10, shrUnsure: false, shrOther: null, shrGrund: '' });
-    await page.evaluate(() => { window.VAREDSP.analyseAt = window.__echteAnalyse; });
+    await page.evaluate(() => { window.VAREDSP.analyseAt = window.__echteAnalyse; VAREAPP.state.settings.ruhig = true; });
     check('Live im Browser: unsicherer Grundton in Rost mit Grund (auch SHR und H1−H2), F1/F0 als Teil in Rost neben schwarzem F1; korrigierter Grundton ohne Rost',
       lU.f0.farbe === ROST_L && /Grundton unsicher: Cepstrum zeigt 98\.0 Hz/.test(lU.f0.text) && lU.shr.farbe === ROST_L && lU.h1h2.farbe === ROST_L
       && !!lU.f1.teil && lU.f1.teil.farbe === ROST_L && lU.f1.farbe !== ROST_L && lK.f0.farbe !== ROST_L && /korrigiert aus 98\.0 Hz, Teiltonreihe/.test(lK.f0.text),

@@ -1,5 +1,5 @@
-/* Kriterien zur ruhigen Live-Anzeige (app.js renderRuhig): Werte als Median über 0,6 s, viermal pro
-   Sekunde neu geschrieben; ein Wert erscheint nur, wenn er in der Mehrheit der Rahmen trägt, sonst „– · Grund“.
+/* Kriterien zur ruhigen Live-Anzeige (app.js renderRuhig): Werte als Median über 1 s, zweimal pro
+   Sekunde neu geschrieben, Formanten auf 10 Hz gerundet; ein Wert erscheint nur, wenn er in der Mehrheit der Rahmen trägt, sonst „– · Grund“.
    app.js läuft unverändert in einer vm-Umgebung; analyseAt liefert echte Rahmen eines /a/ bei 196 Hz, in denen
    nur einzelne Felder verändert sind. Die Zeit der Live-Schleife wird von außen vorgegeben (41 ms je Takt). */
 'use strict';
@@ -95,8 +95,10 @@ module.exports = async function (H) {
     const einzelW = diff(z0, zaehler());
     st.settings.ruhig = true; lauf(20, () => ({}));
     const maxRuhig = Math.max(...Object.values(ruhigW));
-    if (maxRuhig > 8) bad.r1.push('ruhig ' + JSON.stringify(ruhigW) + ' Wechsel in 2 s');
+    if (maxRuhig > 5) bad.r1.push('ruhig ' + JSON.stringify(ruhigW) + ' Wechsel in 2 s');
     if (!(einzelW.f3 > 30)) bad.r1.push('Gegenprobe Einzeltakt nur ' + einzelW.f3 + ' Wechsel');
+    if (el('hero-d34').textContent !== text('d34')) bad.r1.push('große Zahl „' + el('hero-d34').textContent + '“ ≠ Kachel „' + text('d34') + '“');
+    if (!/0 Hz/.test(f3Text)) bad.r1.push('F3 nicht auf 10 Hz: „' + f3Text + '“');
     const f3Zahl = parseFloat(f3Text);
     if (!(Math.abs(f3Zahl - f3Soll) <= 6)) bad.r1.push('F3 „' + f3Text + '“ statt Median um ' + f3Soll);
     belege.r1.push('ruhig ' + JSON.stringify(ruhigW) + ' Wechsel/2 s, Einzeltakt F3 ' + einzelW.f3 + ', F3 „' + f3Text + '“');
@@ -125,7 +127,7 @@ module.exports = async function (H) {
   intervalle.forEach(h => clearInterval(h));
 
   check('RU0', 'Ruhige Live-Anzeige ist voreingestellt und abschaltbar (Einstellung „ruhig“)', !!defaults && defaults.ruhig === true && /ruhig/.test(quelle('app.js').match(/SETTING_DEFS[\s\S]*?\];/) ? quelle('app.js').match(/SETTING_DEFS[\s\S]*?\];/)[0] : ''), defaults ? 'ruhig=' + defaults.ruhig : 'keine Voreinstellungen');
-  check('RU1', 'Ruhig: Formanten, die von Rahmen zu Rahmen um ±40 Hz springen, stehen als Median da und werden höchstens viermal je Sekunde neu geschrieben; im Einzeltakt springt die Zahl mit jedem Rahmen',
+  check('RU1', 'Ruhig: Formanten, die von Rahmen zu Rahmen um ±40 Hz springen, stehen als Median da (auf 10 Hz) und werden höchstens zweimal je Sekunde neu geschrieben; die große Zahl oben zeigt dasselbe wie die ΔF3–4-Kachel; im Einzeltakt springt die Zahl mit jedem Rahmen',
     !bad.r1.length, bad.r1.length ? bad.r1.join(' | ') : belege.r1.join(' | '));
   check('RU2', 'Ruhig: ein Wert, der nur in einer Minderheit der Rahmen trägt, erscheint nicht als Zahl, sondern als „– · Grund“ in Rost (Nummer mehrdeutig → „mehrdeutig“); trägt er in der Mehrheit, steht die Zahl ohne Rost',
     !bad.r2.length, bad.r2.length ? bad.r2.join(' | ') : belege.r2.join(' | '));

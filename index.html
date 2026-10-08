@@ -114,8 +114,15 @@
         <span id="gate-reason" class="muted"></span>
         <label class="inline">Vokalabsicht <select id="take-intent"></select></label>
       </div>
-      <div class="bar-row"><span class="muted small">ΔF3–4</span><canvas id="d34-canvas" height="56" aria-label="Abstand F3 zu F4"></canvas></div>
+      <div id="live-hero" class="live-hero">
+        <span class="k">ΔF3–4</span>
+        <span id="hero-d34" class="hero-zahl">–</span>
+        <span id="hero-f0" class="hero-f0 mono"></span>
+      </div>
       <div id="live-ref" class="small muted"></div>
+      <details id="live-mehr" class="live-mehr">
+      <summary>Alle Messwerte (F1–F5, SFR, SHR, CPP, Spektrum, Verlauf)</summary>
+      <div class="bar-row"><span class="muted small">ΔF3–4</span><canvas id="d34-canvas" height="56" aria-label="Abstand F3 zu F4"></canvas></div>
       <div class="grid" id="live-grid">
         <div class="stat" id="st-f0"><span class="k">F0</span><span class="v" id="v-f0">–</span></div>
         <div class="stat" id="st-f2"><span class="k">F2</span><span class="v" id="v-f2">–</span></div>
@@ -135,6 +142,7 @@
       <p class="small muted" id="live-hints"></p>
       <canvas id="spec-canvas" height="170" aria-label="Teiltonleiter und Formanten 0 bis 5 kHz"></canvas>
       <canvas id="hist-canvas" height="140" aria-label="Verlauf F2, F3 und 2·F0, letzte 20 Sekunden"></canvas>
+      </details>
       <div class="row">
         <button id="btn-pruef">Prüfsignal durch die Kette</button>
         <span class="small muted">Synthetischer /a/ bei G3 mit bekannten Formanten — erwartet gegen gemessen.</span>

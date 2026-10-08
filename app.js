@@ -25,7 +25,7 @@
     { key: 'audioFormat', type: 'select', options: [['i16', '16 Bit (5,8 MB/min bei 48 kHz)'], ['f32', 'Float32 (11,5 MB/min)']], label: 'WAV-Format' },
     { key: 'csvDialect', type: 'select', options: [['standard', 'Standard: Komma, Punkt (pandas: read_csv(…, keep_default_na=False, na_values=[-99]))'], ['excelde', 'Excel DE: Semikolon, Dezimalkomma, Text gegen Formeln geschützt (Apostroph)']], label: 'CSV-Dialekt' },
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' },
-    { key: 'ruhig', type: 'check', label: 'Ruhige Live-Anzeige: Median über 0,6 s, viermal pro Sekunde (aus = jeder Einzelrahmen mit allen Gründen, zur Fehlersuche)' }
+    { key: 'ruhig', type: 'check', label: 'Ruhige Live-Anzeige: Median über 1 s, zweimal pro Sekunde, auf 10 Hz (aus = jeder Einzelrahmen mit allen Gründen, zur Fehlersuche)' }
   ];
 
   var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {}, liveBuf: [], ruhigZuletzt: 0 };
@@ -223,8 +223,8 @@
       f0x2: fr.voiced ? 2 * fr.f0 : NaN, v2: fr.voiced && fr.valid[1], v3: fr.voiced && fr.valid[2], u0: !!(fr.voiced && fr.f0Unsure) });
     while (st.hist.length && st.hist[0].t < t - 20) st.hist.shift();
     if (!st.settings.ruhig) { renderLive(fr, gs, fl); return; }
-    /* Ruhige Anzeige: Jeder Takt fließt in einen Puffer der letzten 0,6 s; die Kacheln zeigen alle
-       250 ms den Median daraus. Ein Einzelrahmen, der für 40 ms kippt, ändert die Zahl nicht mehr. */
+    /* Ruhige Anzeige: Jeder Takt fließt in einen Puffer der letzten Sekunde (RUHIG_FENSTER_S); die Kacheln zeigen alle
+       500 ms (RUHIG_TAKT_MS) den Median daraus. Ein Einzelrahmen, der für 40 ms kippt, ändert die Zahl nicht mehr. */
     st.liveBuf.push({ t: t, fr: fr, score: gs.score, state: gs.state, reason: gs.reason });
     while (st.liveBuf.length && st.liveBuf[0].t < t - RUHIG_FENSTER_S) st.liveBuf.shift();
     drawLevel(fr.rmsDb, fl.db, fl.src); drawHist();
@@ -258,12 +258,27 @@
   /* rost: ein Teil des Werts, der unsicher ist, obwohl der Rest der Kachel trägt — F1/F0 bei unsicherem
      Grundton neben einem gültigen F1. Er steht in Rost mit Strich dahinter, die Kachel bleibt, wie sie ist. */
   function setStat(id, text, unsure, frozen, note, rost) {
-    var el = $('st-' + id), v = $('v-' + id); el.className = 'stat' + (unsure ? ' unsure' : (note ? ' befund' : '')) + (frozen ? ' frozen' : '');
+    var el = $('st-' + id), v = $('v-' + id), zust = (unsure ? ' unsure' : (note ? ' befund' : '')) + (frozen ? ' frozen' : '');
+    el.className = 'stat' + zust;
     v.textContent = text;
     if (rost) { var sp = document.createElement('span'); sp.className = 'rust unsicher-teil'; sp.textContent = rost; v.appendChild(sp); }
+    // Die große Zahl oben zeigt dasselbe wie die ΔF3–4-Kachel; darunter der Grundton.
+    if (id === 'd34') {
+      // Groß nur die Zahl; „gewertet“ oder der Grund klein dahinter.
+      var h = $('hero-d34'), m = /^(-?[\d.]+ Hz)(.*)$/.exec(text);
+      if (h.textContent !== text) {
+        h.textContent = m ? m[1] : text;
+        if (m && m[2]) { var r = document.createElement('span'); r.className = 'hero-rest'; r.textContent = m[2]; h.appendChild(r); }
+      }
+      h.className = 'hero-zahl' + zust;
+    }
+    if (id === 'f0') { var t = (text === 'Pause' || text === '–') ? '' : 'F0 ' + text; if ($('hero-f0').textContent !== t) $('hero-f0').textContent = t; }
   }
   /* ---------- Ruhige Live-Anzeige ---------- */
-  var RUHIG_FENSTER_S = 0.6, RUHIG_TAKT_MS = 250, RUHIG_ANTEIL = 0.6;
+  /* Median über 1 s, zweimal pro Sekunde neu, Formanten auf 10 Hz gerundet (die Messung streut ohnehin
+     um ±30 Hz und mehr; in CSV und Chronik bleiben die vollen Werte). */
+  var RUHIG_FENSTER_S = 1.0, RUHIG_TAKT_MS = 500, RUHIG_ANTEIL = 0.6;
+  function fmt10(v) { return isFinite(v) ? fmt(Math.round(v / 10) * 10) : '–'; }
   function median(a) { if (!a.length) return NaN; var b = a.slice().sort(function (x, y) { return x - y; }), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; }
   /* Kurzwort für den häufigsten Grund — die langen Begründungen stehen in der Einzelrahmen-Ansicht. */
   function kurzGrund(t) {
@@ -298,7 +313,7 @@
   }
   function renderRuhig(gs, fl) {
     if (fl.src === 'angenommen') setStat('floor', 'unbekannt · Stimmschwelle angenommen: ' + fmt(fl.db + 12, 1) + ' dBFS', true);
-    else setStat('floor', fmt(fl.db, 1) + ' dBFS (' + (fl.src === 'geschätzt' ? 'geschätzt aus Stille' : fl.src) + ')', fl.src !== 'kalibriert');
+    else setStat('floor', fmt(fl.db, 0) + ' dBFS (' + (fl.src === 'geschätzt' ? 'geschätzt aus Stille' : fl.src) + ')', fl.src !== 'kalibriert');
     var buf = st.liveBuf, V = buf.filter(function (e) { return e.fr.voiced && !e.fr.tonalButAperiodic; });
     var letzter = buf.length ? buf[buf.length - 1] : null;
     setGateWord(gs.state, gs.cls, gs.reason ? kurzGrund(gs.reason) : '');
@@ -312,10 +327,10 @@
     }
     var neu = V[V.length - 1].fr;
     var f0 = ueberFenster(V, function (fr) { return fr.f0; }, function (fr) { return !fr.f0Unsure && !fr.octaveAmbiguous; }, function () { return 'Grundton unsicher'; });
-    if (f0.traegt) { var no = D.hzToNote(f0.wert); setStat('f0', fmt(f0.wert, 1) + ' Hz' + (no && no !== '--' ? ' ' + no : '')); }
+    if (f0.traegt) { var no = D.hzToNote(f0.wert); setStat('f0', fmt(f0.wert, 0) + ' Hz' + (no && no !== '--' ? ' ' + no : '')); }
     else setStat('f0', '– · Grundton unsicher', true);
     var F = [0, 1, 2, 3, 4].map(function (k) { return ueberFenster(V, function (fr) { return fr.F[k]; }, function (fr) { return !!fr.valid[k]; }, function (fr) { return formantGrundKurz(fr, k); }); });
-    function fText(k) { return F[k].traegt ? fmt(F[k].wert) + ' Hz' : '– · ' + F[k].grund; }
+    function fText(k) { return F[k].traegt ? fmt10(F[k].wert) + ' Hz' : '– · ' + F[k].grund; }
     setStat('f1', fText(0) + (F[0].traegt && f0.traegt ? ' · H' + Math.round(F[0].wert / f0.wert) : ''), !F[0].traegt);
     setStat('f2', fText(1), !F[1].traegt);
     var f3Low = F[2].traegt && F[2].wert < st.settings.f3MinHz;
@@ -325,11 +340,12 @@
     // ΔF3–4: gewertet heißt, das Gatter hat in der Mehrheit der Rahmen gewertet.
     var sc = V.map(function (e) { return e.score; }).filter(isFinite), aggScore = NaN;
     var d34 = ueberFenster(V, function (fr) { return fr.d34; }, function (fr) { return !!fr.d34valid; }, function (fr) { return fr.d34Grund === 'teilton' ? 'Teilton' : (formantGrundKurz(fr, fr.valid[2] ? 3 : 2)); });
-    if (sc.length >= 2 && sc.length / V.length >= 0.5) { aggScore = median(sc); setStat('d34', fmt(aggScore) + ' Hz gewertet'); }
-    else if (d34.traegt) setStat('d34', fmt(d34.wert) + ' Hz · nicht gewertet: ' + kurzGrund(gs.reason || (letzter && letzter.reason)), false, false, true);
+    // Nur bei stehendem Vokal: im Übergang hieße „gewertet“ aus dem Fenster etwas anderes als das Gatterwort daneben.
+    if (gs.state === 'stabil' && sc.length >= 2 && sc.length / V.length >= 0.5) { aggScore = median(sc); setStat('d34', fmt10(aggScore) + ' Hz gewertet'); }
+    else if (d34.traegt) setStat('d34', fmt10(d34.wert) + ' Hz · nicht gewertet: ' + kurzGrund(gs.reason || (letzter && letzter.reason)), false, false, true);
     else setStat('d34', '– · ' + d34.grund, true);
     var d45 = ueberFenster(V, function (fr) { return fr.d45; }, function (fr) { return !!fr.d45valid; }, function (fr) { return fr.d45Grund === 'teilton' ? 'Teilton' : 'unsicher'; });
-    setStat('d45', d45.traegt ? fmt(d45.wert) + ' Hz' : '– · ' + d45.grund, !d45.traegt);
+    setStat('d45', d45.traegt ? fmt10(d45.wert) + ' Hz' : '– · ' + d45.grund, !d45.traegt);
     var sfr = ueberFenster(V, function (fr) { return fr.sfr; }, function (fr) { return !fr.sfrUnsure; });
     setStat('sfr', sfr.traegt ? fmt(sfr.wert, 1) + ' dB' : '– · unsicher', !sfr.traegt);
     var shr = ueberFenster(V, function (fr) { return fr.shr; }, function (fr) { return !fr.shrUnsure; }, function () { return 'Raster unsicher'; });
@@ -1461,6 +1477,9 @@
     $('btn-mic').addEventListener('click', micToggle);
     $('btn-cal').addEventListener('click', calibrate);
     $('btn-cal-stop').addEventListener('click', function () { if (st.calAbbruch) st.calAbbruch(); });
+    // „Alle Messwerte“ bleibt so auf- oder zugeklappt, wie man es zuletzt verlassen hat (nur dieser Browser).
+    try { if (window.localStorage && localStorage.getItem('vare-live-mehr') === '1') $('live-mehr').open = true; } catch (e) { }
+    $('live-mehr').addEventListener('toggle', function () { try { localStorage.setItem('vare-live-mehr', $('live-mehr').open ? '1' : '0'); } catch (e) { } });
     $('btn-take').addEventListener('click', takeToggle);
     $('btn-neue-sitzung').addEventListener('click', neueSitzung);
     /* Einsing-Status und -Dauer gelten für die ganze Sitzung, nicht nur für den nächsten Take —
