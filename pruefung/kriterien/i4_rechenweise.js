@@ -14,6 +14,10 @@ const path = require('path'), crypto = require('crypto');
    fest: Grundton, Formanten, Streuungen, Bandbreiten, Gültigkeit mit Gründen, Grundton- und SHR-Zweifel,
    SFR, CPP, H1−H2, dazu die ausgewiesenen Schwellen. Ein Stolperdraht, kein Beweis: Eine innere Konstante,
    die dsp.js nicht ausweist und die kein Prüffall kreuzt, bleibt unbemerkt.
+   Seit 4.1.0 zusätzlich „Felder“ (die Rahmenfelder, die mit der Nachprüfung dazukamen oder vorher fehlten:
+   Gründe von SHR, ΔF3–4/ΔF4–5, SFR und CPP, Fensterprobe, Teiltonabstand, Hüllkurvenabstand, Korrektur) und
+   „Feinspur“ (Grundton, Aperiodizität, Rand, Pegel und Stille der kurzen Spur). Ältere Einträge haben diese
+   Schlüssel nicht; sie gelten damit als anders gerechnet, was sie auch sind.
    Die Prüfsignale erzeugt dieses Modul selbst, nicht dsp.js: eine Änderung am Prüfsignal-Generator des
    Kerns ist keine Änderung der Rechenweise. Je Prüffall ein kurzer SHA-256, damit ein Riss nennt, welcher
    Fall sich bewegt hat. */
@@ -47,6 +51,7 @@ function faFolge(teile) {
   return o;
 }
 const FA_A = [[700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200]];
+const FA_I = [[300, 2200, 2900, 3500, 4300], [60, 100, 130, 160, 200]];
 // Rauschen in festem Abstand (dB) unter den Effektivwert des Signals.
 function faMitRauschen(x, abstandDb, seed) {
   let e = 0; for (let i = 0; i < x.length; i++) e += x[i] * x[i];
@@ -70,7 +75,12 @@ function faPruefsatz() {
     ['o 310', faVokal(310, [450, 800, 2500, 3300, 4200], [70, 90, 120, 150, 200], 0.5)],
     ['Wechsel 150', faVokal(150, FA_A[0], FA_A[1], 0.5, 0.5)],
     ['Wechsel 98 schwach', faVokal(98, FA_A[0], FA_A[1], 0.5, 0.8)],
-    ['F1 = 2·F0 175', faVokal(175, [350, 1400, 2500, 3300, 4200], [50, 90, 120, 150, 200], 0.5)]
+    ['F1 = 2·F0 175', faVokal(175, [350, 1400, 2500, 3300, 4200], [50, 90, 120, 150, 200], 0.5)],
+    // seit 4.1.0: starkes Rauschen (Gegenprobe im Rauschen, Untertöne bis f0/7, Korrektur) und ein Rauschstoß vor dem
+    // Vokal (Rauschanteil für SFR und CPP, in „Felder“)
+    ['i 220 Rauschen 6 dB', faMitRauschen(faVokal(220, FA_I[0], FA_I[1], 0.5), 6, 48)],
+    ['i 449 Rauschen 0 dB', faMitRauschen(faVokal(449, FA_I[0], FA_I[1], 0.5), 0, 48)],
+    ['Rauschstoß vor a 130', faFolge([lcg(Math.round(0.12 * FA_SR), 0.03, 47), faVokal(130, FA_A[0], FA_A[1], 0.38)])]
   ];
 }
 function faZahl(v, d) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(d) : String(v); }
@@ -83,29 +93,41 @@ function faRahmen(r) {
     faZahl(r.shr, 1), faZahl(r.shrGrid, 0), String(r.shrUnsure), faZahl(r.shrKamm, 1), faZahl(r.shrZweitpuls, 2),
     faZahl(r.sfr, 1), faZahl(r.cpp, 1), faZahl(r.h1h2, 1)].join(' ');
 }
+function faFelder(r) {
+  return [String(r.shrGrund), faZahl(r.shrBoden, 1), faZahl(r.fensterPegelDb, 1), faZahl(r.fensterF0Lo, 1), faZahl(r.fensterF0Hi, 1),
+    faZahl(r.f0Yin, 1), String(r.f0Korrektur), String(r.octaveUnterGrenze), String(r.subFactor), faZahl(r.teiltonHz, 1), faZahl(r.huellAbstandDb, 1),
+    String(r.d34Grund), String(r.d45Grund), r.d45valid ? 1 : 0, faZahl(r.h1h2c, 1), String(r.sfrUnsure), String(r.sfrGrund), String(r.cppUnsure), String(r.cppGrund),
+    faZahl(r.fensterRauschAp, 2), faZahl(r.fensterRauschHochDb, 1)].join(' ');
+}
 // Liefert { Fall: Kurzhash } für den übergebenen Kern D.
 function fingerabdruck(D) {
-  const TSR = D.TARGET_SR, out = {};
+  const TSR = D.TARGET_SR, out = {}, felder = [];
   const kurz = s => crypto.createHash('sha256').update(s).digest('hex').slice(0, 12);
   for (const [name, sig] of faPruefsatz()) {
     const ds = D.resample(sig, FA_SR, TSR);
     const z = [];
-    for (let t = 0.08; t <= 0.42 + 1e-9; t += 0.02) z.push(faRahmen(D.analyseAt(ds, TSR, Math.round(t * TSR), {})));
+    for (let t = 0.08; t <= 0.42 + 1e-9; t += 0.02) { const r = D.analyseAt(ds, TSR, Math.round(t * TSR), {}); z.push(faRahmen(r)); felder.push(faFelder(r)); }
     out[name] = kurz(z.join('\n'));
   }
+  out['Felder'] = kurz(felder.join('\n'));
   // Schwellen und Raster, die der Kern ausweist: Eine verschobene Schwelle ändert die Rechenweise, auch wenn
   // gerade kein Prüffall sie kreuzt. Die Versionsnummer selbst gehört nicht dazu.
   out['Konstanten'] = kurz(Object.keys(D).filter(k => k !== 'VERSION' && typeof D[k] !== 'function').sort().map(k => k + '=' + JSON.stringify(D[k])).join('\n'));
   // Sprungzählung (K1): Kiekser 50 ms, Atempause, Quinte gehalten — Ereignisse mit Art, Lage, Dauer, Weite.
   const ton = (f, s) => faVokal(f, FA_A[0], FA_A[1], s);
   const sprung = faFolge([ton(196, 0.5), ton(392, 0.05), ton(196, 0.4), lcg(Math.round(0.3 * FA_SR), 2e-4, 43), ton(262, 0.4), ton(392, 0.3), ton(262, 0.3)]);
-  const ev = D.detectJumps(D.pitchTrackFine(D.resample(sprung, FA_SR, TSR), TSR, {}), {});
+  const spur = D.pitchTrackFine(D.resample(sprung, FA_SR, TSR), TSR, {}), ev = D.detectJumps(spur, {});
   out['Sprünge'] = kurz(ev.map(e => [e.art, faZahl(e.startS, 2), faZahl(e.dauerS, 2), faZahl(e.halbtoene, 1)].join(' ')).join('\n'));
+  const fs = []; for (let k = 0; k < spur.t.length; k++) fs.push([faZahl(spur.f0[k], 1), faZahl(spur.ap[k], 2), spur.rand[k], spur.pegel ? faZahl(spur.pegel[k], 1) : '-', spur.stille ? spur.stille[k] : '-'].join(' '));
+  out['Feinspur'] = kurz(fs.join('\n'));
   return out;
 }
 /* Aufgenommene Fingerabdrücke. '3.0.0' ist der Kern vor K1–K4 (Stand 98fbbb4), mit derselben Funktion
    gerechnet. Ändert sich ein Wert des Prüfsatzes, rechnet der Kern anders: Versionsnummer erhöhen und den
-   neuen Fingerabdruck hier eintragen (der Riss nennt ihn) — nie einen alten Eintrag überschreiben. */
+   neuen Fingerabdruck hier eintragen (der Riss nennt ihn) — nie einen alten Eintrag überschreiben.
+   '3.0.0' und '4.0.0' stammen aus der Zeit vor den drei Rauschfällen und den Schlüsseln „Felder“ und
+   „Feinspur“; '4.1.0' ist der Kern nach der Nachprüfung (Sprünge, SHR-Fensterprobe, Teiltonabstand,
+   Gegenprobe im Rauschen, Rauschanteil für SFR und CPP). */
 const FINGERABDRUCK = {
   '3.0.0': {
     'a 196': '026287c48052', 'i 196': 'd7789b2dbc8b', 'eng 196': '8df0d9e978a4', 'a 123,5': '3202a5a2c302',
@@ -118,6 +140,13 @@ const FINGERABDRUCK = {
     'F1 auf H2 349': 'e57e00ec6bae', 'eng 110 Rauschen 20 dB': 'f38b6da48aa1', 'eng 110 Rauschen 30 dB': '5d4db5286d99', 'a 147 Rauschen 25 dB': 'a87cf49d4e68',
     'o 247 Rauschen 35 dB': 'fde6d2591c70', 'o 310': '97d66c212a1a', 'Wechsel 150': 'dca6899fa53f', 'Wechsel 98 schwach': '53e14c134b8b',
     'F1 = 2·F0 175': '7adb35626bc7', 'Sprünge': '87381f612abb', 'Konstanten': '77ba6e2bb50e'
+  },
+  '4.1.0': {
+    'a 196': 'dd8fa3cb2a17', 'i 196': 'a7487878a094', 'eng 196': '72cc581d2edd', 'a 123,5': 'c7d035ad7dc9',
+    'F1 auf H2 349': 'a32289bb7b74', 'eng 110 Rauschen 20 dB': 'f38b6da48aa1', 'eng 110 Rauschen 30 dB': '5d4db5286d99', 'a 147 Rauschen 25 dB': 'a87cf49d4e68',
+    'o 247 Rauschen 35 dB': 'fde6d2591c70', 'o 310': '97d66c212a1a', 'Wechsel 150': 'dca6899fa53f', 'Wechsel 98 schwach': '53e14c134b8b',
+    'F1 = 2·F0 175': '7adb35626bc7', 'i 220 Rauschen 6 dB': '4fc120d09188', 'i 449 Rauschen 0 dB': '41a97416efa1', 'Rauschstoß vor a 130': '0ceab75ca80f',
+    'Felder': '16f713fb66d5', 'Konstanten': '03765427f5c7', 'Sprünge': '412331dbaa46', 'Feinspur': 'e2c5fb013e47'
   }
 };
 
