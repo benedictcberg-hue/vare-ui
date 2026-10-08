@@ -289,8 +289,14 @@ module.exports = async function (H) {
     if (iK >= 0) pruef('korrigiert', iK, [['text', 'F0 ' + fmt(R[iK].f0, 1) + ' (korrigiert aus ' + fmt(R[iK].f0Yin, 1) + ' Hz, ' + (R[iK].f0Korrektur === 'cepstrum' ? 'Cepstrum' : 'Teiltonreihe') + ')']], ['F0', 'korrigiert']);
     if (iS >= 0) {
       const r = R[iS], anders = r.shrGrid > 1.5 * r.f0 ? r.f0 : 2 * r.f0;
-      // Grund in Worten, hier unabhängig von chronik.js gebildet (Vertrag K4: Teile in fester Reihenfolge)
-      const grundWorte = r.shrGrund.split('+').map(t => t === 'kamm' ? 'Kamm ' + fmt(r.shrKamm, 1) + ' dB' : t === 'zweitpuls' ? 'zweite Anregung ' + fmt(r.shrZweitpuls, 2) : t === 'grundton' ? 'Grundton unsicher' : '?').join(', ');
+      /* Grund in Worten, hier unabhängig von chronik.js gebildet (Vertrag K4 und A2: Teile in fester Reihenfolge). Bis
+         Kern 4.0 gab es nur 'kamm', 'zweitpuls' und 'grundton'; die Teile aus A2 ('rand', 'wechsel', 'rauschen') standen
+         hier als '?' und verlangten damit vom Hover ein „?“. Jetzt mit ihren Belegen aus der Serie (Float32). */
+      const z = x => isFinite(x);
+      const grundWorte = r.shrGrund.split('+').map(t => t === 'kamm' ? 'Kamm ' + fmt(r.shrKamm, 1) + ' dB' : t === 'zweitpuls' ? 'zweite Anregung ' + fmt(r.shrZweitpuls, 2) : t === 'grundton' ? 'Grundton unsicher'
+        : t === 'rand' ? 'Ein- oder Aussatz im Fenster' + (z(r.fensterPegelDb) ? ' (Pegelspanne ' + fmt(f32(r.fensterPegelDb)) + ' dB)' : '')
+        : t === 'wechsel' ? 'Tonwechsel im Fenster' + (z(r.fensterF0Lo) && z(r.fensterF0Hi) ? ' (' + fmt(f32(r.fensterF0Lo)) + '–' + fmt(f32(r.fensterF0Hi)) + ' Hz)' : '')
+        : t === 'rauschen' ? 'kaum über dem Rauschen zwischen den Teiltönen' + (z(r.shrBoden) ? ' (' + fmt(f32(r.shrBoden), 1) + ' dB)' : '') + ', nur Obergrenze' : '?').join(', ');
       pruef('SHR-Zweifel', iS, [['rost', 'SHR ' + fmt(r.shr, 1) + ' (Raster ' + fmt(r.shrGrid) + ' Hz) / ' + fmt(r.shrOther, 1) + ' (Raster ' + fmt(anders) + ' Hz), unsicher: ' + grundWorte]], ['F0']);
     }
     if (iO >= 0) pruef('unter 60 Hz', iO, [['rost', 'Reihe unter 60 Hz, nicht geteilt']]);

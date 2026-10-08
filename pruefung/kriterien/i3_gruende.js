@@ -137,12 +137,17 @@ module.exports = async function (H) {
      kein Rauschboden). Die Serie kennt nWin nicht: Dort steht „nur in 2 Fenstern“ nur, wenn sonst nichts
      die Ungültigkeit erklärt (ohneZaehlung). */
   const fmt0 = v => { const t = v.toFixed(0); return t === '-0' ? '0' : t; };
-  function sollGruende(r, k, ohneZaehlung, sdw, sdo) {
+  /* Kern 4.1 (A3) vergibt je Slot zwei weitere Gründe: 'teilton' (Teiltonabstand zu groß, mit dem Abstand) und
+     'wechsel' (Vokalwechsel im Fenster). Bis dahin kannte diese Sollfunktion nur 'nummer' und 'verschmolzen' und
+     erwartete für einen Slot mit 'teilton' gar keinen Grund — das widerspricht „nennt alle zutreffenden Gründe“. */
+  function sollGruende(r, k, ohneZaehlung, sdw, sdo, tt) {
     if (!isFinite(r.F[k])) return ['nicht gefunden'];
-    sdw = sdw === undefined ? r.sdWin[k] : sdw; sdo = sdo === undefined ? r.sdOrder[k] : sdo;
+    sdw = sdw === undefined ? r.sdWin[k] : sdw; sdo = sdo === undefined ? r.sdOrder[k] : sdo; tt = tt === undefined ? r.teiltonHz : tt;
     const t = [];
     if (r.slotGrund[k] === 'nummer') t.push('Nummer mehrdeutig');
     if (r.slotGrund[k] === 'verschmolzen') t.push('zwei Resonanzen in einem Gipfel möglich');
+    if (r.slotGrund[k] === 'teilton') t.push('Teiltonabstand ' + (isFinite(tt) ? fmt0(tt) + ' Hz ' : '') + 'zu groß');
+    if (r.slotGrund[k] === 'wechsel') t.push('Vokalwechsel im Fenster');
     if (r.rauschBoden[k]) t.push('im Rauschboden');
     if (sdw >= SMAX) t.push('Streuung über Fenster ' + fmt0(sdw) + ' Hz');
     if (sdo >= SMAX) t.push('Streuung über Ordnungen ' + fmt0(sdo) + ' Hz');
@@ -279,7 +284,7 @@ module.exports = async function (H) {
         for (let k = 0; k < 5; k++) {
           const kopf = 'F' + (k + 1) + ' ', teil = rost.find(x => x.startsWith(kopf));
           if (R[i].valid[k]) { if (teil) bad.push(art + ' t ' + i + ' F' + (k + 1) + ' gültig, aber Rost „' + teil + '“'); continue; }
-          const soll = kopf + CHR.fmt(s0['f' + (k + 1)][i]) + '? (' + sollGruende(R[i], k, ohneZ, s0['sdw' + (k + 1)][i], s0['sdo' + (k + 1)][i]).join(', ') + ')';
+          const soll = kopf + CHR.fmt(s0['f' + (k + 1)][i]) + '? (' + sollGruende(R[i], k, ohneZ, s0['sdw' + (k + 1)][i], s0['sdo' + (k + 1)][i], s0.teiltonHz ? s0.teiltonHz[i] : NaN).join(', ') + ')';
           if (teil !== soll) { if (bad.length < 6) bad.push(art + ' t ' + i + ': „' + teil + '“ statt „' + soll + '“'); } else geprueft++;
           if (s0 === ser) for (const g of sollGruende(R[i], k, ohneZ)) zaehl[g.replace(/ \d+ Hz$/, '')] = (zaehl[g.replace(/ \d+ Hz$/, '')] || 0) + 1;
         }

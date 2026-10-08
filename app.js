@@ -299,7 +299,7 @@
        Gegenprobe) ist ein geprüfter Wert: sichtbar mit dem alten Wert, aber nicht rostig. Früher stand
        gerade die Korrektur in Rost. Die Note hängt am Grundton und steht in derselben Kachel. */
     var f0z = [], f0Uns = !!(fr.f0Unsure || fr.octaveAmbiguous);
-    if (fr.f0Unsure) f0z.push('Grundton unsicher: ' + CH.f0GrundText(fr.f0Grund, fr.f0Cep));
+    if (fr.f0Unsure) f0z.push('Grundton unsicher: ' + CH.f0GrundText(fr.f0Grund, fr.f0Cep, fr.fensterF0Lo, fr.fensterF0Hi));
     if (fr.octaveAmbiguous) f0z.push(CH.oktavText(fr.octaveUnterGrenze));
     if (fr.f0Korrektur) f0z.push(CH.f0KorrText(fr.f0Korrektur, fr.f0Yin));
     else if (fr.octaveCorrected) f0z.push('Teiler ' + fr.subFactor + ' aus Teiltonreihe');
@@ -311,7 +311,7 @@
        im Rauschboden hieß „Streuung“. Jetzt alle zutreffenden Gründe aus denselben Feldern, aus denen dsp.js
        valid bildet, mit denselben Worten wie im Hover (CH.formantGruende). Rost bleibt über !valid. */
     function why(k) {
-      var g = fr.valid[k] ? [] : CH.formantGruende({ F: fr.F[k], grund: fr.slotGrund ? fr.slotGrund[k] : (fr.slotUnsure[k] ? '?' : ''), rauschBoden: fr.rauschBoden ? !!fr.rauschBoden[k] : null,
+      var g = fr.valid[k] ? [] : CH.formantGruende({ F: fr.F[k], grund: fr.slotGrund ? fr.slotGrund[k] : (fr.slotUnsure[k] ? '?' : ''), teiltonHz: fr.teiltonHz, rauschBoden: fr.rauschBoden ? !!fr.rauschBoden[k] : null,
         sdWin: fr.sdWin[k], sdOrder: fr.sdOrder[k], smax: st.settings.spreadMaxHz, nWin: fr.nWin[k], nOrders: fr.nOrders[k] });
       return (g.length ? ' — ' + g.join(', ') : '') + (fr.bwArtifact && fr.bwArtifact[k] ? ' · ' + CH.BANDBREITE_TEXT : '');
     }
@@ -326,9 +326,13 @@
     setStat('f3', fmt(disp[2]) + ' Hz' + why(2) + (f3Low ? ' · unter ' + st.settings.f3MinHz + ', nicht gewertet' : ''), !fr.valid[2], false, fr.valid[2] && f3Low);
     setStat('f4', fmt(disp[3]) + ' Hz' + why(3), !fr.valid[3]);
     setStat('f5', fmt(disp[4]) + ' Hz' + why(4), !fr.valid[4]);
-    setStat('d34', fmt(fr.d34) + ' Hz' + (isFinite(gs.score) ? ' gewertet' : ' — nicht gewertet' + (gs.reason ? ': ' + gs.reason : '')), !fr.d34valid, false, fr.d34valid && !isFinite(gs.score));
-    setStat('d45', fmt(fr.d45) + ' Hz', !fr.d45valid);
-    setStat('sfr', fmt(fr.sfr, 1) + ' dB', false);
+    /* ΔF3–4 und ΔF4–5 sind bei Teiltonabstand über 250 Hz nicht messbar (Kern 4.1, d34Grund/d45Grund 'teilton'): Das
+       ist der Grund der Messung und steht vor dem des Gatters. */
+    var nichtMessbar = function (g) { return g === 'teilton' ? ' — nicht messbar: ' + CH.teiltonText(fr.teiltonHz) : ''; };
+    setStat('d34', fmt(fr.d34) + ' Hz' + nichtMessbar(fr.d34Grund) + (isFinite(gs.score) ? ' gewertet' : ' — nicht gewertet' + (gs.reason ? ': ' + gs.reason : '')), !fr.d34valid, false, fr.d34valid && !isFinite(gs.score));
+    setStat('d45', fmt(fr.d45) + ' Hz' + nichtMessbar(fr.d45Grund), !fr.d45valid);
+    // SFR und CPP mit Rauschanteil im Fenster (Konsonant oder Hauch, Kern 4.1): in Rost mit Grund.
+    setStat('sfr', fmt(fr.sfr, 1) + ' dB' + (fr.sfrUnsure ? ' — unsicher: ' + CH.rauschText(fr.sfrGrund) : ''), !!fr.sfrUnsure);
     /* SHR über der Warnschwelle ist ein Befund (Ventrikularfalten), keine Messunsicherheit — aber nur,
        wenn das Raster feststeht. Ist es zweifelhaft oder der Grundton unsicher (shrUnsure), stehen beide
        Werte mit ihrem Raster in Rost, mit dem Grund, und es gibt keine Warnung: Welcher Wert gilt, ist
@@ -336,14 +340,14 @@
     if (fr.shrUnsure) {
       var anders = fr.shrGrid > fr.f0 * 1.5 ? fr.f0 : 2 * fr.f0;
       setStat('shr', fmt(fr.shr, 1) + ' dB (Raster ' + fmt(fr.shrGrid) + ' Hz)' + (CH.zahl(fr.shrOther) ? ' · ' + fmt(fr.shrOther, 1) + ' dB (Raster ' + fmt(anders) + ' Hz)' : '')
-        + ' — unsicher: ' + CH.shrGrundText(fr.shrGrund, fr.shrKamm, fr.shrZweitpuls), true);
+        + ' — unsicher: ' + CH.shrGrundText(fr.shrGrund, fr.shrKamm, fr.shrZweitpuls, { pegelDb: fr.fensterPegelDb, f0Lo: fr.fensterF0Lo, f0Hi: fr.fensterF0Hi, boden: fr.shrBoden }), true);
     } else setStat('shr', fmt(fr.shr, 1) + ' dB' + (fr.shrGrid > fr.f0 * 1.5 ? ' (Raster ' + fmt(fr.shrGrid) + ' Hz = ' + D.hzToNote(fr.shrGrid) + ')' : ''), false, false, fr.shr > -15);
-    setStat('cpp', fmt(fr.cpp, 1) + ' dB', false);
+    setStat('cpp', fmt(fr.cpp, 1) + ' dB' + (fr.cppUnsure ? ' — unsicher: ' + CH.rauschText(fr.cppGrund) : ''), !!fr.cppUnsure);
     // H1−H2 und H1*−H2* lesen die Linien bei F0 und 2·F0: mit dem Grundton unsicher.
     // H1*−H2* mit einer Artefakt-Bandbreite (dsp.js h1h2cArtifact): neutral dabei, wie am Formanten (CH.H1C_BW_TEXT).
     setStat('h1h2', fmt(fr.h1h2, 1) + ' · ' + fmt(fr.h1h2c, 1) + ' dB' + (fr.h1h2unsure ? ' (filtergetrieben)' : '') + (fr.f0Unsure ? ' (Grundton unsicher)' : '') + (fr.h1h2cArtifact ? ' · ' + CH.H1C_BW_TEXT : ''), fr.h1h2unsure || fr.f0Unsure);
     var hint = $('live-hints'), hinweis = fr.sparseHarmonics ? 'Grundton über 250 Hz: zwischen den Teiltönen liegt kein Messpunkt, ein Formant kann bis zu ±' + fmt(fr.harmonicPullHz) + ' Hz auf dem nächsten Teilton einrasten. Die Streuung der Sweeps zeigt das nicht an.' : hintText();
-    hint.textContent = (fr.f0Unsure ? 'Grundton unsicher (' + CH.f0GrundText(fr.f0Grund, fr.f0Cep) + '): Note, F1/F0, Teiltonleiter, SHR und H1−H2 hängen an ihm. ' : '') + hinweis;
+    hint.textContent = (fr.f0Unsure ? 'Grundton unsicher (' + CH.f0GrundText(fr.f0Grund, fr.f0Cep, fr.fensterF0Lo, fr.fensterF0Hi) + '): Note, F1/F0, Teiltonleiter, SHR und H1−H2 hängen an ihm. ' : '') + hinweis;
     var tl = D.tubeLength(fr.F, fr.valid);
     setStat('tube', isFinite(tl.cm) ? fmt(tl.cm, 1) + ' cm (ΔF ' + fmt(tl.dF) + ')' : '– (zu wenig stabile Formanten)', !isFinite(tl.cm));
     var ref = cls ? st.refs[cls] : null;
@@ -839,7 +843,9 @@
       '<div class="stat' + (s.d34stable.n ? '' : (f3u ? ' befund' : ' unsure')) + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ')' : (f3u ? 'nicht gewertet: F3 ' + fmt(f3u.f3) + ' Hz unter ' + fmt(f3u.schwelle) + ' Hz' : 'keine gewerteten Rahmen')) + '</span></div>' +
       // Wie im Detail: mit dem Anteil zweideutig zugeordneter Rahmen in Rost, und warum kein Bestsegment dasteht.
       '<div class="stat"><span class="k">Bestes Segment je Vokal</span><span class="v">' + (Object.keys(per).map(function (k) { return CH.bestSegmentText(k, per[k]); }).join(' · ') || '–') + '</span></div>' +
-      '<div class="stat"><span class="k">SFR · SHR max · CPP</span><span class="v">' + fmt(s.sfr.med, 1) + ' · ' + fmt(s.shr.max, 1) + ' · ' + fmt(s.cpp.med, 1) + CH.shrZusatz(s) + '</span></div>' +
+      // SFR und CPP ohne Rahmen mit Rauschanteil im Fenster; der Anteil in Rost daneben (wie im Detail).
+      '<div class="stat"><span class="k">SFR · SHR max · CPP</span><span class="v">' + fmt(s.sfr.med, 1) + ' · ' + fmt(s.shr.max, 1) + ' · ' + fmt(s.cpp.med, 1) + CH.shrZusatz(s) + CH.rauschZusatz(s.sfrUnsureShare) + '</span></div>' +
+      (CH.hoheLage(s) ? '<div class="stat"><span class="k">Hohe Lage</span><span class="v"><span class="rust">' + CH.hoheLage(s) + '</span></span></div>' : '') +
       '<div class="stat' + (s.floorSource === 'calibration' ? '' : ' unsure') + '"><span class="k">stimmhaft · gültig · stabil · SNR</span><span class="v">' + fmt(s.voicedShare * 100) + ' · ' + fmt(s.validShare * 100) + ' · ' + fmt(s.stableShare * 100) + ' % · ' + fmt(s.snrDb, 1) + ' dB</span></div>' +
       '</div>';
   }
