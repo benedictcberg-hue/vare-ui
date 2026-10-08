@@ -32,7 +32,9 @@
       { key: prefix + '_q3', get: g(key + '.q3'), dec: dec },
       { key: prefix + '_n', get: g(key + '.n'), dec: 0 }
     ];
-    if (share) cols.push({ key: prefix + '_valid_share', get: g(key + '.share'), dec: 3 });
+    if (share) cols.push({ key: prefix + '_valid_share', get: g(key + '.share'), dec: 3 },
+      // Anteil der gültigen Rahmen dieses Medians mit Teiltonabstand über 250 Hz (Formant nur auf ± Abstand/2), Kern 4.1
+      { key: prefix + '_teilton_share', get: g(key + '.teiltonShare'), dec: 3 });
     return cols;
   }
   var TAKE_COLUMNS = [
@@ -92,6 +94,9 @@
       { key: 'sfr_med_db', get: g('summary.sfr.med'), dec: 2 },
       { key: 'sfr_q1', get: g('summary.sfr.q1'), dec: 2 },
       { key: 'sfr_q3', get: g('summary.sfr.q3'), dec: 2 },
+      /* SFR und CPP nur aus Rahmen ohne Rauschanteil im Fenster (Kern 4.1, sfrUnsure/cppUnsure); wie viele ausgelassen
+         sind, steht hier. Ältere Auswertungen kennen die Marke nicht: −99. */
+      { key: 'sfr_unsure_share', get: g('summary.sfrUnsureShare'), dec: 3 },
       { key: 'shr_med_db', get: g('summary.shr.med'), dec: 2 },
       { key: 'shr_max_db', get: g('summary.shr.max'), dec: 2 },
       /* shr_med_db und shr_max_db: nur Rahmen ohne shrUnsure. Die übrigen fehlen dort nicht still:
@@ -100,6 +105,7 @@
       { key: 'shr_unsure_max_db', get: g('summary.shrUnsureMax'), dec: 2 },
       { key: 'shr_other_max_db', get: g('summary.shrOtherMax'), dec: 2 },
       { key: 'cpp_med_db', get: g('summary.cpp.med'), dec: 2 },
+      { key: 'cpp_unsure_share', get: g('summary.cppUnsureShare'), dec: 3 },
       { key: 'h1h2_med_db', get: g('summary.h1h2.med'), dec: 2 },
       { key: 'h1h2c_med_db', get: g('summary.h1h2c.med'), dec: 2 },
       { key: 'h1h2_unsure_share', get: g('summary.h1h2.unsureShare'), dec: 3 },
@@ -123,6 +129,10 @@
       { key: 'octave_corrected_share', get: g('summary.octaveCorrectedShare'), dec: 3 },
       { key: 'octave_ambiguous_share', get: g('summary.octaveAmbiguousShare'), dec: 3 },
       { key: 'slot_unsure_share', get: g('summary.slotUnsureShare'), dec: 3 },
+      /* Anteil der stimmhaften Rahmen mit Teiltonabstand über 250 Hz (ΔF3–4/ΔF4–5 nicht messbar, Formanten nur auf
+         ± Abstand/2) und über 375 Hz (kein Formant messbar). Ältere Auswertungen: −99. */
+      { key: 'teilton_share', get: g('summary.teiltonShare'), dec: 3 },
+      { key: 'teilton_hoch_share', get: g('summary.teiltonHochShare'), dec: 3 },
       { key: 'jumps_held', get: g('summary.spruenge.gehalten'), dec: 0 },
       { key: 'jumps_edge', get: g('summary.spruenge.kante'), dec: 0 },
       { key: 'lambda_held_per_s', get: g('summary.spruenge.lambdaGehalten'), dec: 4 },
@@ -137,7 +147,9 @@
   /* Gründe je Rahmen stehen in der Serie als Codes (analysis.js GRUND, codeAus); hier werden sie wieder
      Text. Die Listen müssen denen in analysis.js gleichen — die Prüfung P2f/P2g setzt jeden Text über
      analysis.js ein und erwartet ihn hier zurück. 255 = Text, den die Analyse nicht kannte: '?'. */
-  var GRUND_TEXT = { f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum'], f0Korrektur: ['', 'teiltonreihe', 'cepstrum'], shrGrund: ['kamm', 'zweitpuls', 'grundton'] };
+  var GRUND_TEXT = { f0Grund: ['', 'teiltonreihe', 'cepstrum', 'kein cepstrum', 'wechsel', 'oktave'], f0Korrektur: ['', 'teiltonreihe', 'cepstrum'],
+    shrGrund: ['kamm', 'zweitpuls', 'grundton', 'rand', 'wechsel', 'rauschen'], d34Grund: ['', 'teilton'], d45Grund: ['', 'teilton'],
+    sfrGrund: ['', 'rauschanteil'], cppGrund: ['', 'rauschanteil'] };
   function grundText(feld, code) {
     if (!code) return '';
     if (code === 255) return '?';
@@ -155,18 +167,22 @@
   function grundSpalte(feld) { return function (s, i) { return s[feld] ? grundText(feld, s[feld][i]) : null; }; }
   /* Warum ein Formant ungültig ist, je Slot neben valid1…valid5 — als eigene Spalten, nicht als Maske wie
      slot_unsure: Eine Maske verlangt Bitrechnung (12 heißt F3 und F4), und genau dort verrechnet man sich
-     beim Nachprüfen. slot_grundK trägt den Text des Kerns (dsp.js slotGrund): 'nummer' (Nummer mehrdeutig)
-     oder 'verschmolzen' (zwei Resonanzen in einem Gipfel möglich), leer bei eindeutiger Nummer. Eine ältere
-     Serie kennt nur „unsicher“, nicht warum: dann '?', nie still 'nummer'. rauschbodenK ist 0/1 und
-     unabhängig davon (ein Gipfel kann beides sein); ältere Serien −99. Streuung über Fenster und Ordnungen
-     steht schon in sdwK und sdoK. */
-  function slotGrundSpalte(k) {
+     beim Nachprüfen. slot_grundK trägt den Text des Kerns (dsp.js slotGrund): 'nummer' (Nummer mehrdeutig),
+     'verschmolzen' (zwei Resonanzen in einem Gipfel möglich), seit Kern 4.1 'teilton' (Teiltonabstand zu groß)
+     und 'wechsel' (Vokalwechsel im Fenster), leer bei eindeutiger Nummer. Eine ältere Serie kennt nur „unsicher“,
+     nicht warum: dann '?', nie still 'nummer'. Serien aus Kern 4.0 (mit slotVerschmolzen, ohne slotTeilton) kannten
+     nur 'nummer' und 'verschmolzen'. rauschbodenK ist 0/1 und unabhängig davon (ein Gipfel kann beides sein); ältere
+     Serien −99. Streuung über Fenster und Ordnungen steht schon in sdwK und sdoK. */
+  function slotGrundAus(s, i, k) {
     var b = 1 << k;
-    return function (s, i) {
-      if (!s.slotUnsure || !(s.slotUnsure[i] & b)) return '';
-      return s.slotVerschmolzen ? ((s.slotVerschmolzen[i] & b) ? 'verschmolzen' : 'nummer') : '?';
-    };
+    if (!s.slotUnsure || !(s.slotUnsure[i] & b)) return '';
+    if (!s.slotVerschmolzen) return '?';
+    if (s.slotVerschmolzen[i] & b) return 'verschmolzen';
+    if (s.slotTeilton && (s.slotTeilton[i] & b)) return 'teilton';
+    if (s.slotWechsel && (s.slotWechsel[i] & b)) return 'wechsel';
+    return 'nummer';
   }
+  function slotGrundSpalte(k) { return function (s, i) { return slotGrundAus(s, i, k); }; }
   function maskenSpalte(feld, k) { var b = 1 << k; return function (s, i) { return s[feld] ? ((s[feld][i] & b) ? 1 : 0) : null; }; }
   /* In wie vielen Analysefenstern Formant k+1 stand (analysis.js nWin, je Slot 3 Bit): Grund „nur in 2 Fenstern“ auch
      neben anderen Gründen. In stimmlosen Rahmen ist nichts analysiert, in älteren Serien fehlt das Feld: −99. */
@@ -179,6 +195,8 @@
      Text leer. valid1…5 bleibt 0: „nicht gültig“ stimmt auch ohne Messung (README: 0 heißt ungültig). */
   function stimmhaft(fn) { return function (s, i, V) { return (s.flags[i] & 1) ? fn(s, i, V) : null; }; }
   function feld(name) { return function (s, i) { return s[name] ? s[name][i] : null; }; }
+  // SFR/CPP unsicher steht nur als Code in der Serie (analysis.js FLAG): 1, wenn ein Grund da ist; ohne Codefeld −99.
+  function codeBit(name) { return function (s, i) { return s[name] ? (s[name][i] ? 1 : 0) : null; }; }
   function flagBit(bit) { return function (s, i) { return (s.flags[i] & bit) ? 1 : 0; }; }
 
   // Rahmenweise Spalten: Name → Serienfeld (oder Funktion) und Nachkommastellen.
@@ -210,6 +228,16 @@
     // SHR: Raster des Hauptwerts, Wert auf dem anderen Raster (nur bei Zweifel), Zweifel und Belege
     ['shr_grid_hz', 'shrGrid', 2], ['shr_other_db', 'shrOther', 2], ['shr_unsure', stimmhaft(bitMit('shrGrund', 2048)), 0], ['shr_grund', stimmhaft(grundSpalte('shrGrund'))],
     ['shr_kamm_db', 'shrKamm', 2], ['shr_zweitpuls', 'shrZweitpuls', 3],
+    /* Kern 4.1. Teiltonabstand der Gültigkeitsentscheidung (F0, bei unsicherem Grundton 2·F0); ΔF3–4/ΔF4–5 nicht
+       messbar ('teilton'); Hüllkurvenabstand der Fensterhälften (über 5 dB: Vokalwechsel, Slot-Grund 'wechsel'). */
+    ['teilton_hz', 'teiltonHz', 2], ['d34_grund', stimmhaft(grundSpalte('d34Grund'))], ['d45_grund', stimmhaft(grundSpalte('d45Grund'))], ['huell_abstand_db', 'huellAbstandDb', 2],
+    /* SHR-Belege: Zwischenpegel (shr − shr_boden_db unter 8 dB über −25 dB: 'rauschen'), Pegelspanne der 20-ms-Blöcke
+       im längsten Fenster (ab 12 dB: 'rand'), kleinste und größte Tonhöhe der Teilfenster ('wechsel'). */
+    ['shr_boden_db', 'shrBoden', 2], ['fenster_pegel_db', 'fensterPegelDb', 2], ['fenster_f0_lo_hz', 'fensterF0Lo', 2], ['fenster_f0_hi_hz', 'fensterF0Hi', 2],
+    // SFR und CPP unsicher bei Rauschanteil im Fenster, mit den Belegen: Aperiodizität und Hochtonanstieg der kurzen Teile.
+    ['sfr_unsure', stimmhaft(codeBit('sfrGrund')), 0], ['sfr_grund', stimmhaft(grundSpalte('sfrGrund'))],
+    ['cpp_unsure', stimmhaft(codeBit('cppGrund')), 0], ['cpp_grund', stimmhaft(grundSpalte('cppGrund'))],
+    ['fenster_rausch_ap', 'fensterRauschAp', 3], ['fenster_rausch_hoch_db', 'fensterRauschHochDb', 2],
     ['flags', 'flags', 0]
   ];
 

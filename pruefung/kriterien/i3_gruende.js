@@ -92,8 +92,13 @@ module.exports = async function (H) {
         }
       }
     }
-    check('I3a', 'Rahmen-CSV: slot_grund1…5 („nummer“, „verschmolzen“, leer) und rauschboden1…5 (0/1) Rahmen für Rahmen gleich analyseAt',
-      !bad.length && geprueft === 10 * R.length && texte.size === 2, geprueft + '/' + 10 * R.length + ' Zellen, Gründe ' + [...texte].join(' | ') + (bad.length ? ' — ' + bad.join('; ') : ''));
+    /* Bis Kern 4.0 kannte der Kern nur 'nummer' und 'verschmolzen', und das Kriterium verlangte genau diese zwei Texte.
+       Seit Kern 4.1 meldet er im Prüftake zu Recht auch 'teilton' (/a/ bei 330 Hz, Teiltonabstand über 250 Hz) und
+       'wechsel' (Hüllkurve wechselt im Fenster, A3). Geprüft bleibt jede Zelle gegen analyseAt; verlangt sind weiter
+       beide alten Texte, und kein Text außerhalb des Vertrags (K2, A3). */
+    const VERTRAG_SLOT = ['nummer', 'verschmolzen', 'teilton', 'wechsel'];
+    check('I3a', 'Rahmen-CSV: slot_grund1…5 („nummer“, „verschmolzen“, „teilton“, „wechsel“, leer) und rauschboden1…5 (0/1) Rahmen für Rahmen gleich analyseAt',
+      !bad.length && geprueft === 10 * R.length && texte.has('nummer') && texte.has('verschmolzen') && [...texte].every(t => VERTRAG_SLOT.indexOf(t) >= 0), geprueft + '/' + 10 * R.length + ' Zellen, Gründe ' + [...texte].join(' | ') + (bad.length ? ' — ' + bad.join('; ') : ''));
   }
   {
     // Ältere Serie ohne die Masken: unsicher bleibt sichtbar, aber ohne erfundenen Grund („?“, nicht „nummer“);

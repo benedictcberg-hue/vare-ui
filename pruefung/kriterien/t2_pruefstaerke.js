@@ -22,23 +22,26 @@ const TAKE_SOLL = [
 ];
 for (let k = 1; k <= 5; k++) {
   const p = 'summary.F.' + (k - 1) + '.';
-  TAKE_SOLL.push(['f' + k + '_med', p + 'med', 1], ['f' + k + '_q1', p + 'q1', 1], ['f' + k + '_q3', p + 'q3', 1], ['f' + k + '_n', p + 'n', 0], ['f' + k + '_valid_share', p + 'share', 3]);
+  TAKE_SOLL.push(['f' + k + '_med', p + 'med', 1], ['f' + k + '_q1', p + 'q1', 1], ['f' + k + '_q3', p + 'q3', 1], ['f' + k + '_n', p + 'n', 0], ['f' + k + '_valid_share', p + 'share', 3],
+    // Kern 4.1 (C2): Anteil der gültigen Rahmen im Median mit Teiltonabstand über 250 Hz
+    ['f' + k + '_teilton_share', p + 'teiltonShare', 3]);
 }
 TAKE_SOLL.push(
   ['d34_med', 'summary.d34.med', 1], ['d34_q1', 'summary.d34.q1', 1], ['d34_q3', 'summary.d34.q3', 1], ['d34_n', 'summary.d34.n', 0],
   ['d34_stable_med', 'summary.d34stable.med', 1], ['d34_stable_n', 'summary.d34stable.n', 0], ['d34_best_sustained', 'summary.best.d34', 1],
   ['d34_best_vowel', 'summary.best.cls', 'text'], ['f3_stable_med', 'summary.f3stable.med', 1], ['f3_scored_med', 'summary.f3scored.med', 1],
   ['d45_med', 'summary.d45.med', 1], ['d45_q1', 'summary.d45.q1', 1], ['d45_q3', 'summary.d45.q3', 1], ['d45_n', 'summary.d45.n', 0],
-  ['sfr_med_db', 'summary.sfr.med', 2], ['sfr_q1', 'summary.sfr.q1', 2], ['sfr_q3', 'summary.sfr.q3', 2],
+  ['sfr_med_db', 'summary.sfr.med', 2], ['sfr_q1', 'summary.sfr.q1', 2], ['sfr_q3', 'summary.sfr.q3', 2], ['sfr_unsure_share', 'summary.sfrUnsureShare', 3],
   ['shr_med_db', 'summary.shr.med', 2], ['shr_max_db', 'summary.shr.max', 2],
   ['shr_unsure_share', 'summary.shrUnsureShare', 3], ['shr_unsure_max_db', 'summary.shrUnsureMax', 2], ['shr_other_max_db', 'summary.shrOtherMax', 2],
-  ['cpp_med_db', 'summary.cpp.med', 2],
+  ['cpp_med_db', 'summary.cpp.med', 2], ['cpp_unsure_share', 'summary.cppUnsureShare', 3],
   ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3], ['h1h2c_bw_artifact_share', 'summary.h1h2c.bwArtefaktShare', 3],
   ['rms_med_dbfs', 'summary.rms.med', 2], ['rms_max_dbfs', 'summary.rms.max', 2], ['floor_dbfs', 'summary.floorDb', 2],
   ['floor_source', 'summary.floorSource', 'text'], ['voicing_floor_dbfs', 'summary.voicingFloorDb', 2], ['snr_db', 'summary.snrDb', 2],
   ['tube_cm', 'summary.tubeCm', 1], ['tube_q1', 'summary.tube.q1', 1], ['tube_q3', 'summary.tube.q3', 1], ['tube_n', 'summary.tube.n', 0],
   ['octave_corrected_share', 'summary.octaveCorrectedShare', 3], ['octave_ambiguous_share', 'summary.octaveAmbiguousShare', 3],
-  ['slot_unsure_share', 'summary.slotUnsureShare', 3], ['jumps_held', 'summary.spruenge.gehalten', 0], ['jumps_edge', 'summary.spruenge.kante', 0],
+  ['slot_unsure_share', 'summary.slotUnsureShare', 3],
+  ['teilton_share', 'summary.teiltonShare', 3], ['teilton_hoch_share', 'summary.teiltonHochShare', 3], ['jumps_held', 'summary.spruenge.gehalten', 0], ['jumps_edge', 'summary.spruenge.kante', 0],
   ['lambda_held_per_s', 'summary.spruenge.lambdaGehalten', 4], ['lambda_edge_per_s', 'summary.spruenge.lambdaKante', 4],
   ['voiced_share', 'summary.voicedShare', 3], ['valid_share', 'summary.validShare', 3], ['stable_share', 'summary.stableShare', 3],
   ['n_frames', 'summary.nFrames', 0], ['comment', 'comment', 'text']
@@ -56,6 +59,7 @@ const TEXTE = {
 /* Rahmen-CSV: Spalte, Art, Quelle, Nachkommastellen.
    feld = Serienfeld; bit = [Feld, Bitmaske oder Name in A.FLAG]; gate = Wort zum Gatterzustand;
    vokal = Klassenname aus V.CENTROIDS; grund = Codefeld, in der CSV der Text des Kerns (GRUND_ZEILEN);
+   codebit = 1, wenn das Codefeld einen Grund trägt (SFR/CPP unsicher steht nur als Code, analysis.js FLAG);
    nwin = Fensterzahl des Slots aus dem Feld nWin (3 Bit je Slot, Slot k in Bit 3k…3k+2), nur in stimmhaften Rahmen.
    Die Bitbedeutung folgt analysis.js (fillFrame, FLAG). */
 const FRAME_SOLL = [
@@ -80,6 +84,11 @@ FRAME_SOLL.push(
   ['f0_cep', 'feld', 'f0Cep', 2], ['f0_yin', 'feld', 'f0Yin', 2], ['octave_unter_grenze', 'bit', ['flags', 'OCTUNTER']],
   ['shr_grid_hz', 'feld', 'shrGrid', 2], ['shr_other_db', 'feld', 'shrOther', 2], ['shr_unsure', 'bit', ['flags', 'SHRUNSURE']], ['shr_grund', 'grund', 'shrGrund'],
   ['shr_kamm_db', 'feld', 'shrKamm', 2], ['shr_zweitpuls', 'feld', 'shrZweitpuls', 3],
+  // Kern 4.1 (C2): Teiltonabstand, Gründe ΔF3–4/ΔF4–5, Hüllkurvenabstand, SHR-Belege, SFR/CPP-Zweifel mit Belegen
+  ['teilton_hz', 'feld', 'teiltonHz', 2], ['d34_grund', 'grund', 'd34Grund'], ['d45_grund', 'grund', 'd45Grund'], ['huell_abstand_db', 'feld', 'huellAbstandDb', 2],
+  ['shr_boden_db', 'feld', 'shrBoden', 2], ['fenster_pegel_db', 'feld', 'fensterPegelDb', 2], ['fenster_f0_lo_hz', 'feld', 'fensterF0Lo', 2], ['fenster_f0_hi_hz', 'feld', 'fensterF0Hi', 2],
+  ['sfr_unsure', 'codebit', 'sfrGrund'], ['sfr_grund', 'grund', 'sfrGrund'], ['cpp_unsure', 'codebit', 'cppGrund'], ['cpp_grund', 'grund', 'cppGrund'],
+  ['fenster_rausch_ap', 'feld', 'fensterRauschAp', 3], ['fenster_rausch_hoch_db', 'feld', 'fensterRauschHochDb', 2],
   ['flags', 'feld', 'flags', 0]
 );
 /* Spalten, die nur für einen stimmhaften (gemessenen) Rahmen etwas aussagen: In stimmlosen Zeilen stehen sie als
@@ -87,28 +96,34 @@ FRAME_SOLL.push(
    Serie und schrieb damit fest, dass f0_unsure 0 in einer Pause „Grundton sicher“ heißt. valid1…5 gehört nicht
    dazu: 0 heißt „nicht gültig“ und stimmt auch ohne Messung. */
 const STIMMHAFT_SPALTEN = ['slot_unsure', 'n_peaks', 'octave_corrected', 'octave_ambiguous', 'h1h2_unsure', 'f0_unsure', 'f0_grund', 'f0_korrektur',
-  'octave_unter_grenze', 'shr_unsure', 'shr_grund'];
+  'octave_unter_grenze', 'shr_unsure', 'shr_grund', 'd34_grund', 'd45_grund', 'sfr_unsure', 'sfr_grund', 'cpp_unsure', 'cpp_grund'];
 for (let k = 1; k <= 5; k++) STIMMHAFT_SPALTEN.push('slot_grund' + k, 'rauschboden' + k, 'n_win' + k);
 
-/* Gründe je Zeile, Texte aus den Verträgen K3 (f0Grund, f0Korrektur) und K4 (shrGrund). In jeder Zeile
-   tragen die drei Spalten verschiedene Texte, damit vertauschte Spalten auffallen. */
+/* Gründe je Zeile, Texte aus den Verträgen K3 (f0Grund, f0Korrektur), K4 (shrGrund) und A2–A4 (Kern 4.1:
+   f0Grund 'wechsel', 'oktave'; shrGrund 'rand', 'wechsel', 'rauschen'; d34Grund/d45Grund 'teilton'; sfrGrund/cppGrund
+   'rauschanteil'). In jeder Zeile tragen die Spalten f0, Korrektur und SHR verschiedene Texte, und gleichartige
+   Spalten (d34/d45, sfr/cpp) haben verschiedene Muster, damit vertauschte Spalten auffallen. */
 const GRUND_ZEILEN = {
-  f0Grund: ['teiltonreihe', '', 'cepstrum', 'kein cepstrum', 'teiltonreihe', ''],
+  f0Grund: ['teiltonreihe', 'oktave', 'cepstrum', 'kein cepstrum', 'teiltonreihe', 'wechsel'],
   f0Korrektur: ['', 'teiltonreihe', '', 'cepstrum', 'cepstrum', ''],
-  shrGrund: ['kamm', 'zweitpuls', 'kamm+zweitpuls', 'grundton', 'kamm+zweitpuls+grundton', 'zweitpuls+grundton']
+  shrGrund: ['kamm', 'zweitpuls+rand', 'kamm+zweitpuls+wechsel', 'grundton+rauschen', 'kamm+zweitpuls+grundton+rand+wechsel+rauschen', 'zweitpuls+grundton'],
+  d34Grund: ['teilton', '', '', 'teilton', 'teilton', ''],
+  d45Grund: ['', 'teilton', '', 'teilton', '', 'teilton'],
+  sfrGrund: ['rauschanteil', '', 'rauschanteil', '', '', 'rauschanteil'],
+  cppGrund: ['', 'rauschanteil', 'rauschanteil', '', 'rauschanteil', '']
 };
 
-/* Grund je Slot (Vertrag K2, dsp.js slotGrund) je Zeile, als Sollwert der Spalten slot_grund1…5. Daraus werden
+/* Grund je Slot (Vertrag K2 und A3: 'teilton', 'wechsel'; dsp.js slotGrund) je Zeile, als Sollwert der Spalten slot_grund1…5. Daraus werden
    slotUnsure und slotVerschmolzen der Serie gebaut, nicht umgekehrt. Jede Spalte hat ein eigenes Muster, und
    'nummer' und 'verschmolzen' stehen in verschiedenen Zeilen, damit vertauschte Spalten oder Texte auffallen.
    Rauschboden je Zeile als Maske (Bit k = Fk+1), Muster verschieden von valid1…5 und voneinander. */
 const SLOTGRUND_ZEILEN = [
-  ['nummer', '', 'verschmolzen', '', ''],
-  ['', 'verschmolzen', '', 'nummer', ''],
-  ['verschmolzen', '', 'nummer', '', 'verschmolzen'],
-  ['', '', '', 'nummer', ''],
-  ['', 'nummer', '', '', 'verschmolzen'],
-  ['nummer', 'nummer', '', '', '']
+  ['nummer', '', 'verschmolzen', 'teilton', ''],
+  ['', 'verschmolzen', 'wechsel', 'nummer', ''],
+  ['verschmolzen', 'teilton', 'nummer', '', 'verschmolzen'],
+  ['wechsel', '', '', 'nummer', 'teilton'],
+  ['', 'nummer', 'teilton', 'wechsel', 'verschmolzen'],
+  ['nummer', 'nummer', '', '', 'wechsel']
 ];
 const RAUSCHBODEN_ZEILEN = [2 | 16, 1 | 4, 4, 1 | 8, 16 | 8, 2 | 16 | 8];
 
@@ -194,9 +209,10 @@ function buildSeries(A) {
     c++;
   }
   SLOTGRUND_ZEILEN.forEach((z, r) => {
-    let u = 0, m = 0;
-    z.forEach((t, k) => { if (t) u |= 1 << k; if (t === 'verschmolzen') m |= 1 << k; });
+    let u = 0, m = 0, tt = 0, w = 0;
+    z.forEach((t, k) => { if (t) u |= 1 << k; if (t === 'verschmolzen') m |= 1 << k; if (t === 'teilton') tt |= 1 << k; if (t === 'wechsel') w |= 1 << k; });
     s.slotUnsure[r] = u; if (s.slotVerschmolzen) s.slotVerschmolzen[r] = m;
+    if (s.slotTeilton) s.slotTeilton[r] = tt; if (s.slotWechsel) s.slotWechsel[r] = w;
   });
   if (s.rauschBoden) RAUSCHBODEN_ZEILEN.forEach((v, r) => { s.rauschBoden[r] = v; });
   // Fensterzahl je Slot und Zeile: (2r + 3k) mod 5, in jeder Spalte ein anderes Muster.
@@ -222,6 +238,7 @@ function expectFrame(entry, s, r, dialect, A, V) {
   if (kind === 'gate') { for (const w in A.GATE_CODE) if (A.GATE_CODE[w] === s.gate[r]) return w; return '?'; }
   if (kind === 'vokal') return s.cls[r] >= 0 ? V.CENTROIDS[s.cls[r]].cls : '';
   if (kind === 'grund') return GRUND_ZEILEN[src][r];
+  if (kind === 'codebit') return !s[src] ? '(Serienfeld ' + src + ' fehlt)' : (s[src][r] ? '1' : '0');
   if (kind === 'slotgrund') return SLOTGRUND_ZEILEN[r][src];
   if (kind === 'nwin') return !s.nWin ? '(Serienfeld nWin fehlt)' : (s.flags[r] & A.FLAG.VOICED) ? String((2 * r + 3 * src) % 5) : expectCell(0, null, dialect);
   throw new Error('Art ' + kind);
