@@ -26,12 +26,13 @@
     <p>
       Diese Seite ist öffentlich und enthält <strong>keine Messwerte</strong> — weder deine Marken
       noch Aufnahmen noch Auswertungen. Sie liest <code>korpus.json</code> aus dem privaten Repo
-      <code id="korpus-repo" class="mono"></code> mit deinem eigenen GitHub-Token, und zwar nur lesend.
+      <code id="korpus-repo" class="mono"></code> mit deinem eigenen GitHub-Token.
       Erst danach erscheint die Oberfläche.
     </p>
     <p class="small muted">
-      Alles Weitere bleibt ohnehin auf diesem Gerät: Aufnahmen, Chronik und Export liegen im
-      Browserspeicher. Es geht nichts an GitHub zurück.
+      Aufnahmen, Chronik und Export bleiben auf diesem Gerät im Browserspeicher. Zurück ins private
+      Repo geht nur eins: nach jeder Kalibrierung eine kleine Datei mit ihren Messwerten
+      (data/input/, ohne Gerätename, ohne Audio).
     </p>
     <label for="token">GitHub-Token
       <input type="password" id="token" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
@@ -47,12 +48,13 @@
       <ol class="small">
         <li>github.com → Settings → Developer settings → Personal access tokens → <strong>Fine-grained tokens</strong> → Generate new token.</li>
         <li>Repository access: <em>Only select repositories</em> → <strong>nur</strong> <code id="korpus-repo-2" class="mono"></code>.</li>
-        <li>Permissions → Repository permissions → <strong>Contents: Read-only</strong>. Sonst nichts.</li>
+        <li>Permissions → Repository permissions → <strong>Contents: Read and write</strong>. Sonst nichts.</li>
         <li>Token hier einfügen und „Verbinden“.</li>
       </ol>
       <p class="small muted">
-        Schreibrechte braucht die Seite nicht. Ein Token mit mehr Rechten als nötig ist das einzige
-        Risiko, das diese Hülle überhaupt hat.
+        Geschrieben wird nur die Ablage der Kalibrierung nach data/input/. Mit „Read-only“ läuft alles
+        andere weiter; die Kalibrierungen warten dann im Browser. Gib dem Token kein weiteres Repo
+        und keine weitere Berechtigung.
       </p>
     </details>
     <p class="small muted" id="anmeldung-file" hidden>
