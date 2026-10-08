@@ -958,7 +958,7 @@
         var t = liste[i++];
         zeige(t, 0, 0);
         return neuAuswerten(t.id, function (done, total) { zeige(t, done, total); }, function () { return lauf.abbruch; })
-          .then(function (x) { neu.push(x.take); }, function (e) { if (!(e && e.abgebrochen)) fehl.push(takeName(t) + ': ' + (e && e.message || e)); })
+          .then(function (x) { neu.push(x.take); detailVeraltet(x.take); }, function (e) { if (!(e && e.abgebrochen)) fehl.push(takeName(t) + ': ' + (e && e.message || e)); })
           .then(function () { if (location.hash === '#/chronik') refreshChronik(); return naechster(); });
       }
       return naechster().then(recomputeRefs).then(function () {
@@ -971,6 +971,19 @@
       }).catch(function (e) { text.textContent = 'Neu-Analyse gestoppt: ' + (e && e.message || e); status(text.textContent, true); })
         .then(function () { st.busy = false; alleLauf = null; alleSperre(false); knopf.disabled = false; stopp.hidden = true; updateTakeButton(); if (location.hash === '#/chronik') refreshChronik(); });
     }).catch(function (e) { status('Chronik nicht lesbar: ' + (e && e.message || e), true); });
+  }
+  /* Ist das Detail eines eben neu gerechneten Takes offen, zeigt es noch die alte Auswertung („älterer Kern“), obwohl die
+     Chronik schon die neue hat (Nachweis N9). Neu geöffnet wird nicht von selbst — eine angefangene Notiz ginge verloren —,
+     aber die Ansicht sagt es in Rost und bietet „Neu öffnen“ an. Speichern ändert ohnehin nur die Notizfelder. */
+  function detailVeraltet(t) {
+    var m = /^#\/take\/(.+)$/.exec(location.hash || ''), p = $('d-veraltet');
+    if (!t || !m || decodeURIComponent(m[1]) !== t.id || !p || p.textContent) return;
+    var b = document.createElement('button');
+    p.textContent = 'Inzwischen neu analysiert (Kern ' + ((t.analysis && t.analysis.kernelVersion) || '?') + '): Die Werte hier sind die alte Auswertung. Speichern ändert nur Bezeichnung, Vokalabsicht, Kommentar und Einsing-Angaben. ';
+    b.textContent = 'Neu öffnen';
+    b.addEventListener('click', function () { openDetail(t.id); });
+    p.appendChild(b);
+    p.hidden = false;
   }
   function alleAbbrechen() {
     if (!alleLauf) return;

@@ -531,6 +531,7 @@
     var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(take) : '';
     var intents = [''].concat(V.CENTROIDS.map(function (c) { return c.cls; }));
     el.innerHTML = '<div class="panel"><a href="#/chronik">← Chronik</a>' +
+      '<p id="d-veraltet" class="rust" hidden></p>' +   // app.js: inzwischen neu analysiert (Nachweis N9)
       '<h2>' + esc(take.code) + ' <span id="d-label-view">' + esc(take.label) + '</span></h2>' +
       '<div class="small muted">' + esc(dateShort(take.createdAt)) + ' · ' + esc(take.deviceLabel || '') + ' · ' + fmt(take.sampleRate) + ' Hz · Kern ' + esc(take.analysis && take.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">älterer Kern</span>' : '') + (s.floorSource === 'calibration' ? ' · kalibriert' : ' · <span class="rust">Rauschboden ' + (s.floorSource === 'unknown' ? 'unbekannt' : 'geschätzt') + '</span>') + '</div>' +
       '<div class="small">' + kontextZeile(take) + '</div>' +

@@ -14,6 +14,8 @@
         Rahmen für Rahmen, Sollworte der Anzeige hier unabhängig gebildet.
    C3a: Naht nach stehendem Kontext (Nachweis N7): Ihre Stelle kennt der Recorder nur auf einige Stücke genau; die Spanne
         gilt als Naht, und über die echte Schnittstelle entsteht kein Sprung (Sonde s15 der Nachprüfung, Chromium).
+   C3b: Offenes Detail während „Alle neu analysieren“ (Nachweis N9): Nach der Neu-Analyse sagt es in Rost, dass es die
+        alte Auswertung zeigt, und „Neu öffnen“ zeigt die neue.
    Testsignale: allgemeine Baritonlage, synthetische Vokale. Reißt ein Kriterium, ist das ein Befund. */
 'use strict';
 module.exports = async function (H) {
@@ -559,4 +561,36 @@ module.exports = async function (H) {
     check('C3a', 'Naht nach stehendem Kontext (N7): der Recorder meldet sie mit Spanne (genau gemeldete Naht ohne), die Spanne gilt als Naht — kein Rahmen über dem echten Schnitt 80 ms nach der gemeldeten Stelle gemessen, kein Sprung, abseits gemessen; als Punkt bliebe −7 HT gehalten',
       !bad.length, bad.length ? bad.join(' | ') : 'Spanne ' + nSteht[0].spanneS.toFixed(3) + ' s, Rahmen über dem Schnitt ' + ueber + ' (alle Naht), abseits gemessen ' + fernGemessen + '/' + fern + ', Punkt-Naht: ' + spP.liste.map(e => e.art + ' ' + e.halbtoene.toFixed(1) + ' HT').join(', '));
   } catch (e) { check('C3a', 'Ablauf Naht mit Spanne läuft durch', false, kurz(e)); }
+  /* ---------- C3b · Offenes Detail während „Alle neu analysieren“ ---------- */
+  try {
+    const N = require(require('path').join(__dirname, 'n_ui.js')).hilfen, bad = [];
+    const sigB = concat([noise(Math.round(0.1 * SR), 2e-4, 411), D.synthVowel(165, FA, BW5, 1.0, SR, { gain: 0.3 }), noise(Math.round(0.1 * SR), 2e-4, 412)]);
+    const p = await N.seiteNeu(N.idbNeu(), () => ({ samples: Float32Array.from(sigB), sampleRate: SR, durationS: sigB.length / SR }), SR);
+    p.kalibriert('cal-c3'); await p.mikrofon();
+    p.el('take-label').value = 'Erster'; const ta = await p.take();
+    p.el('take-label').value = 'Zweiter'; const tb = await p.take();
+    for (const t of [ta, tb]) { const x = await p.S.getTake(t.id); x.analysis.kernelVersion = '3.0.0'; await p.S.putTake(x); }
+    p.geheZu('#/chronik'); p.klick('btn-reanalyse-all');
+    if (!(await p.warte(() => /Neu-Analyse 1 von 2: A .* — \d+ \/ \d+ Rahmen/.test(p.el('reanalyse-all-text').textContent), 10000))) bad.push('Lauf nicht bei A angehalten');
+    p.halt();
+    p.geheZu('#/take/' + tb.id);
+    const offen = await p.warte(() => p.el('take-detail').innerHTML.indexOf('<h2>' + tb.code + ' ') >= 0, 5000);
+    const vorher = /älterer Kern/.test(p.el('take-detail').innerHTML);
+    p.weiter();
+    await p.warte(() => !p.st().busy && /Alle neu analysiert/.test(p.el('reanalyse-all-text').textContent), 60000);
+    const hinweis = p.el('d-veraltet'), text = hinweis.textContent, knopf = (hinweis.kinder || [])[0];
+    if (!offen || !vorher) bad.push('Detail von ' + tb.code + ' nicht mit „älterer Kern“ geöffnet');
+    if (!(hinweis.hidden === false && text.indexOf('Inzwischen neu analysiert (Kern ' + D.VERSION + ')') === 0 && /alte Auswertung/.test(text))) bad.push('Hinweis „' + text + '“' + (hinweis.hidden ? ' (verborgen)' : ''));
+    if (!(knopf && knopf.textContent === 'Neu öffnen')) bad.push('kein Knopf „Neu öffnen“');
+    else {
+      knopf.click();
+      await p.warte(() => p.el('take-detail').innerHTML.indexOf('Kern ' + D.VERSION) >= 0, 5000);
+      if (/älterer Kern/.test(p.el('take-detail').innerHTML) || p.el('take-detail').innerHTML.indexOf('Kern ' + D.VERSION) < 0) bad.push('nach „Neu öffnen“ weiter die alte Auswertung');
+    }
+    const tbNeu = await p.S.getTake(tb.id);
+    if (!(tbNeu.analysis.kernelVersion === D.VERSION && tbNeu.history.length === 1)) bad.push('Take ' + tb.code + ' nicht neu gerechnet');
+    p.schliessen();
+    check('C3b', 'Offenes Detail während „Alle neu analysieren“ (N9): nach der Neu-Analyse dieses Takes Hinweis in Rost „Inzwischen neu analysiert (Kern …): … alte Auswertung“, „Neu öffnen“ zeigt die neue Auswertung',
+      !bad.length, bad.length ? bad.join(' | ') : '„' + text + '“');
+  } catch (e) { check('C3b', 'Ablauf offenes Detail während der Neu-Analyse läuft durch', false, kurz(e)); }
 };
