@@ -461,6 +461,8 @@ module.exports = async function (H) {
       vm.runInContext(quelleDatei('app.js'), ab, { filename: 'app.js' });
       const st = ab.VAREAPP.state;
       for (let w = 0; w < 500 && !st.settings; w++) await new Promise(r => setTimeout(r, 2));
+      // Diese Prüfung liest die Anzeige Takt für Takt; die ruhige Anzeige (Median über 0,6 s, 4×/s) prüft n_ruhig.js.
+      st.settings.ruhig = false;
       el('btn-mic').click();
       for (let w = 0; w < 500 && !(rec.active && raf); w++) await new Promise(r => setTimeout(r, 2));
       const DD = ab.VAREDSP, echt = DD.analyseAt, sig = DD.resample(DD.synthVowel(196, VOK.a[0], VOK.a[1], 0.4, 48000), 48000, DD.TARGET_SR);

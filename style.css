@@ -83,3 +83,24 @@ th.spalte-breit { min-width: 180px; }
 .anmeldung ol { padding-left: 1.2rem; }
 .anmeldung li { margin-bottom: .35rem; }
 .leer-hinweis { color: var(--muted); font-size: .9rem; }
+
+/* Kalibrierung: große Ansage, damit man beim Singen nicht kleine Schrift lesen muss. */
+.cal-ansage { margin-top: .75rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px; text-align: center; }
+.cal-schritte { list-style: none; padding: 0; margin: 0 0 .75rem; display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; font-size: .85rem; color: var(--muted); }
+.cal-schritte li { padding: .1rem .5rem; border: 1px solid var(--line); border-radius: 6px; }
+.cal-schritte li.jetzt { color: var(--ink); border-color: var(--gold); }
+.cal-schritte li.fertig { opacity: .5; }
+.cal-wort { font-size: 2.6rem; line-height: 1.15; font-weight: 600; }
+.cal-hinweis { color: var(--muted); margin: .25rem 0 .75rem; min-height: 1.3em; }
+.cal-balken { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+#cal-balken-fuell { height: 100%; width: 0; background: var(--muted); }
+.cal-zahl { font-size: 1.6rem; margin-top: .5rem; }
+.cal-ansage.p-vorlauf .cal-wort, .cal-ansage.p-stille .cal-wort { color: var(--ink); }
+.cal-ansage.p-einatmen .cal-wort { color: var(--muted); }
+.cal-ansage.p-a { border-color: var(--gold); }
+.cal-ansage.p-a .cal-wort { color: var(--gold); }
+.cal-ansage.p-a #cal-balken-fuell { background: var(--gold); }
+.cal-ansage.p-ausklang { border-color: var(--rust); }
+.cal-ansage.p-ausklang .cal-wort { color: var(--rust); }
+.cal-ansage.p-ausklang #cal-balken-fuell { background: var(--rust); }
+@media (max-width: 480px) { .cal-wort { font-size: 2.1rem; } }

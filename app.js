@@ -337,8 +337,10 @@
     var cpp = ueberFenster(V, function (fr) { return fr.cpp; }, function (fr) { return !fr.cppUnsure; });
     setStat('cpp', cpp.traegt ? fmt(cpp.wert, 1) + ' dB' : '– · unsicher', !cpp.traegt);
     var h12 = ueberFenster(V, function (fr) { return fr.h1h2; }, function (fr) { return !fr.h1h2unsure && !fr.f0Unsure; }, function (fr) { return fr.f0Unsure ? 'Grundton unsicher' : 'filtergetrieben'; });
-    var h12c = ueberFenster(V, function (fr) { return fr.h1h2c; }, function (fr) { return !fr.h1h2unsure && !fr.f0Unsure && !fr.h1h2cArtifact; });
-    setStat('h1h2', h12.traegt ? fmt(h12.wert, 1) + ' · ' + (h12c.traegt ? fmt(h12c.wert, 1) : '–') + ' dB' : '– · ' + h12.grund, !h12.traegt);
+    var h12c = ueberFenster(V, function (fr) { return fr.h1h2c; }, function (fr) { return !fr.h1h2unsure && !fr.f0Unsure; });
+    // Wie im Einzeltakt: H1*−H2* mit einer Bandbreite unter 40 Hz bleibt sichtbar, mit Hinweis (Mehrheit im Fenster).
+    var artefakt = V.filter(function (e) { return e.fr.h1h2cArtifact; }).length * 2 >= V.length;
+    setStat('h1h2', h12.traegt ? fmt(h12.wert, 1) + ' · ' + (h12c.traegt ? fmt(h12c.wert, 1) : '–') + ' dB' + (h12c.traegt && artefakt ? ' · ' + CH.H1C_BW_TEXT : '') : '– · ' + h12.grund, !h12.traegt);
     var tube = ueberFenster(V, function (fr) { return D.tubeLength(fr.F, fr.valid).cm; }, function () { return true; });
     setStat('tube', tube.traegt ? fmt(tube.wert, 1) + ' cm' : '– (zu wenig stabile Formanten)', !tube.traegt);
     $('live-hints').textContent = hintText();
@@ -540,25 +542,63 @@
     else el.innerHTML = 'Kalibriert ' + CH.esc(CH.dateShort(c.createdAt)) + ' · ' + CH.esc(c.deviceLabel) + ' · Rauschboden <span class="mono">' + fmt(c.floorDb, 1) + ' dBFS</span> · /a/ <span class="mono">' + fmt(c.levelDb, 1) + ' dBFS</span> · SNR <span class="mono">' + fmt(c.snrDb, 1) + ' dB</span> (Band 2,4–3,2 kHz <span class="mono">' + fmt(c.bandSnr && c.bandSnr.sf, 1) + ' dB</span>) · Ausklang <span class="mono">' + fmt(c.decayDbPerS, 0) + ' dB/s</span> · F1–F3 des /a/ <span class="mono">' + (c.F || []).slice(0, 3).map(function (v) { return fmt(v); }).join(' / ') + '</span>' + (c.snrDb < 30 ? ' <span class="rust">SNR unter 30 dB — Messungen im Sängerformantband unsicher.</span>' : '');
     $('cal-warnings').innerHTML = warnings && warnings.length ? 'Kette gegenüber der letzten Kalibrierung verändert: ' + warnings.map(CH.esc).join(' · ') : '';
   }
+  /* Ablauf mit Vorlauf (nicht aufgenommen), großen Ansagen und Balken je Phase. Die Ansage ändert sich
+     nur beim Phasenwechsel; die Zahl zählt ganze Sekunden herunter — nichts flackert im Zehntel-Takt. */
+  function calAnsage(p) {
+    var box = $('cal-ansage'), key = p.vorlauf ? 'vorlauf' : (p.phase ? p.phase.key : 'ende');
+    if (box.getAttribute('data-phase') !== key) {
+      box.setAttribute('data-phase', key);
+      box.className = 'cal-ansage p-' + key;
+      $('cal-wort').textContent = p.vorlauf ? 'Gleich geht’s los' : (p.phase ? p.phase.ansage : 'Auswertung …');
+      $('cal-hinweis').textContent = p.vorlauf ? 'bequem hinstellen, 20–30 cm vor dem Mikrofon; zuerst kommt Stille' : (p.phase ? p.phase.hinweis : '');
+      var li = $('cal-schritte').children;
+      for (var i = 0; i < li.length; i++) li[i].className = (i + 1 === p.nr) ? 'jetzt' : (i + 1 < p.nr ? 'fertig' : '');
+      $('cal-progress').textContent = p.vorlauf ? 'Vorlauf — wird nicht aufgenommen' : (p.phase ? 'Schritt ' + p.nr + ' von ' + K.PHASES.length + ': ' + p.phase.label : 'Auswertung …');
+    }
+    $('cal-balken-fuell').style.width = Math.round(Math.min(1, Math.max(0, p.anteil)) * 100) + '%';
+    $('cal-zahl').textContent = (p.vorlauf || p.phase) ? String(Math.ceil(p.rest - 1e-6)) : '';
+  }
+  /* Angefangene Kalibrieraufnahme verwerfen: nur den Puffer des Rekorders schließen, nichts speichern. */
+  function calVerwerfen(laeuft) {
+    if (!laeuft || !st.rec) return;
+    try { Promise.resolve(st.rec.endTake()).catch(function () { }); } catch (e) { }
+  }
+  function calAus() {
+    st.calRunning = false; st.calAbbruch = null;
+    $('btn-cal').disabled = !(st.rec && st.rec.active); $('btn-cal-stop').hidden = true;
+    $('cal-progress').hidden = true; $('cal-ansage').hidden = true; $('cal-ansage').removeAttribute('data-phase');
+    updateTakeButton();
+  }
   function calibrate() {
     if (!st.rec || !st.rec.active || st.calRunning || st.taking) return;
     freezeLive('Kalibrierung läuft');
     st.calRunning = true; $('btn-cal').disabled = true; $('cal-progress').hidden = false; updateTakeButton();
-    var phases = K.PHASES, t0 = performance.now(), total = K.totalSeconds();
-    st.rec.beginTake();
+    var phases = K.PHASES, t0 = performance.now(), total = K.totalSeconds(), vorlauf = K.VORLAUF_S, laeuft = false;
+    $('cal-schritte').innerHTML = phases.map(function (p, i) { return '<li>' + (i + 1) + ' ' + CH.esc(p.ansage) + '</li>'; }).join('');
+    $('cal-ansage').hidden = false; $('btn-cal-stop').hidden = false;
+    calAnsage(K.phaseAt(0));
     var iv = setInterval(function () {
-      var el = (performance.now() - t0) / 1000, acc = 0, cur = null, left = 0;
-      for (var i = 0; i < phases.length; i++) { if (el < acc + phases[i].seconds) { cur = phases[i]; left = acc + phases[i].seconds - el; break; } acc += phases[i].seconds; }
-      if (cur) { $('cal-progress').textContent = cur.label + ' — noch ' + left.toFixed(1) + ' s'; var flK = floorNow(); drawLevel(st.rec.latest(0.1).length ? D.rmsDb(st.rec.latest(0.1)) : NaN, flK.db, flK.src); }
-      if (el >= total + 0.1 || !st.rec || !st.rec.active) {
-        clearInterval(iv);
-        if (!st.rec || !st.rec.active) { st.calRunning = false; $('btn-cal').disabled = true; $('cal-progress').hidden = true; status('Kalibrierung abgebrochen — Mikrofon nicht mehr aktiv.', true); updateTakeButton(); return; }
+      var el = (performance.now() - t0) / 1000;
+      if (!st.rec || !st.rec.active) {
+        clearInterval(iv); calVerwerfen(laeuft);
+        calAus(); status('Kalibrierung abgebrochen — Mikrofon nicht mehr aktiv.', true); return;
+      }
+      if (!laeuft && el >= vorlauf) { st.rec.beginTake(); laeuft = true; }
+      var p = K.phaseAt(el);
+      if (p.vorlauf || p.phase) { calAnsage(p); if (laeuft) { var flK = floorNow(); drawLevel(st.rec.latest(0.1).length ? D.rmsDb(st.rec.latest(0.1)) : NaN, flK.db, flK.src); } }
+      if (el >= vorlauf + total + 0.1) {
+        clearInterval(iv); st.calAbbruch = null; $('btn-cal-stop').hidden = true;
+        calAnsage(p);
         Promise.resolve(st.rec.endTake()).then(kalibrierungAuswerten);
       }
     }, 100);
+    st.calAbbruch = function () {
+      clearInterval(iv); calVerwerfen(laeuft);
+      calAus(); status('Kalibrierung abgebrochen — nichts übernommen. Neu starten mit „Kalibrieren“.', true);
+    };
     function kalibrierungAuswerten(take) {
       if (take.durationS < total - 0.3) {
-        st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+        calAus();
         status('Kalibrierung abgebrochen (' + take.durationS.toFixed(1).replace('.', ',') + ' s von ' + total + ' s aufgenommen) — nicht übernommen.', true);
         return;
       }
@@ -576,7 +616,7 @@
           if (!isFinite(rec.levelDb) || !rec.nVoiced) fehlt.push('/a/ nicht erkannt');
           if (!isFinite(rec.snrDb)) fehlt.push('SNR');
           if (fehlt.length) {
-            st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+            calAus();
             status('Kalibrierung unbrauchbar (' + fehlt.join(', ') + ') — nicht übernommen. Lauter singen, näher ans Mikrofon, Ablauf wiederholen.', true);
             return;
           }
@@ -586,9 +626,9 @@
             st.cal = rec; st.calSession = true; st.rmsRing = [];
             return S.putCalibration(rec).then(function () { renderCalStatus(warnings); ablageEinreihen(rec); });
           }).catch(function (e) { status('Kalibrierung konnte nicht gespeichert werden: ' + e.message, true); }).then(function () {
-            st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; updateTakeButton();
+            calAus();
           });
-        } catch (e) { st.calRunning = false; $('btn-cal').disabled = false; $('cal-progress').hidden = true; status('Kalibrierung fehlgeschlagen: ' + e.message, true); updateTakeButton(); }
+        } catch (e) { calAus(); status('Kalibrierung fehlgeschlagen: ' + e.message, true); }
       }, 20);
     }
   }
@@ -1420,6 +1460,7 @@
     });
     $('btn-mic').addEventListener('click', micToggle);
     $('btn-cal').addEventListener('click', calibrate);
+    $('btn-cal-stop').addEventListener('click', function () { if (st.calAbbruch) st.calAbbruch(); });
     $('btn-take').addEventListener('click', takeToggle);
     $('btn-neue-sitzung').addEventListener('click', neueSitzung);
     /* Einsing-Status und -Dauer gelten für die ganze Sitzung, nicht nur für den nächsten Take —

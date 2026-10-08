@@ -89,13 +89,21 @@
     </div>
 
     <div class="panel">
-      <h2>Kalibrierung <span class="muted small">5 s Stille, 3 s /a/, 1 s Ausklang</span></h2>
+      <h2>Kalibrierung <span class="muted small">gut 20 s: Vorlauf, Stille, Einatmen, /a/, Aufhören</span></h2>
       <div id="cal-status" class="small">Noch keine Kalibrierung in dieser Sitzung.</div>
       <div id="cal-warnings" class="rust small"></div>
       <div id="ablage-status" class="small muted" role="status"></div>
       <div class="row">
         <button id="btn-cal" class="primary" disabled>Kalibrieren</button>
+        <button id="btn-cal-stop" hidden>Abbrechen</button>
         <span id="cal-progress" class="mono" hidden></span>
+      </div>
+      <div id="cal-ansage" class="cal-ansage" hidden>
+        <ol id="cal-schritte" class="cal-schritte" aria-hidden="true"></ol>
+        <div id="cal-wort" class="cal-wort" role="status" aria-live="assertive"></div>
+        <div id="cal-hinweis" class="cal-hinweis"></div>
+        <div class="cal-balken"><div id="cal-balken-fuell"></div></div>
+        <div id="cal-zahl" class="cal-zahl mono"></div>
       </div>
     </div>
 

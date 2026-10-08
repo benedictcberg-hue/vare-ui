@@ -84,6 +84,11 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    sind (siehe „Was ungültig heißt“) und F3 über dem eingestellten Mindestwert liegt. Im
    Vokalwechsel steht „Übergang“ oder „nicht gewertet“ mit Grund.
    Referenz je Vokalklasse aus der eigenen Chronik, nie über Vokale hinweg verglichen.
+   Die Live-Kacheln sind ruhig: Median über die letzten 0,6 s, viermal pro Sekunde neu geschrieben. Eine
+   Zahl steht nur, wenn der Wert in mindestens 60 % der stimmhaften Rahmen trägt, sonst „– · Grund“ in
+   Kurzform (Teilton, verschmolzen, mehrdeutig, im Rauschen, streut …). ΔF3–4 heißt „gewertet“, wenn das
+   Gatter in der Mehrheit der Rahmen gewertet hat. Einstellung „Ruhige Live-Anzeige“ aus: jeder
+   Einzelrahmen mit allen Gründen, zur Fehlersuche.
 2. **Session-Recorder mit Chronik.** Take aufnehmen, Analyse im 10-ms-Raster mit Ordnungs-
    und Fensterlängensweep, Zusammenfassung und Rahmenverlauf und WAV in IndexedDB,
    CSV-Export, JSON-Sicherung und -Import, Neu-Analyse mit neuerem Kern — einzeln oder als
@@ -94,7 +99,10 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    Seite währenddessen neu geladen oder geschlossen, bietet sie die Aufnahme danach unter „Unvollendete
    Analyse“ an (fortsetzen, WAV sichern, verwerfen); während Aufnahme und Analyse fragt der Browser vor
    dem Verlassen nach. Take und Rahmenverlauf (und das WAV) werden in einer Transaktion gespeichert.
-3. **Kalibrierpflicht.** 5 s Stille, 3 s /a/, 1 s Ausklang vor dem ersten Take. Rauschboden,
+3. **Kalibrierpflicht.** Vor dem ersten Take, gut 20 s zum Mitmachen: 3 s Vorlauf (nicht aufgenommen),
+   6 s Stille, 2 s Einatmen (nicht ausgewertet), 5 s /a/, 2 s Aufhören und still bleiben. Jede Phase
+   steht groß mit Countdown und Balken da; „Abbrechen“ verwirft die Aufnahme. Ausgewertet wird die
+   Stille ab 0,5 s bis 0,3 s vor ihrem Ende und das /a/ ab 0,5 s nach seinem Beginn. Rauschboden,
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
 
@@ -325,6 +333,7 @@ Windows länger.
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 4 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
 | `n_ablage.js` | AB1–AB2 | Ablage der Kalibrierung: Dateiname unter `data/input/`, nur Messwerte und Uhrzeit ohne Gerätename, PUT an die Contents-API ohne Überschreiben, verständlicher Fehler bei fehlendem Schreibrecht | < 1 s |
+| `n_ruhig.js` | RU0–RU3 | Ruhige Live-Anzeige: voreingestellt; springende Formanten als Median, höchstens viermal je Sekunde neu (Gegenprobe Einzeltakt); Minderheitswert als „– · Grund“ in Rost; kurze Gründe | < 5 s |
 | `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 47 s |
 | `n_zusammen.js` | C1–C3 | Kern und Oberfläche zusammen: Marken und Grundcodes passen in die Serie (auch NAHT neben neuen Kernmarken), Rahmen an einer Naht in jedem Serienfeld und jeder CSV-Spalte nicht gemessen, Feinspur und Sprungsuche je Abschnitt mit der Sprungerkennung des Kerns; jeder Grund und Beleg des Kerns 4.1 in Serie, Sicherung, Zusammenfassung, CSV, live, Hover, Detail, Liste und Ergebnis; Naht nach stehendem Kontext als Spanne, offenes Detail während „Alle neu analysieren“ | 24 s |
 

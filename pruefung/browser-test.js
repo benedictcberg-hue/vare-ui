@@ -26,8 +26,13 @@ const WAV = path.join(SP, 'fake.wav');
 {
   const sr = 48000;
   const rausch = (s, seed) => { const n = Math.round(s * sr), o = new Float64Array(n); let x = seed; for (let i = 0; i < n; i++) { x = (x * 1664525 + 1013904223) >>> 0; o[i] = ((x / 4294967296) * 2 - 1) * 2e-4; } return o; };
-  const teile = [rausch(1, 1), rausch(5, 2), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 3, sr, { gain: 0.3 }),
-    rausch(1, 3), rausch(2, 4), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 4, sr, { gain: 0.3 }), rausch(3, 5)];
+  /* Zeitplan zur Kalibrierung (calibration.js): Klick etwa 1 s nach Mikrofonstart, dann Vorlauf, Stille und
+     Einatmen als Rauschen, /a/ über die /a/-Phase, danach Rauschen für den Ausklang. Der zweite Vokal liegt
+     dort, wo der erste Take nach der Kalibrierung aufnimmt. */
+  const K = require(path.join(ROOT, 'calibration.js')), dauer = key => K.PHASES.find(p => p.key === key).seconds;
+  const vorA = 1 + K.VORLAUF_S + dauer('stille') + dauer('einatmen');
+  const teile = [rausch(vorA, 2), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], dauer('a') + 0.5, sr, { gain: 0.3 }),
+    rausch(3, 3), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 8, sr, { gain: 0.3 }), rausch(3, 5)];
   let n = 0; for (const t of teile) n += t.length;
   const alles = new Float64Array(n); let o = 0; for (const t of teile) { alles.set(t, o); o += t.length; }
   fs.writeFileSync(WAV, Buffer.from(W.encode(alles, sr, 'i16')));
@@ -146,7 +151,16 @@ const WAV = path.join(SP, 'fake.wav');
     const stateWord = await page.textContent('#gate-state');
     check('Live-Anzeige zeigt Pause in Stille', /Pause/.test(stateWord), stateWord);
     await page.click('#btn-cal');
-    await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 25000 });
+    // Ablauf zum Mitmachen: erst Vorlauf (große Ansage, Abbrechen-Knopf), dann die Phasen mit eigener Ansage.
+    const ansage0 = await page.evaluate(() => ({ sichtbar: !document.getElementById('cal-ansage').hidden, wort: document.getElementById('cal-wort').textContent, stop: !document.getElementById('btn-cal-stop').hidden, zahl: document.getElementById('cal-zahl').textContent, schritte: document.getElementById('cal-schritte').children.length }));
+    check('Kalibrierung: Vorlauf mit großer Ansage, Countdown, Schrittliste und Abbrechen-Knopf', ansage0.sichtbar && /los/.test(ansage0.wort) && ansage0.stop && /^[1-3]$/.test(ansage0.zahl) && ansage0.schritte === 4, JSON.stringify(ansage0));
+    await page.evaluate(() => { const w = window.__calWorte = []; window.__calBeob = new MutationObserver(() => { const t = document.getElementById('cal-wort').textContent; if (w[w.length - 1] !== t) w.push(t); }); window.__calBeob.observe(document.getElementById('cal-wort'), { childList: true, characterData: true, subtree: true }); });
+    await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 40000 });
+    {
+      const worte = await page.evaluate(() => { window.__calBeob.disconnect(); return window.__calWorte; });
+      check('Kalibrierung: Ansagen in der Reihenfolge Still, Einatmen, /a/, Aufhören — je einmal, ohne Flackern', worte.slice(0, 4).join(' | ') === 'Still sein | Einatmen | /a/ singen | Aufhören!', worte.join(' | '));
+      check('Kalibrierung: Ansage und Abbrechen-Knopf nach dem Ende verborgen', await page.isHidden('#cal-ansage') && await page.isHidden('#btn-cal-stop'));
+    }
     const cal = await page.textContent('#cal-status');
     check('Kalibrierung abgeschlossen', /Kalibriert/.test(cal), cal.slice(0, 220));
     const m = /Rauschboden (-?[\d,.]+) dBFS · \/a\/ (-?[\d,.]+) dBFS · SNR ([\d,.]+) dB/.exec(cal);
@@ -317,7 +331,7 @@ const WAV = path.join(SP, 'fake.wav');
       // Die Prüfdatei läuft in Schleife; trifft die Kalibrierung den Vokal nicht, nochmals.
       for (let v = 0; v < 4; v++) {
         await page.click('#btn-cal');
-        await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 30000 });
+        await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 40000 });
         if (/^Kalibriert/.test((await page.textContent('#cal-status')).trim())) return true;
         await page.waitForTimeout(1500);
       }
@@ -520,6 +534,18 @@ const WAV = path.join(SP, 'fake.wav');
     check('Token nur für diesen Tab: nach dem Neuladen verbunden, „merken“ nicht angehakt', ablage.lokal === null && ablage.tab && ablage.haken === false, JSON.stringify(ablage));
     await p2.click('#btn-mic');
     await p2.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
+    {
+      // Abbrechen mitten in der Aufnahme: nichts übernommen, keine Ablage, Knopf wieder frei.
+      const vorher = { cal: await p2.evaluate(() => VAREAPP.state.cal && VAREAPP.state.cal.id), puts: ablagePuts.length };
+      await p2.click('#btn-cal');
+      await p2.waitForTimeout(4500);
+      const mitten = await p2.evaluate(() => VAREAPP.state.rec && VAREAPP.state.calRunning);
+      await p2.click('#btn-cal-stop');
+      await p2.waitForTimeout(1200);
+      const nach = await p2.evaluate(() => ({ laeuft: VAREAPP.state.calRunning, cal: VAREAPP.state.cal && VAREAPP.state.cal.id, ansage: document.getElementById('cal-ansage').hidden, stop: document.getElementById('btn-cal-stop').hidden, knopf: !document.getElementById('btn-cal').disabled, meldung: (document.querySelector('main .notice') || {}).textContent || '' }));
+      check('Kalibrierung abbrechen: nichts übernommen, nichts abgelegt, Ansage weg, „Kalibrieren“ wieder frei',
+        mitten && !nach.laeuft && nach.cal === vorher.cal && ablagePuts.length === vorher.puts && nach.ansage && nach.stop && nach.knopf && /abgebrochen/.test(nach.meldung), JSON.stringify(nach));
+    }
     await p2.click('#btn-abmelden');
     await p2.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
     check('„Token entfernen“: Korpus-Kopfzeile leer', (await p2.textContent('#korpus-stand')) === '', await p2.textContent('#korpus-stand'));
