@@ -207,6 +207,15 @@ const WAV = path.join(SP, 'fake.wav');
         'zusammen ' + (summe / 1000).toFixed(2) + ' s in ' + stuecke + ' Stück(en), am Stück ' + (laengster / 1000).toFixed(2) + ' s, ' + liveLog.length + ' Änderungen' + (falsch.length ? ' | falsch: ' + falsch.slice(0, 4).join(' | ') : '') +
         (summe < 1500 || laengster < 500 ? ' | Verlauf: ' + liveLog.slice(0, 40).map(e => (e.t / 1000).toFixed(2) + ' ' + (e.g || '') + ' / ' + (e.d || '')).join(' ; ').slice(0, 900) : ''));
     }
+    {
+      /* Ruhige Anzeige (Vorgabe): die Kacheln zeigen viermal pro Sekunde den Median der letzten 0,6 s.
+         Der ΔF3–4-Text darf sich deshalb höchstens etwa fünfmal pro Sekunde ändern — vorher sprang er
+         mit jedem Takt (bis 25-mal pro Sekunde). */
+      let wechsel = 0;
+      for (let i = 1; i < liveLog.length; i++) if (liveLog[i].d !== undefined && liveLog[i].d !== liveLog[i - 1].d) wechsel++;
+      const dauer = (liveLog[liveLog.length - 1].t - liveLog[0].t) / 1000;
+      check('Live ruhig: ΔF3–4-Text ändert sich höchstens 5-mal pro Sekunde', dauer > 3 && wechsel / dauer <= 5, wechsel + ' Wechsel in ' + dauer.toFixed(1) + ' s');
+    }
     // Während der Analyse schon den nächsten Take beschriften: das gehört nicht in diesen Take.
     const busyBeiEingabe = await page.evaluate(() => VAREAPP.state.busy);
     await page.fill('#take-label', 'NAECHSTER');

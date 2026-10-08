@@ -11,7 +11,7 @@
       + (st.settings ? st.settings.spreadMaxHz : 130) + ' Hz, Nummer mehrdeutig, zwei Resonanzen in einem Gipfel möglich oder Formant im Rauschboden — der Grund steht neben der Zahl. Gold ohne Strich = sicher gemessen, aber Befund. '
       + 'H1−H2 ist bei F1 ≈ F0 filtergetrieben und erlaubt keine Quellaussage.';
   }
-  var SETTINGS_DEFAULT = { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500, smooth: 0.35, spreadMaxHz: 130, hopS: 0.010, storeAudio: true, audioFormat: 'i16', csvDialect: 'standard', requireCal: true, minTakeS: 1.0 };
+  var SETTINGS_DEFAULT = { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500, smooth: 0.35, spreadMaxHz: 130, hopS: 0.010, storeAudio: true, audioFormat: 'i16', csvDialect: 'standard', requireCal: true, minTakeS: 1.0, ruhig: true };
   var SETTING_DEFS = [
     { key: 'windowS', label: 'Gatter-Fenster (s) — Vorgabe 0,30', min: 0.15, max: 0.60, step: 0.05, dec: 2 },
     { key: 'sdF1Max', label: 'F1 darf sich im Fenster bewegen (Hz, q90−q10) — Vorgabe 50', min: 20, max: 150, step: 5 },
@@ -24,10 +24,11 @@
     { key: 'storeAudio', type: 'check', label: 'Audio (WAV) mit speichern — nötig für Neu-Analyse nach Kernänderungen' },
     { key: 'audioFormat', type: 'select', options: [['i16', '16 Bit (5,8 MB/min bei 48 kHz)'], ['f32', 'Float32 (11,5 MB/min)']], label: 'WAV-Format' },
     { key: 'csvDialect', type: 'select', options: [['standard', 'Standard: Komma, Punkt (pandas: read_csv(…, keep_default_na=False, na_values=[-99]))'], ['excelde', 'Excel DE: Semikolon, Dezimalkomma, Text gegen Formeln geschützt (Apostroph)']], label: 'CSV-Dialekt' },
-    { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' }
+    { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' },
+    { key: 'ruhig', type: 'check', label: 'Ruhige Live-Anzeige: Median über 0,6 s, viermal pro Sekunde (aus = jeder Einzelrahmen mit allen Gründen, zur Fehlersuche)' }
   ];
 
-  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {} };
+  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {}, liveBuf: [], ruhigZuletzt: 0 };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -221,7 +222,13 @@
     st.hist.push({ t: t, f2: fr.voiced ? fr.F[1] : NaN, f3: fr.voiced ? fr.F[2] : NaN,
       f0x2: fr.voiced ? 2 * fr.f0 : NaN, v2: fr.voiced && fr.valid[1], v3: fr.voiced && fr.valid[2], u0: !!(fr.voiced && fr.f0Unsure) });
     while (st.hist.length && st.hist[0].t < t - 20) st.hist.shift();
-    renderLive(fr, gs, fl);
+    if (!st.settings.ruhig) { renderLive(fr, gs, fl); return; }
+    /* Ruhige Anzeige: Jeder Takt fließt in einen Puffer der letzten 0,6 s; die Kacheln zeigen alle
+       250 ms den Median daraus. Ein Einzelrahmen, der für 40 ms kippt, ändert die Zahl nicht mehr. */
+    st.liveBuf.push({ t: t, fr: fr, score: gs.score, state: gs.state, reason: gs.reason });
+    while (st.liveBuf.length && st.liveBuf[0].t < t - RUHIG_FENSTER_S) st.liveBuf.shift();
+    drawLevel(fr.rmsDb, fl.db, fl.src); drawHist();
+    if (now - st.ruhigZuletzt >= RUHIG_TAKT_MS) { st.ruhigZuletzt = now; renderRuhig(gs, fl); }
   }
   var STAT_KEYS = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'd34', 'd45', 'sfr', 'shr', 'cpp', 'h1h2', 'tube', 'floor'];
   /* Alles, was eine Messung zeigt, sichtbar einfrieren — in einem Zug, damit es nicht wieder
@@ -230,6 +237,7 @@
   function freezeLive(reason) {
     STAT_KEYS.forEach(function (k) { setStat(k, 'Pause', false, true); });
     st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false]; st.lastCls = null;
+    st.liveBuf = []; st.ruhigZuletzt = 0;
     setGateWord('pause', null, reason);
     var fl = floorNow();
     drawLevel(NaN, fl.db, fl.src);
@@ -254,6 +262,92 @@
     v.textContent = text;
     if (rost) { var sp = document.createElement('span'); sp.className = 'rust unsicher-teil'; sp.textContent = rost; v.appendChild(sp); }
   }
+  /* ---------- Ruhige Live-Anzeige ---------- */
+  var RUHIG_FENSTER_S = 0.6, RUHIG_TAKT_MS = 250, RUHIG_ANTEIL = 0.6;
+  function median(a) { if (!a.length) return NaN; var b = a.slice().sort(function (x, y) { return x - y; }), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; }
+  /* Kurzwort für den häufigsten Grund — die langen Begründungen stehen in der Einzelrahmen-Ansicht. */
+  function kurzGrund(t) {
+    t = String(t || '');
+    if (/Teilton/i.test(t)) return 'Teilton';
+    if (/verschmol|zwei Resonanzen/i.test(t)) return 'verschmolzen';
+    if (/Nummer/i.test(t)) return 'mehrdeutig';
+    if (/Rauschboden|Rauschen/i.test(t)) return 'im Rauschen';
+    if (/Streuung/i.test(t)) return 'streut';
+    if (/Fenster|Ordnung/i.test(t)) return 'zu selten';
+    if (/F3 unter|unter \d+/i.test(t)) return 'F3 zu tief';
+    if (/Übergang|verlässt|Wechsel/i.test(t)) return 'Übergang';
+    if (/F1\/F2|Vokal/i.test(t)) return 'Vokal unsicher';
+    return 'unsicher';
+  }
+  function haeufigster(liste) {
+    var n = {}, best = '', bn = 0;
+    liste.forEach(function (x) { n[x] = (n[x] || 0) + 1; if (n[x] > bn) { bn = n[x]; best = x; } });
+    return best;
+  }
+  function formantGrundKurz(fr, k) {
+    return kurzGrund(CH.formantGruende({ F: fr.F[k], grund: fr.slotGrund ? fr.slotGrund[k] : (fr.slotUnsure[k] ? '?' : ''), teiltonHz: fr.teiltonHz, rauschBoden: fr.rauschBoden ? !!fr.rauschBoden[k] : null,
+      sdWin: fr.sdWin[k], sdOrder: fr.sdOrder[k], smax: st.settings.spreadMaxHz, nWin: fr.nWin[k], nOrders: fr.nOrders[k] }).join(', '));
+  }
+  /* Wert über das Fenster: Median der Rahmen, in denen er trägt — aber nur, wenn er in mindestens
+     60 % der stimmhaften Rahmen trägt. Sonst „–“ mit dem häufigsten Grund in Rost. */
+  function ueberFenster(V, wert, traegt, grund) {
+    var ok = [], gr = [];
+    V.forEach(function (e) { var v = wert(e.fr); if (traegt(e.fr) && isFinite(v)) ok.push(v); else gr.push(grund ? grund(e.fr) : 'unsicher'); });
+    var anteil = V.length ? ok.length / V.length : 0;
+    return { wert: median(ok), traegt: anteil >= RUHIG_ANTEIL && ok.length >= 2, grund: haeufigster(gr) || 'unsicher' };
+  }
+  function renderRuhig(gs, fl) {
+    if (fl.src === 'angenommen') setStat('floor', 'unbekannt · Stimmschwelle angenommen: ' + fmt(fl.db + 12, 1) + ' dBFS', true);
+    else setStat('floor', fmt(fl.db, 1) + ' dBFS (' + (fl.src === 'geschätzt' ? 'geschätzt aus Stille' : fl.src) + ')', fl.src !== 'kalibriert');
+    var buf = st.liveBuf, V = buf.filter(function (e) { return e.fr.voiced && !e.fr.tonalButAperiodic; });
+    var letzter = buf.length ? buf[buf.length - 1] : null;
+    setGateWord(gs.state, gs.cls, gs.reason ? kurzGrund(gs.reason) : '');
+    if (V.length < Math.max(2, buf.length * 0.5)) {
+      var aperiodisch = buf.filter(function (e) { return e.fr.tonalButAperiodic; }).length > buf.length / 2;
+      STAT_KEYS.forEach(function (k) { if (k !== 'floor') setStat(k, aperiodisch ? '– · kein Periodenbezug' : 'Pause', aperiodisch, !aperiodisch); });
+      drawD34({ state: gs.state === 'stabil' ? 'uebergang' : gs.state, score: NaN, reason: aperiodisch ? 'kein Periodenbezug' : 'Pause' }, null);
+      if (letzter) drawSpec(letzter.fr, null);
+      $('live-ref').textContent = '';
+      return;
+    }
+    var neu = V[V.length - 1].fr;
+    var f0 = ueberFenster(V, function (fr) { return fr.f0; }, function (fr) { return !fr.f0Unsure && !fr.octaveAmbiguous; }, function () { return 'Grundton unsicher'; });
+    if (f0.traegt) { var no = D.hzToNote(f0.wert); setStat('f0', fmt(f0.wert, 1) + ' Hz' + (no && no !== '--' ? ' ' + no : '')); }
+    else setStat('f0', '– · Grundton unsicher', true);
+    var F = [0, 1, 2, 3, 4].map(function (k) { return ueberFenster(V, function (fr) { return fr.F[k]; }, function (fr) { return !!fr.valid[k]; }, function (fr) { return formantGrundKurz(fr, k); }); });
+    function fText(k) { return F[k].traegt ? fmt(F[k].wert) + ' Hz' : '– · ' + F[k].grund; }
+    setStat('f1', fText(0) + (F[0].traegt && f0.traegt ? ' · H' + Math.round(F[0].wert / f0.wert) : ''), !F[0].traegt);
+    setStat('f2', fText(1), !F[1].traegt);
+    var f3Low = F[2].traegt && F[2].wert < st.settings.f3MinHz;
+    setStat('f3', fText(2) + (f3Low ? ' · unter ' + st.settings.f3MinHz : ''), !F[2].traegt, false, f3Low);
+    setStat('f4', fText(3), !F[3].traegt);
+    setStat('f5', fText(4), !F[4].traegt);
+    // ΔF3–4: gewertet heißt, das Gatter hat in der Mehrheit der Rahmen gewertet.
+    var sc = V.map(function (e) { return e.score; }).filter(isFinite), aggScore = NaN;
+    var d34 = ueberFenster(V, function (fr) { return fr.d34; }, function (fr) { return !!fr.d34valid; }, function (fr) { return fr.d34Grund === 'teilton' ? 'Teilton' : (formantGrundKurz(fr, fr.valid[2] ? 3 : 2)); });
+    if (sc.length >= 2 && sc.length / V.length >= 0.5) { aggScore = median(sc); setStat('d34', fmt(aggScore) + ' Hz gewertet'); }
+    else if (d34.traegt) setStat('d34', fmt(d34.wert) + ' Hz · nicht gewertet: ' + kurzGrund(gs.reason || (letzter && letzter.reason)), false, false, true);
+    else setStat('d34', '– · ' + d34.grund, true);
+    var d45 = ueberFenster(V, function (fr) { return fr.d45; }, function (fr) { return !!fr.d45valid; }, function (fr) { return fr.d45Grund === 'teilton' ? 'Teilton' : 'unsicher'; });
+    setStat('d45', d45.traegt ? fmt(d45.wert) + ' Hz' : '– · ' + d45.grund, !d45.traegt);
+    var sfr = ueberFenster(V, function (fr) { return fr.sfr; }, function (fr) { return !fr.sfrUnsure; });
+    setStat('sfr', sfr.traegt ? fmt(sfr.wert, 1) + ' dB' : '– · unsicher', !sfr.traegt);
+    var shr = ueberFenster(V, function (fr) { return fr.shr; }, function (fr) { return !fr.shrUnsure; }, function () { return 'Raster unsicher'; });
+    setStat('shr', shr.traegt ? fmt(shr.wert, 1) + ' dB' : '– · Raster unsicher', !shr.traegt, false, shr.traegt && shr.wert > -15);
+    var cpp = ueberFenster(V, function (fr) { return fr.cpp; }, function (fr) { return !fr.cppUnsure; });
+    setStat('cpp', cpp.traegt ? fmt(cpp.wert, 1) + ' dB' : '– · unsicher', !cpp.traegt);
+    var h12 = ueberFenster(V, function (fr) { return fr.h1h2; }, function (fr) { return !fr.h1h2unsure && !fr.f0Unsure; }, function (fr) { return fr.f0Unsure ? 'Grundton unsicher' : 'filtergetrieben'; });
+    var h12c = ueberFenster(V, function (fr) { return fr.h1h2c; }, function (fr) { return !fr.h1h2unsure && !fr.f0Unsure && !fr.h1h2cArtifact; });
+    setStat('h1h2', h12.traegt ? fmt(h12.wert, 1) + ' · ' + (h12c.traegt ? fmt(h12c.wert, 1) : '–') + ' dB' : '– · ' + h12.grund, !h12.traegt);
+    var tube = ueberFenster(V, function (fr) { return D.tubeLength(fr.F, fr.valid).cm; }, function () { return true; });
+    setStat('tube', tube.traegt ? fmt(tube.wert, 1) + ' cm' : '– (zu wenig stabile Formanten)', !tube.traegt);
+    $('live-hints').textContent = hintText();
+    var cls = gs.state === 'stabil' ? gs.cls : null, ref = cls ? st.refs[cls] : null;
+    $('live-ref').textContent = CH.refZeile(cls, ref, aggScore, cls ? (st.refsUebergangen[cls] || 0) : 0);
+    drawD34({ state: gs.state, score: aggScore, reason: kurzGrund(gs.reason), cls: gs.cls }, ref);
+    drawSpec(neu, null);
+  }
+
   function renderLive(fr, gs, fl) {
     drawLevel(fr.rmsDb, fl.db, fl.src);
     // Ein angenommener Boden ist kein Messwert: keine Rauschboden-Zahl, sondern die angenommene Stimmschwelle.
