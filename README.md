@@ -84,8 +84,11 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    sind (siehe „Was ungültig heißt“) und F3 über dem eingestellten Mindestwert liegt. Im
    Vokalwechsel steht „Übergang“ oder „nicht gewertet“ mit Grund.
    Referenz je Vokalklasse aus der eigenen Chronik, nie über Vokale hinweg verglichen.
-   Live sichtbar sind nur der Zustand (Pause / stabil /a/ / Übergang), ΔF3–4 als große Zahl und der
-   Grundton; alle übrigen Kacheln, Spektrum und Verlauf liegen zugeklappt unter „Alle Messwerte“. Die
+   Live sichtbar sind nur der Zustand (Pause / stabil /a/ / Übergang), ΔF3–4 als große Zahl mit dem
+   Grund oder „gewertet“ in einer festen Zeile darunter, und der Grundton. Alle Höhen sind fest: Einsatz
+   und Atempause verschieben nichts. Alle übrigen Kacheln, Spektrum, Verlauf und das Prüfsignal liegen
+   unter „Alle Messwerte“ (beim Laden zugeklappt; zugeklappt wird dort nichts gezeichnet). Der Take-Kasten
+   steht direkt unter der Live-Anzeige. Pegelzahl und Take-Uhr laufen in ganzen Einheiten (dB, s). Die
    Anzeige ist ruhig: Median über die letzte Sekunde, zweimal pro Sekunde neu geschrieben, Formanten auf
    10 Hz gerundet (CSV und Chronik behalten die vollen Werte). Eine Zahl steht nur, wenn der Wert in
    mindestens 60 % der stimmhaften Rahmen trägt, sonst „– · Grund“ in Kurzform (Teilton, verschmolzen,

@@ -97,7 +97,8 @@ module.exports = async function (H) {
     const maxRuhig = Math.max(...Object.values(ruhigW));
     if (maxRuhig > 5) bad.r1.push('ruhig ' + JSON.stringify(ruhigW) + ' Wechsel in 2 s');
     if (!(einzelW.f3 > 30)) bad.r1.push('Gegenprobe Einzeltakt nur ' + einzelW.f3 + ' Wechsel');
-    if (el('hero-d34').textContent !== text('d34')) bad.r1.push('große Zahl „' + el('hero-d34').textContent + '“ ≠ Kachel „' + text('d34') + '“');
+    const ohne = t => t.replace(/[\s·]+/g, '');
+    if (ohne(el('hero-d34').textContent) !== ohne(text('d34'))) bad.r1.push('große Zahl „' + el('hero-d34').textContent + '“ ≠ Kachel „' + text('d34') + '“');
     if (!/0 Hz/.test(f3Text)) bad.r1.push('F3 nicht auf 10 Hz: „' + f3Text + '“');
     const f3Zahl = parseFloat(f3Text);
     if (!(Math.abs(f3Zahl - f3Soll) <= 6)) bad.r1.push('F3 „' + f3Text + '“ statt Median um ' + f3Soll);

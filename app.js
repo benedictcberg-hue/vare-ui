@@ -237,7 +237,7 @@
   function freezeLive(reason) {
     STAT_KEYS.forEach(function (k) { setStat(k, 'Pause', false, true); });
     st.smooth = [NaN, NaN, NaN, NaN, NaN]; st.lastValid = [false, false, false, false, false]; st.lastCls = null;
-    st.liveBuf = []; st.ruhigZuletzt = 0;
+    st.liveBuf = []; st.ruhigZuletzt = 0; st.f0Gezeigt = null;
     setGateWord('pause', null, reason);
     var fl = floorNow();
     drawLevel(NaN, fl.db, fl.src);
@@ -264,15 +264,19 @@
     if (rost) { var sp = document.createElement('span'); sp.className = 'rust unsicher-teil'; sp.textContent = rost; v.appendChild(sp); }
     // Die große Zahl oben zeigt dasselbe wie die ΔF3–4-Kachel; darunter der Grundton.
     if (id === 'd34') {
-      // Groß nur die Zahl; „gewertet“ oder der Grund klein dahinter.
-      var h = $('hero-d34'), m = /^(-?[\d.]+ Hz)(.*)$/.exec(text);
-      if (h.textContent !== text) {
-        h.textContent = m ? m[1] : text;
-        if (m && m[2]) { var r = document.createElement('span'); r.className = 'hero-rest'; r.textContent = m[2]; h.appendChild(r); }
+      /* Groß nur die Zahl oder „–“, „gewertet“ bzw. der Grund in einer festen zweiten Zeile. Die Höhe
+         bleibt dadurch gleich, ob ein Wert dasteht oder nicht — sonst rutschte alles darunter bei jedem
+         Einsatz und jeder Atempause. „Pause“ steht schon im Gatterwort und wird hier zu „–“. */
+      var h = $('hero-d34'), m = /^(-?[\d.]+ Hz|–)\s*(?:·\s*)?(.*)$/.exec(text === 'Pause' ? '–' : text);
+      var gross = m ? m[1] : text, rest = m ? m[2] : '';
+      if (h.getAttribute('data-text') !== gross + '|' + rest) {
+        h.setAttribute('data-text', gross + '|' + rest);
+        h.textContent = gross;
+        var r = document.createElement('span'); r.className = 'hero-rest'; r.textContent = rest; h.appendChild(r);
       }
       h.className = 'hero-zahl' + zust;
     }
-    if (id === 'f0') { var t = (text === 'Pause' || text === '–') ? '' : 'F0 ' + text; if ($('hero-f0').textContent !== t) $('hero-f0').textContent = t; }
+    if (id === 'f0') { var t = (text === 'Pause' || /^–/.test(text)) ? '' : 'F0 ' + text; if ($('hero-f0').textContent !== t) $('hero-f0').textContent = t; }
   }
   /* ---------- Ruhige Live-Anzeige ---------- */
   /* Median über 1 s, zweimal pro Sekunde neu, Formanten auf 10 Hz gerundet (die Messung streut ohnehin
@@ -283,13 +287,16 @@
   /* Kurzwort für den häufigsten Grund — die langen Begründungen stehen in der Einzelrahmen-Ansicht. */
   function kurzGrund(t) {
     t = String(t || '');
+    if (/^Pause$/.test(t)) return '';
+    if (/F3 zu tief|F3 unter/i.test(t)) return 'F3 zu tief';
+    if (/F3\/F4/.test(t)) return 'F3/F4 unsicher';
     if (/Teilton/i.test(t)) return 'Teilton';
     if (/verschmol|zwei Resonanzen/i.test(t)) return 'verschmolzen';
     if (/Nummer/i.test(t)) return 'mehrdeutig';
     if (/Rauschboden|Rauschen/i.test(t)) return 'im Rauschen';
     if (/Streuung/i.test(t)) return 'streut';
     if (/Fenster|Ordnung/i.test(t)) return 'zu selten';
-    if (/F3 unter|unter \d+/i.test(t)) return 'F3 zu tief';
+    if (/unter \d+/i.test(t)) return 'F3 zu tief';
     if (/Übergang|verlässt|Wechsel/i.test(t)) return 'Übergang';
     if (/F1\/F2|Vokal/i.test(t)) return 'Vokal unsicher';
     return 'unsicher';
@@ -316,9 +323,11 @@
     else setStat('floor', fmt(fl.db, 0) + ' dBFS (' + (fl.src === 'geschätzt' ? 'geschätzt aus Stille' : fl.src) + ')', fl.src !== 'kalibriert');
     var buf = st.liveBuf, V = buf.filter(function (e) { return e.fr.voiced && !e.fr.tonalButAperiodic; });
     var letzter = buf.length ? buf[buf.length - 1] : null;
-    setGateWord(gs.state, gs.cls, gs.reason ? kurzGrund(gs.reason) : '');
     if (V.length < Math.max(2, buf.length * 0.5)) {
       var aperiodisch = buf.filter(function (e) { return e.fr.tonalButAperiodic; }).length > buf.length / 2;
+      // Gatterwort aus demselben Puffer wie die Zahl: sonst stünde „Übergang“ über einer großen Pause.
+      if (aperiodisch) setGateWord('uebergang', null, 'kein Periodenbezug'); else setGateWord('pause', null, '');
+      st.f0Gezeigt = null;
       STAT_KEYS.forEach(function (k) { if (k !== 'floor') setStat(k, aperiodisch ? '– · kein Periodenbezug' : 'Pause', aperiodisch, !aperiodisch); });
       drawD34({ state: gs.state === 'stabil' ? 'uebergang' : gs.state, score: NaN, reason: aperiodisch ? 'kein Periodenbezug' : 'Pause' }, null);
       if (letzter) drawSpec(letzter.fr, null);
@@ -326,8 +335,14 @@
       return;
     }
     var neu = V[V.length - 1].fr;
+    // Im Pausen-Takt des Gatters, aber mit stimmhaftem Puffer (gerade abgesetzt): noch „Übergang“, nicht „Pause“ über Zahlen.
+    setGateWord(gs.state === 'pause' ? 'uebergang' : gs.state, gs.cls, gs.state === 'stabil' || !gs.reason ? '' : kurzGrund(gs.reason));
     var f0 = ueberFenster(V, function (fr) { return fr.f0; }, function (fr) { return !fr.f0Unsure && !fr.octaveAmbiguous; }, function () { return 'Grundton unsicher'; });
-    if (f0.traegt) { var no = D.hzToNote(f0.wert); setStat('f0', fmt(f0.wert, 0) + ' Hz' + (no && no !== '--' ? ' ' + no : '')); }
+    if (f0.traegt) {
+      var no = D.hzToNote(f0.wert), alt = st.f0Gezeigt;
+      if (alt && Math.abs(alt.hz - f0.wert) < 3 && alt.note === no) f0.wert = alt.hz; else st.f0Gezeigt = { hz: f0.wert, note: no };
+      setStat('f0', fmt(f0.wert, 0) + ' Hz' + (no && no !== '--' ? ' ' + no : ''));
+    }
     else setStat('f0', '– · Grundton unsicher', true);
     var F = [0, 1, 2, 3, 4].map(function (k) { return ueberFenster(V, function (fr) { return fr.F[k]; }, function (fr) { return !!fr.valid[k]; }, function (fr) { return formantGrundKurz(fr, k); }); });
     function fText(k) { return F[k].traegt ? fmt10(F[k].wert) + ' Hz' : '– · ' + F[k].grund; }
@@ -342,7 +357,7 @@
     var d34 = ueberFenster(V, function (fr) { return fr.d34; }, function (fr) { return !!fr.d34valid; }, function (fr) { return fr.d34Grund === 'teilton' ? 'Teilton' : (formantGrundKurz(fr, fr.valid[2] ? 3 : 2)); });
     // Nur bei stehendem Vokal: im Übergang hieße „gewertet“ aus dem Fenster etwas anderes als das Gatterwort daneben.
     if (gs.state === 'stabil' && sc.length >= 2 && sc.length / V.length >= 0.5) { aggScore = median(sc); setStat('d34', fmt10(aggScore) + ' Hz gewertet'); }
-    else if (d34.traegt) setStat('d34', fmt10(d34.wert) + ' Hz · nicht gewertet: ' + kurzGrund(gs.reason || (letzter && letzter.reason)), false, false, true);
+    else if (d34.traegt) { var gr = kurzGrund(gs.reason || (letzter && letzter.reason)); setStat('d34', fmt10(d34.wert) + ' Hz · nicht gewertet: ' + gr, false, false, gr === 'F3 zu tief'); }
     else setStat('d34', '– · ' + d34.grund, true);
     var d45 = ueberFenster(V, function (fr) { return fr.d45; }, function (fr) { return !!fr.d45valid; }, function (fr) { return fr.d45Grund === 'teilton' ? 'Teilton' : 'unsicher'; });
     setStat('d45', d45.traegt ? fmt10(d45.wert) + ' Hz' : '– · ' + d45.grund, !d45.traegt);
@@ -475,10 +490,19 @@
     if (isFinite(rms)) { ctx.fillStyle = rms > -3 ? COL.rust : COL.ink; ctx.fillRect(0, 12, x(rms), 16); }
     if (!ang) { ctx.strokeStyle = COL.muted; ctx.beginPath(); ctx.moveTo(x(floor), 6); ctx.lineTo(x(floor), 34); ctx.stroke(); }
     ctx.strokeStyle = COL.rust; ctx.beginPath(); ctx.moveTo(x(floor + 12), 6); ctx.lineTo(x(floor + 12), 34); ctx.stroke();
-    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'right'; ctx.fillText(fmt(rms, 1) + ' dBFS', w - 4, 10); ctx.textAlign = 'left';
-    ctx.fillText(ang ? 'Boden unbekannt · Stimmschwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS' : 'Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB', 4, 10);
+    var jetzt = performance.now(), ruhig = st.settings && st.settings.ruhig;
+    if (!ruhig || !isFinite(rms) || st.pegelText == null || jetzt - st.pegelZeit >= 500) { st.pegelText = isFinite(rms) ? fmt(rms, ruhig ? 0 : 1) + ' dBFS' : ''; st.pegelZeit = jetzt; }
+    var links = ang ? 'Boden unbekannt · Stimmschwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS' : 'Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB';
+    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'left'; ctx.fillText(links, 4, 10);
+    var mL = ctx.measureText ? ctx.measureText(links) : null, mR = ctx.measureText ? ctx.measureText(st.pegelText) : null;
+    if (st.pegelText && !(mL && mR && mL.width + mR.width + 16 > w)) { ctx.textAlign = 'right'; ctx.fillText(st.pegelText, w - 4, 10); ctx.textAlign = 'left'; }
   }
+  /* Balken, Teiltonleiter und Verlauf liegen unter „Alle Messwerte“. Zugeklappt wird nicht gezeichnet:
+     auf dem Telefon kostete der Verlauf sonst 20-mal je Sekunde eine Fläche von 1800 × 420 Bildpunkten.
+     Der Verlaufspuffer st.hist läuft weiter; beim Aufklappen wird nachgezeichnet. */
+  function mehrOffen() { var m = $('live-mehr'); return !m || m.open !== false; }
   function drawD34(gs, ref) {
+    if (!mehrOffen()) return;
     var c = CH.setupCanvas($('d34-canvas'), 56), ctx = c.ctx, w = c.w, x = function (v) { return Math.max(0, Math.min(w, v / 1600 * w)); };
     ctx.fillStyle = COL.line; ctx.fillRect(0, 26, w, 6);
     ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'center';
@@ -488,6 +512,7 @@
     else { ctx.fillStyle = gs.state === 'pause' ? COL.muted : COL.rust; ctx.textAlign = 'left'; ctx.fillText(gs.state === 'pause' ? 'Pause' : (gs.state === 'uebergang' ? 'Übergang — keine Wertung' : 'stabil, aber ' + gs.reason), 4, 14); }
   }
   function drawSpec(fr, disp) {
+    if (!mehrOffen()) return;
     var c = CH.setupCanvas($('spec-canvas'), 170), ctx = c.ctx, w = c.w, h = c.h, x = function (f) { return f / 5000 * w; };
     ctx.fillStyle = 'rgba(201,162,39,0.10)'; ctx.fillRect(x(2400), 0, x(3200) - x(2400), h);
     ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'center';
@@ -522,6 +547,7 @@
     bracket(2, 3, 150); bracket(3, 4, 132);
   }
   function drawHist() {
+    if (!mehrOffen()) return;
     var c = CH.setupCanvas($('hist-canvas'), 140), ctx = c.ctx, w = c.w, h = c.h, now = st.hist.length ? st.hist[st.hist.length - 1].t : 0;
     var x = function (t) { return w - (now - t) / 20 * w; }, y = function (f) { return h - 12 - Math.max(0, Math.min(4000, f)) / 4000 * (h - 20); };
     ctx.font = MONO; ctx.fillStyle = COL.muted; ctx.textAlign = 'left';
@@ -555,7 +581,8 @@
   function renderCalStatus(warnings) {
     var c = st.cal, el = $('cal-status');
     if (!c) { el.innerHTML = (warnings && warnings.length ? 'Kalibrierung verworfen — sie gilt nur für Gerät und Einstellungen, mit denen sie gemessen wurde.' : 'Noch keine Kalibrierung in dieser Sitzung.') + (st.settings.requireCal ? ' <span class="rust">Ohne Kalibrierung ist kein Take möglich.</span>' : ''); }
-    else el.innerHTML = 'Kalibriert ' + CH.esc(CH.dateShort(c.createdAt)) + ' · ' + CH.esc(c.deviceLabel) + ' · Rauschboden <span class="mono">' + fmt(c.floorDb, 1) + ' dBFS</span> · /a/ <span class="mono">' + fmt(c.levelDb, 1) + ' dBFS</span> · SNR <span class="mono">' + fmt(c.snrDb, 1) + ' dB</span> (Band 2,4–3,2 kHz <span class="mono">' + fmt(c.bandSnr && c.bandSnr.sf, 1) + ' dB</span>) · Ausklang <span class="mono">' + fmt(c.decayDbPerS, 0) + ' dB/s</span> · F1–F3 des /a/ <span class="mono">' + (c.F || []).slice(0, 3).map(function (v) { return fmt(v); }).join(' / ') + '</span>' + (c.snrDb < 30 ? ' <span class="rust">SNR unter 30 dB — Messungen im Sängerformantband unsicher.</span>' : '');
+    else el.innerHTML = 'Kalibriert ' + CH.esc(CH.dateShort(c.createdAt)) + ' · SNR <span class="mono">' + fmt(c.snrDb, 0) + ' dB</span>' + (c.snrDb < 30 ? ' <span class="rust">— unter 30 dB: Messungen im Sängerformantband unsicher.</span>' : '') +
+      '<details class="cal-werte"><summary>Werte der Kalibrierung</summary>' + CH.esc(c.deviceLabel) + ' · Rauschboden <span class="mono">' + fmt(c.floorDb, 1) + ' dBFS</span> · /a/ <span class="mono">' + fmt(c.levelDb, 1) + ' dBFS</span> · SNR <span class="mono">' + fmt(c.snrDb, 1) + ' dB</span> (Band 2,4–3,2 kHz <span class="mono">' + fmt(c.bandSnr && c.bandSnr.sf, 1) + ' dB</span>) · Ausklang <span class="mono">' + fmt(c.decayDbPerS, 0) + ' dB/s</span> · F1–F3 des /a/ <span class="mono">' + (c.F || []).slice(0, 3).map(function (v) { return fmt(v); }).join(' / ') + '</span></details>';
     $('cal-warnings').innerHTML = warnings && warnings.length ? 'Kette gegenüber der letzten Kalibrierung verändert: ' + warnings.map(CH.esc).join(' · ') : '';
   }
   /* Ablauf mit Vorlauf (nicht aufgenommen), großen Ansagen und Balken je Phase. Die Ansage ändert sich
@@ -565,7 +592,7 @@
     if (box.getAttribute('data-phase') !== key) {
       box.setAttribute('data-phase', key);
       box.className = 'cal-ansage p-' + key;
-      $('cal-wort').textContent = p.vorlauf ? 'Gleich geht’s los' : (p.phase ? p.phase.ansage : 'Auswertung …');
+      $('cal-wort').textContent = p.vorlauf ? 'Bereit machen' : (p.phase ? p.phase.ansage : 'Auswertung …');
       $('cal-hinweis').textContent = p.vorlauf ? 'bequem hinstellen, 20–30 cm vor dem Mikrofon; zuerst kommt Stille' : (p.phase ? p.phase.hinweis : '');
       var li = $('cal-schritte').children;
       for (var i = 0; i < li.length; i++) li[i].className = (i + 1 === p.nr) ? 'jetzt' : (i + 1 < p.nr ? 'fertig' : '');
@@ -580,6 +607,8 @@
     try { Promise.resolve(st.rec.endTake()).catch(function () { }); } catch (e) { }
   }
   function calAus() {
+    if (st.calStatusVorher != null && $('cal-status').textContent === 'Kalibrierung läuft …') $('cal-status').innerHTML = st.calStatusVorher;
+    st.calStatusVorher = null;
     st.calRunning = false; st.calAbbruch = null;
     $('btn-cal').disabled = !(st.rec && st.rec.active); $('btn-cal-stop').hidden = true;
     $('cal-progress').hidden = true; $('cal-ansage').hidden = true; $('cal-ansage').removeAttribute('data-phase');
@@ -592,7 +621,11 @@
     var phases = K.PHASES, t0 = performance.now(), total = K.totalSeconds(), vorlauf = K.VORLAUF_S, laeuft = false;
     $('cal-schritte').innerHTML = phases.map(function (p, i) { return '<li>' + (i + 1) + ' ' + CH.esc(p.ansage) + '</li>'; }).join('');
     $('cal-ansage').hidden = false; $('btn-cal-stop').hidden = false;
+    // Während des Ablaufs sagt der Status nur „läuft“; bei Abbruch kommt der alte Text zurück.
+    st.calStatusVorher = $('cal-status').innerHTML; $('cal-status').textContent = 'Kalibrierung läuft …';
     calAnsage(K.phaseAt(0));
+    // Die Ansage in die Bildmitte holen — im Vorlauf, bevor es ernst wird. Sonst läge sie auf dem Telefon unter dem Rand.
+    if ($('cal-ansage').scrollIntoView) $('cal-ansage').scrollIntoView({ block: 'center', behavior: 'smooth' });
     var iv = setInterval(function () {
       var el = (performance.now() - t0) / 1000;
       if (!st.rec || !st.rec.active) {
@@ -846,7 +879,7 @@
       einsingPruefen(jetzt);
       st.pendingCtx = kontextJetzt(jetzt);
       st.taking = true; st.rec.beginTake(); $('btn-take').textContent = 'Take beenden'; $('btn-take').className = 'danger'; $('take-result').innerHTML = '';
-      st.timer = setInterval(function () { $('take-timer').textContent = fmt(st.rec.recordedSeconds, 1) + ' s'; }, 100);
+      st.timer = setInterval(function () { var t = Math.floor(st.rec.recordedSeconds) + ' s'; if ($('take-timer').textContent !== t) $('take-timer').textContent = t; }, 200);
       return;
     }
     clearInterval(st.timer); st.taking = false; $('btn-take').textContent = 'Take starten'; $('btn-take').className = 'primary';
@@ -1023,7 +1056,7 @@
   function renderTakeResult(take) {
     var s = take.summary, per = s.perVowel || {}, f3u = CH.f3Unter(take);
     var luecke = CH.lueckenText(take);
-    $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
+    $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(String(take.label || '').indexOf(take.code + ' ') === 0 ? take.label.slice(take.code.length + 1) : take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
       (luecke ? '<div class="notice warn"><span class="rust">' + CH.esc(luecke) + '</span></div>' : '') +
       '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
@@ -1032,7 +1065,7 @@
       // Schwach belegte Formanten in Rost mit ihrem Anteil, nach derselben Regel wie Liste und Detail (CH.formantSchwach).
       '<div class="stat"><span class="k">F1–F5 Median</span><span class="v">' + s.F.map(function (f) { return CH.formantSchwach(s, f) ? '<span class="rust unsicher-teil">' + fmt(f.med) + ' (' + CH.formantBeleg(s, f) + ')</span>' : fmt(f.med); }).join(' · ') + '</span></div>' +
       // Ohne Wertung, weil F3 sicher unter dem Mindestwert liegt: Befund, nicht Rost (wie in der Chronik).
-      '<div class="stat' + (s.d34stable.n ? '' : (f3u ? ' befund' : ' unsure')) + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ')' : (f3u ? 'nicht gewertet: F3 ' + fmt(f3u.f3) + ' Hz unter ' + fmt(f3u.schwelle) + ' Hz' : 'keine gewerteten Rahmen')) + '</span></div>' +
+      '<div class="stat' + (s.d34stable.n ? '' : (f3u ? ' befund' : ' unsure')) + '"><span class="k">ΔF3–4 stabil (n)</span><span class="v">' + (s.d34stable.n ? fmt(s.d34stable.med) + ' Hz (' + s.d34stable.n + ' Rahmen' + (s.nFrames && s.voicedShare ? ' = ' + Math.max(1, Math.round(100 * s.d34stable.n / (s.nFrames * s.voicedShare))) + ' % der stimmhaften' : '') + ')' : (f3u ? 'nicht gewertet: F3 ' + fmt(f3u.f3) + ' Hz unter ' + fmt(f3u.schwelle) + ' Hz' : 'keine gewerteten Rahmen')) + '</span></div>' +
       // Wie im Detail: mit dem Anteil zweideutig zugeordneter Rahmen in Rost, und warum kein Bestsegment dasteht.
       '<div class="stat"><span class="k">Bestes Segment je Vokal</span><span class="v">' + (Object.keys(per).map(function (k) { return CH.bestSegmentText(k, per[k]); }).join(' · ') || '–') + '</span></div>' +
       // SFR und CPP ohne Rahmen mit Rauschanteil im Fenster; der Anteil in Rost daneben (wie im Detail).
@@ -1478,8 +1511,8 @@
     $('btn-cal').addEventListener('click', calibrate);
     $('btn-cal-stop').addEventListener('click', function () { if (st.calAbbruch) st.calAbbruch(); });
     // „Alle Messwerte“ bleibt so auf- oder zugeklappt, wie man es zuletzt verlassen hat (nur dieser Browser).
-    try { if (window.localStorage && localStorage.getItem('vare-live-mehr') === '1') $('live-mehr').open = true; } catch (e) { }
-    $('live-mehr').addEventListener('toggle', function () { try { localStorage.setItem('vare-live-mehr', $('live-mehr').open ? '1' : '0'); } catch (e) { } });
+    // „Alle Messwerte“ öffnet jedes Mal zu; beim Aufklappen einmal zeichnen, was im zugeklappten Zustand ausgelassen wurde.
+    $('live-mehr').addEventListener('toggle', function () { if ($('live-mehr').open) drawHist(); });
     $('btn-take').addEventListener('click', takeToggle);
     $('btn-neue-sitzung').addEventListener('click', neueSitzung);
     /* Einsing-Status und -Dauer gelten für die ganze Sitzung, nicht nur für den nächsten Take —

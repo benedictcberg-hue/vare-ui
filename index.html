@@ -69,10 +69,6 @@
     <code>python -m http.server 8000</code>, dann <a href="http://localhost:8000">http://localhost:8000</a> öffnen.
     Die Chronik ist auch hier lesbar; aufnehmen geht nur über http://localhost oder https.
   </div>
-  <div class="notice" id="notice-origin">
-    Die Chronik liegt nur in diesem Browser unter dieser Adresse (<span id="origin-name" class="mono"></span>). Nichts verlässt das Gerät.
-    Andere Adresse oder anderer Browser = andere Chronik; Übertragung per JSON-Sicherung.
-  </div>
   <div class="notice warn" id="notice-flags" hidden></div>
   <div class="notice warn" id="offene-analysen" aria-live="polite" hidden></div>
 
@@ -96,7 +92,7 @@
       <div class="row">
         <button id="btn-cal" class="primary" disabled>Kalibrieren</button>
         <button id="btn-cal-stop" hidden>Abbrechen</button>
-        <span id="cal-progress" class="mono" hidden></span>
+        <span id="cal-progress" class="nur-vorlesen" hidden></span>
       </div>
       <div id="cal-ansage" class="cal-ansage" hidden>
         <ol id="cal-schritte" class="cal-schritte" aria-hidden="true"></ol>
@@ -112,7 +108,6 @@
       <div class="row">
         <span id="gate-state" class="pause">Pause</span>
         <span id="gate-reason" class="muted"></span>
-        <label class="inline">Vokalabsicht <select id="take-intent"></select></label>
       </div>
       <div id="live-hero" class="live-hero">
         <span class="k">ΔF3–4</span>
@@ -121,7 +116,7 @@
       </div>
       <div id="live-ref" class="small muted"></div>
       <details id="live-mehr" class="live-mehr">
-      <summary>Alle Messwerte (F1–F5, SFR, SHR, CPP, Spektrum, Verlauf)</summary>
+      <summary>Alle Messwerte</summary>
       <div class="bar-row"><span class="muted small">ΔF3–4</span><canvas id="d34-canvas" height="56" aria-label="Abstand F3 zu F4"></canvas></div>
       <div class="grid" id="live-grid">
         <div class="stat" id="st-f0"><span class="k">F0</span><span class="v" id="v-f0">–</span></div>
@@ -142,19 +137,35 @@
       <p class="small muted" id="live-hints"></p>
       <canvas id="spec-canvas" height="170" aria-label="Teiltonleiter und Formanten 0 bis 5 kHz"></canvas>
       <canvas id="hist-canvas" height="140" aria-label="Verlauf F2, F3 und 2·F0, letzte 20 Sekunden"></canvas>
-      </details>
       <div class="row">
         <button id="btn-pruef">Prüfsignal durch die Kette</button>
         <span class="small muted">Synthetischer /a/ bei G3 mit bekannten Formanten — erwartet gegen gemessen.</span>
       </div>
       <div id="pruef-out" class="table-wrap small"></div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <h2>Take</h2>
+      <div class="row">
+        <label>Bezeichnung <input type="text" id="take-label" size="22"></label>
+        <label class="inline">Vokalabsicht <select id="take-intent"></select></label>
+        <button id="btn-take" class="primary" disabled>Take starten</button>
+        <span id="take-timer" class="mono">0 s</span>
+      </div>
+      <label>Kommentar <textarea id="take-comment"></textarea></label>
+      <div id="take-hint" class="small muted"></div>
+      <div id="take-progress" hidden></div>
+      <div id="take-result"></div>
     </div>
 
     <div class="panel">
       <h2>Schritt 0 — Sitzungskontext</h2>
+      <details class="erklaerung"><summary>Wozu diese Angaben?</summary>
       <p class="small muted">Einsingen und Pausen verändern die Stimme.
         Diese vier Angaben entscheiden, ob zwei Takes überhaupt vergleichbar sind. Sie werden mitgeschrieben,
         nicht geschätzt: was hier leer bleibt, steht in der CSV als −99 (Zahl) oder als leere Zelle (Text).</p>
+      </details>
       <div class="row">
         <label class="inline">Einsing-Status
           <select id="ctx-warmup">
@@ -176,6 +187,7 @@
           Pause seit dem letzten Take <strong id="ctx-pause" class="mono">–</strong></span>
         <button id="btn-neue-sitzung">Neue Sitzung beginnen</button>
       </div>
+      <details class="erklaerung"><summary>Wie Pause und Nummer gezählt werden</summary>
       <div class="small muted">Die Pause wird aus der Uhrzeit des letzten Takes gerechnet und läuft
         mit — sie wird im Moment des Take-Starts festgehalten. Die Take-Position zählt innerhalb
         dieser Sitzung fortlaufend; die Nummer eines gelöschten Takes wird nicht neu vergeben.
@@ -183,20 +195,9 @@
         Die Minuten seit Einsingbeginn laufen mit: eingetragen wird der Stand im Moment der Eingabe,
         jeder Take rechnet die Minute seines Starts. Liegen letzte Eingabe und letzter Take über drei
         Stunden zurück, werden die Einsing-Angaben geleert — das ist dann eine andere Übungseinheit.</div>
+      </details>
     </div>
 
-    <div class="panel">
-      <h2>Take</h2>
-      <div class="row">
-        <label>Bezeichnung <input type="text" id="take-label" size="22"></label>
-        <button id="btn-take" class="primary" disabled>Take starten</button>
-        <span id="take-timer" class="mono">0,0 s</span>
-      </div>
-      <label>Kommentar <textarea id="take-comment"></textarea></label>
-      <div id="take-hint" class="small muted"></div>
-      <div id="take-progress" hidden></div>
-      <div id="take-result"></div>
-    </div>
 
     <details class="panel">
       <summary>Einstellungen</summary>
@@ -209,6 +210,10 @@
   <section id="view-chronik" hidden>
     <div class="panel">
       <h2>Chronik</h2>
+      <p class="small muted" id="notice-origin">
+        Die Chronik liegt nur in diesem Browser unter dieser Adresse (<span id="origin-name" class="mono"></span>). Nichts verlässt das Gerät.
+        Andere Adresse oder anderer Browser = andere Chronik; Übertragung per JSON-Sicherung.
+      </p>
       <div id="chronik-storage" class="small muted"></div>
       <div class="row actions">
         <button id="btn-export-csv">Alle als CSV</button>

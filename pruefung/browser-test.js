@@ -153,7 +153,7 @@ const WAV = path.join(SP, 'fake.wav');
     await page.click('#btn-cal');
     // Ablauf zum Mitmachen: erst Vorlauf (große Ansage, Abbrechen-Knopf), dann die Phasen mit eigener Ansage.
     const ansage0 = await page.evaluate(() => ({ sichtbar: !document.getElementById('cal-ansage').hidden, wort: document.getElementById('cal-wort').textContent, stop: !document.getElementById('btn-cal-stop').hidden, zahl: document.getElementById('cal-zahl').textContent, schritte: document.getElementById('cal-schritte').children.length }));
-    check('Kalibrierung: Vorlauf mit großer Ansage, Countdown, Schrittliste und Abbrechen-Knopf', ansage0.sichtbar && /los/.test(ansage0.wort) && ansage0.stop && /^[1-3]$/.test(ansage0.zahl) && ansage0.schritte === 4, JSON.stringify(ansage0));
+    check('Kalibrierung: Vorlauf mit großer Ansage, Countdown, Schrittliste und Abbrechen-Knopf', ansage0.sichtbar && /Bereit/.test(ansage0.wort) && ansage0.stop && /^[1-3]$/.test(ansage0.zahl) && ansage0.schritte === 4, JSON.stringify(ansage0));
     await page.evaluate(() => { const w = window.__calWorte = []; window.__calBeob = new MutationObserver(() => { const t = document.getElementById('cal-wort').textContent; if (w[w.length - 1] !== t) w.push(t); }); window.__calBeob.observe(document.getElementById('cal-wort'), { childList: true, characterData: true, subtree: true }); });
     await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 40000 });
     {
@@ -200,7 +200,8 @@ const WAV = path.join(SP, 'fake.wav');
       // Sichtbar ist nur die große Zahl mit Grundton; alle übrigen Kacheln liegen zugeklappt unter „Alle Messwerte“.
       const h = await page.evaluate(() => ({ zahl: document.getElementById('hero-d34').textContent, kachel: document.getElementById('v-d34').textContent, f0: document.getElementById('hero-f0').textContent, zu: !document.getElementById('live-mehr').open }));
       h.gridSichtbar = await page.isVisible('#live-grid');
-      check('Live einfach: große ΔF3–4-Zahl wie die Kachel, Grundton darunter, übrige Kacheln zugeklappt', h.zahl === h.kachel && /^F0 19[4-8]/.test(h.f0) && h.zu && !h.gridSichtbar, JSON.stringify(h));
+      const ohne = t => t.replace(/[\s·]+/g, '');
+      check('Live einfach: große ΔF3–4-Zahl wie die Kachel, Grundton darunter, übrige Kacheln zugeklappt', ohne(h.zahl) === ohne(h.kachel) && /^F0 19[4-8]/.test(h.f0) && h.zu && !h.gridSichtbar, JSON.stringify(h));
     }
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
@@ -267,6 +268,7 @@ const WAV = path.join(SP, 'fake.wav');
       JSON.stringify({ luecken: takes[0].signalLuecken, summe: takes[0].signalLueckeS }));
     await page.screenshot({ path: path.join(SP, 'shot-result.png'), fullPage: true });
     // Prüfsignal
+    await page.evaluate(() => { document.getElementById('live-mehr').open = true; });   // Prüfsignal liegt unter „Alle Messwerte“
     await page.click('#btn-pruef');
     await page.waitForFunction(() => document.querySelector('#pruef-out table'), null, { timeout: 120000 });
     const pruef = await page.textContent('#pruef-out');
@@ -325,6 +327,14 @@ const WAV = path.join(SP, 'fake.wav');
     // Zugänglichkeit: Bedienelemente ≥ 46 px
     const small = await page.$$eval('button, select, input[type=text], input[type=range]', els => els.filter(e => !e.hidden && e.offsetParent !== null && e.getBoundingClientRect().height < 46).map(e => e.id || e.textContent.trim().slice(0, 20)));
     check('Alle sichtbaren Bedienelemente ≥ 46 px hoch', small.length === 0, small.join(', '));
+    {
+      // iPhone-Breite: nichts ragt über den Rand (vorher 399 px durch die Einsing-Auswahl), Live-Zahl und Take-Knopf nah beieinander.
+      const vorher = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+      const eng = await page.evaluate(() => ({ breit: document.documentElement.scrollWidth, abstand: Math.round(document.getElementById('btn-take').getBoundingClientRect().top - document.getElementById('hero-d34').getBoundingClientRect().top) }));
+      await page.setViewportSize(vorher);
+      check('iPhone-Breite 390 px: kein seitliches Scrollen, Take-Knopf weniger als ein Bildschirm unter der großen Zahl', eng.breit <= 390 && eng.abstand > 0 && eng.abstand < 844, JSON.stringify(eng));
+    }
 
     // ---------- Schritt 0 über Neuladen, Löschen und neue Sitzung; Einsing-Angaben ----------
     async function mikrofonUndKalibrieren() {

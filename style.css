@@ -25,6 +25,7 @@ main { max-width: 980px; margin: 0 auto; padding: 1rem; display: flex; flex-dire
 .gold { color: var(--gold); }
 .row { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: center; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem .75rem; }
+@media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
 .stat { border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; min-height: 46px; }
 .stat .k { display: block; color: var(--muted); font-size: .8rem; }
 .stat .v { display: block; font-family: var(--mono); font-size: 1.1rem; }
@@ -35,7 +36,7 @@ main { max-width: 980px; margin: 0 auto; padding: 1rem; display: flex; flex-dire
 .stat.frozen .v { color: var(--muted); }
 /* Unsicherer Teil einer Kachel, deren übriger Wert trägt (F1/F0 bei unsicherem Grundton). */
 .unsicher-teil { border-bottom: 1px dashed var(--rust); }
-button, select, input[type="text"], input[type="file"], textarea { min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
+button, select, input[type="text"], input[type="number"], input[type="file"], textarea { max-width: 100%; min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
 button { cursor: pointer; }
 button.primary { border-color: var(--gold); color: var(--gold); }
 button.danger { border-color: var(--rust); color: var(--rust); }
@@ -43,12 +44,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 :focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 input[type="range"] { min-height: 46px; width: 100%; accent-color: var(--gold); }
 label { display: block; }
-label.inline { display: inline-flex; align-items: center; gap: .5rem; min-height: 46px; }
+label.inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-height: 46px; max-width: 100%; }
 textarea { width: 100%; min-height: 70px; }
 canvas { display: block; width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-#gate-state { font-family: var(--mono); font-size: 2.2rem; min-height: 46px; }
+#gate-state { font-family: var(--mono); font-size: 1.4rem; line-height: 1.5; min-height: 46px; display: inline-flex; align-items: center; min-width: 11ch; padding: 0 .5rem; border: 1px dashed transparent; border-radius: 6px; }
 #gate-state.pause { color: var(--muted); }
-#gate-state.uebergang { color: var(--rust); border: 1px dashed var(--rust); border-radius: 6px; padding: 0 .5rem; display: inline-block; }
+#gate-state.uebergang { color: var(--rust); border-color: var(--rust); }
 #gate-state.stabil { color: var(--gold); }
 table { border-collapse: collapse; width: 100%; font-size: .92rem; }
 th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -60,7 +61,7 @@ td.num, th.num { text-align: right; font-family: var(--mono); }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .small { font-size: .85rem; }
 .actions button { margin-right: .4rem; margin-bottom: .4rem; }
-details summary { cursor: pointer; min-height: 46px; line-height: 46px; color: var(--muted); }
+details summary { cursor: pointer; min-height: 46px; padding-block: .7rem; line-height: 1.45; color: var(--muted); }
 .setting { display: grid; grid-template-columns: 1fr auto; gap: .25rem .75rem; align-items: center; padding: .25rem 0; }
 .setting output { min-width: 5.5em; text-align: right; }
 .bar-row { display: grid; grid-template-columns: 90px 1fr; gap: .5rem; align-items: center; }
@@ -103,17 +104,21 @@ th.spalte-breit { min-width: 180px; }
 .cal-ansage.p-ausklang { border-color: var(--rust); }
 .cal-ansage.p-ausklang .cal-wort { color: var(--rust); }
 .cal-ansage.p-ausklang #cal-balken-fuell { background: var(--rust); }
-@media (max-width: 480px) { .cal-wort { font-size: 2.1rem; } }
+@media (max-width: 480px) { .cal-wort { font-size: 1.9rem; } }
 
 /* Live: eine große Zahl, der Rest zugeklappt. */
 .live-hero { margin: .5rem 0; }
 .live-hero .k { display: block; color: var(--muted); font-size: .9rem; }
 .hero-zahl { display: block; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 3.2rem; line-height: 1.1; min-height: 1.1em; }
-.hero-zahl.unsure { color: var(--rust); font-size: 1.6rem; }
+.hero-zahl.unsure { color: var(--muted); }
+.hero-zahl.unsure .hero-rest { color: var(--rust); }
 .hero-zahl.befund { color: var(--gold); }
 .hero-zahl.frozen { color: var(--muted); }
-.hero-f0 { display: block; color: var(--muted); font-size: 1.1rem; min-height: 1.3em; }
+.hero-f0 { display: block; color: var(--muted); font-size: 1.1rem; line-height: 1.45; min-height: 1.45em; }
+#live-ref { min-height: 2.9em; line-height: 1.45; }
 .live-mehr { margin-top: .75rem; }
-.live-mehr > summary { cursor: pointer; color: var(--muted); line-height: 46px; }
-.hero-rest { font-size: 1.1rem; color: var(--muted); margin-left: .4rem; }
+.hero-rest { display: block; font-size: 1.1rem; line-height: 1.45; min-height: 1.45em; color: var(--muted); }
+/* Nur für Bildschirmleser: die große Ansage zeigt dasselbe sichtbar. */
+.nur-vorlesen { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cal-werte summary, .erklaerung summary { font-size: .85rem; }
 @media (max-width: 480px) { .hero-zahl { font-size: 2.6rem; } }
