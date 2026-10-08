@@ -50,7 +50,10 @@ im Code — sie kommen aus `korpus.json` im privaten Repo.
 
 ## Start
 
-**GitHub Pages:** Settings → Pages → Deploy from a branch, **main** / **(root)**.
+**GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**. Veröffentlicht wird über
+`.github/workflows/pages.yml`, und zwar nur, wenn der Prüflauf auf ubuntu-latest und windows-latest grün ist.
+Nicht die Quelle „Deploy from a branch“ wählen: Dann veröffentlicht GitHub jeden Push auf main selbst, ohne
+Prüflauf, und das Gate in `pages.yml` greift nicht.
 Adresse: `https://benedictcberg-hue.github.io/vare-ui/`
 
 **Lokal (Windows 10, Edge oder Chrome):** im Ordner `py -m http.server 8000` (oder `python -m http.server 8000`), dann
@@ -73,6 +76,10 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    „Alle neu analysieren“ für jeden Take mit gespeichertem Audio (abbrechbar; Takes ohne Audio werden
    genannt und bleiben „anders gerechnet“). Verglichen und als Referenz genutzt werden nur Takes mit
    gleicher Rechenweise (Kernversion, Zusammenfassung, Gatter, Rahmenabstand, Streuungsgrenze).
+   Kein Take geht verloren: Vor der Analyse liegt die Aufnahme mit allen Angaben in IndexedDB. Wird die
+   Seite währenddessen neu geladen oder geschlossen, bietet sie die Aufnahme danach unter „Unvollendete
+   Analyse“ an (fortsetzen, WAV sichern, verwerfen); während Aufnahme und Analyse fragt der Browser vor
+   dem Verlassen nach. Take und Rahmenverlauf (und das WAV) werden in einer Transaktion gespeichert.
 3. **Kalibrierpflicht.** 5 s Stille, 3 s /a/, 1 s Ausklang vor dem ersten Take. Rauschboden,
    SNR gesamt und im Band 2,4–3,2 kHz, Ausklangrate, Formant-Fingerabdruck; Warnung, wenn die
    Kette gegenüber der letzten Kalibrierung abgesackt ist.
@@ -96,8 +103,8 @@ Ein Formant gilt nur als gültig, wenn alles zutrifft:
 
 ΔF3–4 ist nur gültig, wenn F3 und F4 gültig sind. Ein ungültiger Wert verschwindet nicht: Er steht
 gestrichelt in Rost, ohne Klammer und ohne Wertung, und nennt live jeden zutreffenden Grund, im Hover
-der Chronik jeden gespeicherten. Die Zahl der Fenster wird nicht gespeichert: „nur in 2 Fenstern“ steht
-im Hover nur, wenn kein anderer Grund zutrifft.
+der Chronik jeden gespeicherten. Die Zahl der Fenster steht je Rahmen im Verlauf (CSV `n_win1…5`); nur ältere
+Verläufe ohne sie zeigen „nur in 2 Fenstern“ allein dann, wenn kein anderer Grund zutrifft.
 
 | Grund | heißt |
 |---|---|
@@ -203,6 +210,29 @@ Gezählt wird nur Weite und Dauer, ohne Urteil (`dsp.js` `detectJumps`):
 - Vibrato und Portamento ab 300 ms lösen nichts aus. Schnelles Gleiten über 80–200 ms zählt
   teilweise als Sprung.
 
+## Signallücken
+
+Fehlen mitten im Take Abtastwerte — Gerätewechsel unter Windows, USB- oder Bluetooth-Aussetzer,
+angehaltener Audiokontext —, stößt das Signal vor und nach der Lücke ohne Pause aneinander. Über einer
+Atempause entsteht so ein gehaltener Tonsprung, den niemand gesungen hat. Deshalb:
+
+- **Erkennen** (`recorder-worklet.js`, `recorder.js`): Jedes Stück aus dem AudioWorklet trägt den
+  Rahmenzähler des Kontexts und die Uhrzeit im Audiofaden. Springt der Rahmenzähler weiter, als
+  Abtastwerte da sind, fehlt Eingang (auf den Abtastwert genau). Läuft die Uhr dem Rahmenzähler um mehr
+  als 0,1 s davon und holt nicht wieder auf, stand der Kontext. Kam das erste Stück mehr als 0,3 s nach
+  dem Start oder das letzte mehr als 0,3 s vor dem Stopp, fehlt dort Signal. Ein Stück, das nur spät
+  kommt, ist keine Lücke; Stücke, die vor dem Stopp abgeschickt, aber noch nicht angekommen sind, gehören
+  dazu.
+- **Speichern und kennzeichnen:** Der Take wird gespeichert, mit Stelle und Dauer jeder Lücke
+  (`signalLuecken`), und steht in Ergebnis, Liste (Marke „Signallücke“), Detail und Hover in Rost. Die
+  Sprung-Kachel gilt dann als unsicher: Was in der Lücke gesungen wurde, fehlt.
+- **Naht als Pause** (`analysis.js`, auch bei jeder Neu-Analyse): Rahmen, deren längstes Fenster die
+  Naht überdeckt, werden nicht gemessen und als Pause geführt (Bit 8192 in `flags` der Rahmen-CSV); kein
+  Segment reicht über die Naht, und Feinspur und Sprungsuche laufen je Abschnitt.
+- **Keine Referenz:** Ein Take mit Lücke zählt nie als Referenz und lässt sich nicht anpinnen; eine
+  angepinnte Referenz aus ihm steht verwaist mit Grund da.
+- CSV `signal_gap_s`: fehlende Sekunden; 0 = geprüft, keine Lücke; −99 = nicht geprüft (ältere Takes).
+
 ## Prüfung
 
 ```
@@ -211,11 +241,11 @@ node test_dsp.js
 
 Erst die eingebauten Kriterien T1–T27 in `test_dsp.js`, danach jedes Modul unter
 `pruefung/kriterien/` in alphabetischer Reihenfolge (Format: `pruefung/kriterien/README.md`).
-Stand Kern 4.0.0: 424 Kriterien gegen synthetische Signale mit bekannter Wahrheit. Exit-Code 1,
+Stand Kern 4.0.0: 451 Kriterien gegen synthetische Signale mit bekannter Wahrheit. Exit-Code 1,
 sobald eines reißt. **Reißt ein Kriterium, ist das ein Befund, keine Toleranzfrage — melden, nicht
 die Schwelle anheben.** Läuft in CI auf `ubuntu-latest` und `windows-latest` mit Node 22.
 
-Laufzeit unter Linux mit Node 22: rund 3½ Minuten, davon `k_kern.js` allein knapp zwei Minuten. Unter
+Laufzeit unter Linux mit Node 22: rund 4 Minuten, davon `k_kern.js` allein knapp zwei Minuten. Unter
 Windows länger.
 
 | Modul | IDs | prüft | Linux |
@@ -231,6 +261,7 @@ Windows länger.
 | `i1_versoehnen.js` | I1 | Nummerierung über alle Fenster an Vokalwechseln | 4 s |
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 2 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
+| `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 38 s |
 
 Jede Änderung am Kern, die einen Rahmenwert ändert, erhöht `VERSION` in `dsp.js` und trägt einen neuen
 Fingerabdruck in `i4_rechenweise.js` ein; sonst reißt I4a.
@@ -246,11 +277,16 @@ Linux: `NODE_PATH="$(npm root -g)" node pruefung/browser-test.js`
 Windows (PowerShell): `$env:NODE_PATH = (npm root -g); node pruefung\browser-test.js`
 
 Chromium kommt aus der Umgebungsvariablen `VARE_CHROMIUM`, sonst aus `/opt/pw-browsers/chromium`, falls
-vorhanden, sonst aus der Playwright-Installation. 68 Prüfungen, Laufzeit rund 1½ Minuten: Token-Tor (leere Hülle
-ohne Token, Meldung bei falschem Token, Oberfläche erst nach Verbindung), Mikrofon über das
-AudioWorklet, Kalibrierung, Take gegen bekannte Formanten, Live-Gatter, Chronik, CSV, Sicherung,
+vorhanden, sonst aus der Playwright-Installation. 76 Prüfungen, Laufzeit rund 2 Minuten: Token-Tor (leere Hülle
+ohne Token: keine Marke, kein Stand, keine Notiz des Testkorpus in Quelltext, Text, Eingaben, Speicher oder
+Zustand, vor und nach falschem Token, mit Gegenprobe nach der Verbindung; Meldung bei falschem Token,
+Oberfläche erst nach Verbindung), Mikrofon über das AudioWorklet, Kalibrierung, Take gegen bekannte
+Formanten, Live-Gatter über die ganze Aufnahme (gewertet nur beim wahren ΔF3–4), Chronik, CSV, Sicherung,
 Import, Detailansicht mit Hover, Neu-Analyse einzeln und „Alle neu analysieren“, Schritt 0 über
-Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px.
+Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px,
+Datenbank Version 1 → 2, Neuladen mitten in der Analyse mit Rückfrage und Fortsetzen, Take ohne
+vorgetäuschte Lücke und ein Aussetzer von 1,5 s als Signallücke, schwach belegte Formanten im Take-Ergebnis
+und die Meldung der Neu-Analyse nach verstellten Gatter-Reglern.
 Die GitHub-API wird nachgestellt — kein Netz, kein echtes Token.
 
 ## CSV
@@ -266,7 +302,23 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
 In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
 
-Stand Kern 4.0.0: 99 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
+Einlesen mit pandas, ohne dass ein Text still als fehlend gilt:
+
+```python
+df = pd.read_csv(datei, keep_default_na=False, na_values=[-99])                        # Standard
+df = pd.read_csv(datei, sep=';', decimal=',', keep_default_na=False, na_values=[-99])  # Excel DE
+```
+
+`na_values=[-99]` macht jede Sentinel-Zahl zu NaN (in jeder Schreibweise, `-99.00` wie `-99,00`);
+`keep_default_na=False` verhindert, dass pandas Texte wie `NA` oder `NULL` als fehlend liest. Take-Codes,
+die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`, `INFINITY`, `TRUE`, `FALSE`,
+`WAHR`, `FALSCH`, `NAN`, `NONE`), vergibt die Seite nicht; nach `MZ` folgt `NB`.
+
+`signal_gap_s` (Take): Sekunden, die in der Aufnahme fehlen (siehe „Signallücken“); 0 = geprüft, keine
+Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
+(nicht gemessen, als Pause geführt).
+
+Stand Kern 4.0.0: 102 Spalten je Take, 74 je Rahmen. Neu mit Kern 4.0.0:
 
 - **Take:** `f0_unsure_share`, `f0_korrektur_share`, `shr_unsure_share`, `shr_unsure_max_db`,
   `shr_other_max_db`, `voicing_floor_dbfs`. F0, Note, SHR und H1−H2 kommen nur aus sicheren Rahmen; die
@@ -277,8 +329,14 @@ Stand Kern 4.0.0: 99 Spalten je Take, 69 je Rahmen. Neu mit Kern 4.0.0:
   `valid1…5`; `f0_unsure`, `f0_grund`, `f0_korrektur`, `f0_cep`, `f0_yin`, `octave_unter_grenze`;
   `shr_grid_hz`, `shr_other_db`, `shr_unsure`, `shr_grund`, `shr_kamm_db`, `shr_zweitpuls`.
   `valid1…5` = 0 heißt ungültig; den Grund liefern `slot_grund`, `rauschboden` und die Streuungen
-  `sdw1…5`, `sdo1…5`. Wie viele Fenster einen Formanten sahen, steht nicht in der CSV, ebenso wenig die
-  Streuungsgrenze (Vorgabe 130 Hz).
+  `sdw1…5`, `sdo1…5`; `n_win1…5` sagt, in wie vielen der 4 Analysefenster der Formant stand (unter 3 ungültig;
+  −99 in stimmlosen Rahmen und in älteren Verläufen). Die Streuungsgrenze,
+  gegen die `sdw` und `sdo` geprüft wurden, steht je Take in `spread_max_hz` (Vorgabe 130 Hz).
+- **Stimmlose Rahmen** (Pausen, Rahmen an einer Naht): Der Kern misst dort nichts. Marken und Gründe, die nur für
+  einen gemessenen Rahmen etwas sagen (`f0_unsure`, `octave_corrected`, `octave_ambiguous`, `octave_unter_grenze`,
+  `h1h2_unsure`, `shr_unsure`, `slot_unsure`, `rauschboden1…5`, `n_win1…5`, `n_peaks`), stehen dort als −99, die
+  Gründe (`f0_grund`, `f0_korrektur`, `shr_grund`, `slot_grund1…5`) leer — nie 0, das sich als „sicher“ läse.
+  `valid1…5` bleibt 0: „nicht gültig“ stimmt auch ohne Messung.
 - **Ältere Rahmenverläufe** ohne diese Felder: Marken und Zahlen −99, Slot-Grund `?`, übrige Gründe
   leer — nie still „sicher“.
 
@@ -288,7 +346,15 @@ Version 3: Takes, Referenzen, Kalibrierungen und Einstellungen als JSON; nicht e
 (`{"$nf":"NaN"}`). Die Rahmenverläufe stehen exakt als Bytes (Base64, little-endian, `{ $type, n, b64 }`),
 also bitgleich mit dem gespeicherten Float32-Wert — die Rahmen-CSV ist nach Sicherung → Import byte-gleich.
 Sicherungen der Versionen 1 und 2 (Verläufe auf 0,001 gerundet) bleiben lesbar. Eine ältere Seite lehnt
-Version 3 als unbekannt ab, statt sie falsch zu lesen.
+Version 3 als unbekannt ab, statt sie falsch zu lesen. Unvollendete Analysen (Aufnahmen, deren Auswertung
+noch nicht gespeichert ist) gehören nicht zur Sicherung; liegen welche vor, sagt die Seite es nach dem
+Sichern.
+
+Eine Sicherung ist höchstens 500 MB groß: Chrome und Edge halten höchstens 2^29 − 24 Zeichen in einem String,
+und der Import liest die Datei in einen. Geprüft wird vorher die ganze Datei — Takes, Rahmenverläufe (rund
+1,4 MB je Minute Take bei 10 ms Rahmenabstand, doppelt so viel bei 5 ms) und Audio (Base64, 7,7 MB je Minute
+16 Bit bei 48 kHz). Passt das Audio nicht mehr, entsteht die Sicherung ohne Audio, und die Seite sagt, wie
+viel Platz bliebe; passen schon die Messwerte nicht, entsteht keine Datei, und die Seite sagt es.
 
 ## Dateien
 
@@ -301,8 +367,8 @@ Version 3 als unbekannt ab, statt sie falsch zu lesen.
 | `csv.js` | CSV-Spalten, Rahmen-CSV, JSON-Sicherung | ja |
 | `wav.js` | WAV schreiben und lesen (PCM 8/16/24/32, Float32, EXTENSIBLE) | ja |
 | `korpus.js` | Lesen von `korpus.json` aus dem privaten Repo, Token-Verwaltung | Browser |
-| `storage.js` | IndexedDB: takes, series, audio, calibrations, meta | Browser |
-| `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet, Ringpuffer | Browser |
+| `storage.js` | IndexedDB (Version 2): takes, series, audio, calibrations, meta, pending; Take und Verlauf in einer Transaktion | Browser |
+| `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet mit Rahmenzähler und Uhrzeit, Ringpuffer, Erkennung von Signallücken | Browser |
 | `chronik.js` | Liste, Referenzen, Detailansicht mit vier Zeitspuren, Gründe im Hover | Browser |
 | `app.js` | Verdrahtung: Anmeldung, Live-Schleife, Kalibrierung, Take, Export, Prüfsignal, Einstellungen | Browser |
 | `index.html`, `style.css` | Oberfläche, Forest Green und Gold | – |
@@ -328,7 +394,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
 - Die Glättung wirkt nur auf die Anzeige, beginnt nach jeder Lücke neu und ist per Regler
   veränderbar. Messwerte werden nie geglättet gespeichert.
 - H1−H2 ist bei F1 ≈ F0 filtergetrieben und wird so beschriftet. Bandbreiten unter 40 Hz
-  sind laut Physik Artefakt und werden als solche gekennzeichnet.
+  sind laut Physik Artefakt und werden als solche gekennzeichnet — am Formanten und bei H1*−H2*, das mit den
+  Bandbreiten von F1–F3 rechnet und eine solche auf 40 Hz begrenzt (live, im Hover, im Detail als Anteil, in der
+  CSV als `h1h2c_bw_artifact_share`).
 - CPP auf eigener Skala, nicht Praat-CPPS. Rohrlänge ist eine Modellgröße, keine Messung.
 - Tonsprünge heißen „Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms“ und „kurze Kanten unter 90 ms“, nicht
   „Registerwechsel“ (siehe „Tonsprünge: zwei Spuren“).
@@ -338,6 +406,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   ein Urteil „Periodenverdopplung“ fällt das Werkzeug nicht. Sicher wäre nur die Zyklusalternation —
   die misst dieses Werkzeug nicht und verspricht sie auch nicht.
 - Adduktion wird nicht geschätzt. Dafür bleibt EGG die einzige Option, und das ist ein Gerät.
+- Ein Take mit Signallücke steht überall in Rost als lückenhaft da und ist keine Referenz (siehe
+  „Signallücken“). Meldungen nach dem Take sagen, was gespeichert ist: „NICHT gespeichert“ nur, wenn der
+  Take nicht in der Chronik steht; passt nur das WAV nicht mehr, heißt es „gespeichert, das WAV nicht“.
 
 ## Ausbaustufen (Anschlussstellen vorhanden)
 

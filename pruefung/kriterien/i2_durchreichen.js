@@ -178,10 +178,13 @@ module.exports = async function (H) {
     // Rahmen-CSV des Prüftakes gegen analyseAt: Gründe als Text, Marken 0/1, Zahlen mit −99 für fehlend.
     // Die Gründe enthalten weder Komma noch Anführungszeichen, ein schlichtes Teilen reicht hier.
     const z = zeilen(H.C.framesToCsv(ser, 'standard', H.V), ','), kopf = z[0], bad = [];
-    const SOLL = [['f0_unsure', r => r.f0Unsure ? '1' : '0'], ['f0_grund', r => r.f0Grund], ['f0_korrektur', r => r.f0Korrektur],
-      ['f0_cep', r => zahlZelle(f32(r.f0Cep), 2)], ['f0_yin', r => zahlZelle(f32(r.f0Yin), 2)], ['octave_unter_grenze', r => r.octaveUnterGrenze ? '1' : '0'],
-      ['shr_grid_hz', r => zahlZelle(f32(r.shrGrid), 2)], ['shr_other_db', r => zahlZelle(f32(r.shrOther), 2)], ['shr_unsure', r => r.shrUnsure ? '1' : '0'],
-      ['shr_grund', r => r.shrGrund], ['shr_kamm_db', r => zahlZelle(f32(r.shrKamm), 2)], ['shr_zweitpuls', r => zahlZelle(f32(r.shrZweitpuls), 3)]];
+    /* Marken und Gründe nur in stimmhaften Rahmen; in stimmlosen fehlen sie (−99 bzw. leer), statt mit 0 „sicher“ zu
+       sagen (B2). Vorher erwartete dieses Kriterium dort die 0 aus dem leeren Rahmen des Kerns. */
+    const bit = f => r => !r.voiced ? '-99' : (f(r) ? '1' : '0'), text = f => r => r.voiced ? f(r) : '';
+    const SOLL = [['f0_unsure', bit(r => r.f0Unsure)], ['f0_grund', text(r => r.f0Grund)], ['f0_korrektur', text(r => r.f0Korrektur)],
+      ['f0_cep', r => zahlZelle(f32(r.f0Cep), 2)], ['f0_yin', r => zahlZelle(f32(r.f0Yin), 2)], ['octave_unter_grenze', bit(r => r.octaveUnterGrenze)],
+      ['shr_grid_hz', r => zahlZelle(f32(r.shrGrid), 2)], ['shr_other_db', r => zahlZelle(f32(r.shrOther), 2)], ['shr_unsure', bit(r => r.shrUnsure)],
+      ['shr_grund', text(r => r.shrGrund)], ['shr_kamm_db', r => zahlZelle(f32(r.shrKamm), 2)], ['shr_zweitpuls', r => zahlZelle(f32(r.shrZweitpuls), 3)]];
     let geprueft = 0;
     const texte = new Set();
     for (const [k, f] of SOLL) {
@@ -386,6 +389,8 @@ module.exports = async function (H) {
     let raf = null;
     const meta = new Map(), P = v => Promise.resolve(v);
     const store = { open: () => P(), putTake: () => P(), getTake: () => P(null), allTakes: () => P([]), deleteTake: () => P(), putSeries: () => P(), getSeries: () => P(null), putAudio: () => P(), getAudio: () => P(null),
+      // Schnittstelle seit B1: Take und Verlauf in einer Transaktion, Aufnahme vor der Analyse in pending.
+      putTakeSeries: () => P(), updateTake: () => P(null), updateTakeSeries: () => P(null), putPending: () => P(), allPending: () => P([]), deletePending: () => P(),
       deleteAudio: () => P(), hasAudio: () => P(false), audioIds: () => P([]), putCalibration: () => P(), allCalibrations: () => P([]), deleteCalibration: () => P(),
       getMeta: (k, fb) => P(meta.has(k) ? meta.get(k) : fb), setMeta: (k, v) => { meta.set(k, v); return P(); }, clearAll: () => P(), estimate: () => P(null), persist: () => P(false), persisted: () => P(false) };
     const rec = { active: false, info: null, sampleRate: 48000, samplesSeen: 0, recordedSeconds: 0,

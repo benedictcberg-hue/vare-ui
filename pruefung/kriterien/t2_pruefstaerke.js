@@ -14,8 +14,8 @@ const TAKE_SOLL = [
   ['time_local', 'timeLocal', 'text'], ['tz_offset_min', 'tzOffsetMin', 0], ['session_nr', 'sitzung.nr', 0],
   ['session_id', 'sitzung.id', 'text'], ['take_in_session', 'sitzung.position', 0], ['pause_before_s', 'sitzung.pauseVorherS', 1],
   ['pause_same_session', 'sitzung.pauseSelbeSitzung', 'bool'], ['warmup_state', 'sitzung.warmup', 'text'], ['warmup_min', 'sitzung.warmupMin', 0],
-  ['duration_s', 'durationS', 2], ['sample_rate', 'sampleRate', 0], ['device', 'deviceLabel', 'text'],
-  ['kernel_version', 'analysis.kernelVersion', 'text'], ['calibration_id', 'calibrationId', 'text'], ['vowel_intent', 'vowelIntent', 'text'],
+  ['duration_s', 'durationS', 2], ['signal_gap_s', 'signalLueckeS', 2], ['sample_rate', 'sampleRate', 0], ['device', 'deviceLabel', 'text'],
+  ['kernel_version', 'analysis.kernelVersion', 'text'], ['spread_max_hz', 'analysis.spreadMaxHz', 0], ['calibration_id', 'calibrationId', 'text'], ['vowel_intent', 'vowelIntent', 'text'],
   ['vowel_class', 'summary.vowel.dominant', 'text'], ['vowel_share', 'summary.vowel.dominantShare', 3],
   ['f0_med_hz', 'summary.f0.med', 1], ['f0_q1_hz', 'summary.f0.q1', 1], ['f0_q3_hz', 'summary.f0.q3', 1], ['f0_note', 'summary.f0.note', 'text'],
   ['f0_unsure_share', 'summary.f0UnsureShare', 3], ['f0_korrektur_share', 'summary.f0KorrekturShare', 3]
@@ -33,7 +33,7 @@ TAKE_SOLL.push(
   ['shr_med_db', 'summary.shr.med', 2], ['shr_max_db', 'summary.shr.max', 2],
   ['shr_unsure_share', 'summary.shrUnsureShare', 3], ['shr_unsure_max_db', 'summary.shrUnsureMax', 2], ['shr_other_max_db', 'summary.shrOtherMax', 2],
   ['cpp_med_db', 'summary.cpp.med', 2],
-  ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3],
+  ['h1h2_med_db', 'summary.h1h2.med', 2], ['h1h2c_med_db', 'summary.h1h2c.med', 2], ['h1h2_unsure_share', 'summary.h1h2.unsureShare', 3], ['h1h2c_bw_artifact_share', 'summary.h1h2c.bwArtefaktShare', 3],
   ['rms_med_dbfs', 'summary.rms.med', 2], ['rms_max_dbfs', 'summary.rms.max', 2], ['floor_dbfs', 'summary.floorDb', 2],
   ['floor_source', 'summary.floorSource', 'text'], ['voicing_floor_dbfs', 'summary.voicingFloorDb', 2], ['snr_db', 'summary.snrDb', 2],
   ['tube_cm', 'summary.tubeCm', 1], ['tube_q1', 'summary.tube.q1', 1], ['tube_q3', 'summary.tube.q3', 1], ['tube_n', 'summary.tube.n', 0],
@@ -55,7 +55,8 @@ const TEXTE = {
 
 /* Rahmen-CSV: Spalte, Art, Quelle, Nachkommastellen.
    feld = Serienfeld; bit = [Feld, Bitmaske oder Name in A.FLAG]; gate = Wort zum Gatterzustand;
-   vokal = Klassenname aus V.CENTROIDS; grund = Codefeld, in der CSV der Text des Kerns (GRUND_ZEILEN).
+   vokal = Klassenname aus V.CENTROIDS; grund = Codefeld, in der CSV der Text des Kerns (GRUND_ZEILEN);
+   nwin = Fensterzahl des Slots aus dem Feld nWin (3 Bit je Slot, Slot k in Bit 3k…3k+2), nur in stimmhaften Rahmen.
    Die Bitbedeutung folgt analysis.js (fillFrame, FLAG). */
 const FRAME_SOLL = [
   ['t_s', 'feld', 't', 3], ['voiced', 'bit', ['flags', 'VOICED']], ['gate', 'gate'], ['vowel', 'vokal'],
@@ -72,6 +73,7 @@ FRAME_SOLL.push(
   ['slot_grund1', 'slotgrund', 0], ['slot_grund2', 'slotgrund', 1], ['slot_grund3', 'slotgrund', 2], ['slot_grund4', 'slotgrund', 3], ['slot_grund5', 'slotgrund', 4],
   ['rauschboden1', 'bit', ['rauschBoden', 1]], ['rauschboden2', 'bit', ['rauschBoden', 2]], ['rauschboden3', 'bit', ['rauschBoden', 4]],
   ['rauschboden4', 'bit', ['rauschBoden', 8]], ['rauschboden5', 'bit', ['rauschBoden', 16]],
+  ['n_win1', 'nwin', 0], ['n_win2', 'nwin', 1], ['n_win3', 'nwin', 2], ['n_win4', 'nwin', 3], ['n_win5', 'nwin', 4],
   ['octave_corrected', 'bit', ['flags', 'OCTAVE']], ['octave_ambiguous', 'bit', ['flags', 'OCTAMBIG']],
   ['h1h2_unsure', 'bit', ['flags', 'H1H2UNSURE']],
   ['f0_unsure', 'bit', ['flags', 'F0UNSURE']], ['f0_grund', 'grund', 'f0Grund'], ['f0_korrektur', 'grund', 'f0Korrektur'],
@@ -80,6 +82,14 @@ FRAME_SOLL.push(
   ['shr_kamm_db', 'feld', 'shrKamm', 2], ['shr_zweitpuls', 'feld', 'shrZweitpuls', 3],
   ['flags', 'feld', 'flags', 0]
 );
+/* Spalten, die nur für einen stimmhaften (gemessenen) Rahmen etwas aussagen: In stimmlosen Zeilen stehen sie als
+   fehlend (Zahl −99, Text leer), nie als 0 = „sicher“ (B2). Früher erwartete dieses Kriterium dort die Bits der
+   Serie und schrieb damit fest, dass f0_unsure 0 in einer Pause „Grundton sicher“ heißt. valid1…5 gehört nicht
+   dazu: 0 heißt „nicht gültig“ und stimmt auch ohne Messung. */
+const STIMMHAFT_SPALTEN = ['slot_unsure', 'n_peaks', 'octave_corrected', 'octave_ambiguous', 'h1h2_unsure', 'f0_unsure', 'f0_grund', 'f0_korrektur',
+  'octave_unter_grenze', 'shr_unsure', 'shr_grund'];
+for (let k = 1; k <= 5; k++) STIMMHAFT_SPALTEN.push('slot_grund' + k, 'rauschboden' + k, 'n_win' + k);
+
 /* Gründe je Zeile, Texte aus den Verträgen K3 (f0Grund, f0Korrektur) und K4 (shrGrund). In jeder Zeile
    tragen die drei Spalten verschiedene Texte, damit vertauschte Spalten auffallen. */
 const GRUND_ZEILEN = {
@@ -189,6 +199,8 @@ function buildSeries(A) {
     s.slotUnsure[r] = u; if (s.slotVerschmolzen) s.slotVerschmolzen[r] = m;
   });
   if (s.rauschBoden) RAUSCHBODEN_ZEILEN.forEach((v, r) => { s.rauschBoden[r] = v; });
+  // Fensterzahl je Slot und Zeile: (2r + 3k) mod 5, in jeder Spalte ein anderes Muster.
+  if (s.nWin) for (let r = 0; r < n; r++) { let v = 0; for (let k = 0; k < 5; k++) v |= ((2 * r + 3 * k) % 5) << (3 * k); s.nWin[r] = v; }
   [5, 4, 3, 2, 1, 0].forEach((v, r) => { s.nPeaks[r] = v; });
   [1, 2, 4, 8, 16, 22].forEach((v, r) => { s.valid[r] = v; });
   [F.VOICED, F.OCTAVE | F.SCORE, F.H1H2UNSURE | F.SUBGRID, F.OCTAMBIG | F.D34VALID,
@@ -202,7 +214,8 @@ function buildSeries(A) {
   return s;
 }
 function expectFrame(entry, s, r, dialect, A, V) {
-  const [, kind, src, dec] = entry;
+  const [name, kind, src, dec] = entry;
+  if (STIMMHAFT_SPALTEN.indexOf(name) >= 0 && !(s.flags[r] & A.FLAG.VOICED)) return (kind === 'grund' || kind === 'slotgrund') ? '' : expectCell(0, null, dialect);
   if (kind === 'feld') return expectCell(dec, s[src][r], dialect);
   // Fehlt das Serienfeld, reißt die Zelle (P2f/P2g) statt einer Ausnahme, die die übrigen Kriterien verdeckt.
   if (kind === 'bit') { const mask = typeof src[1] === 'number' ? src[1] : A.FLAG[src[1]]; return s[src[0]] ? ((s[src[0]][r] & mask) ? '1' : '0') : '(Serienfeld ' + src[0] + ' fehlt)'; }
@@ -210,6 +223,7 @@ function expectFrame(entry, s, r, dialect, A, V) {
   if (kind === 'vokal') return s.cls[r] >= 0 ? V.CENTROIDS[s.cls[r]].cls : '';
   if (kind === 'grund') return GRUND_ZEILEN[src][r];
   if (kind === 'slotgrund') return SLOTGRUND_ZEILEN[r][src];
+  if (kind === 'nwin') return !s.nWin ? '(Serienfeld nWin fehlt)' : (s.flags[r] & A.FLAG.VOICED) ? String((2 * r + 3 * src) % 5) : expectCell(0, null, dialect);
   throw new Error('Art ' + kind);
 }
 
@@ -284,6 +298,9 @@ module.exports = async function (H) {
 
   /* ---------- Rahmen-CSV ---------- */
   const S = buildSeries(A);
+  /* Dieselbe Serie mit jeder Zeile stimmhaft: Dort trägt jede Spalte ihr Bit bzw. ihren Grund in allen sechs Zeilen,
+     so dass vertauschte Spalten weiter auffallen; in S stehen die stimmlosen Zeilen als fehlend. */
+  const SV = Object.assign({}, S, { flags: S.flags.map(f => f | A.FLAG.VOICED) });
   {
     const keys = C.FRAME_COLUMNS.map(c => c[0]), soll = FRAME_SOLL.map(e => e[0]);
     const ohneSoll = keys.filter(k => soll.indexOf(k) < 0), fehlt = soll.filter(k => keys.indexOf(k) < 0);
@@ -292,23 +309,26 @@ module.exports = async function (H) {
       keys.length + ' Spalten' + (ohneSoll.length ? ', ohne Sollquelle: ' + ohneSoll.join(',') : '') + (fehlt.length ? ', fehlen: ' + fehlt.join(',') : '') + (doppelt.length ? ', doppelt: ' + doppelt.join(',') : ''));
   }
   for (const [dialect, sep, id] of [['standard', ',', 'P2f'], ['excelde', ';', 'P2g']]) {
-    const text = C.framesToCsv(S, dialect, V), bom = text.charCodeAt(0) === 0xFEFF;
-    const { rows, errors } = parseCsv(bom ? text.slice(1) : text, sep), head = rows[0] || [];
-    const bad = [];
-    if (bom !== (dialect === 'excelde')) bad.push('BOM ' + (bom ? 'vorhanden' : 'fehlt'));
-    if (rows.length !== 7) bad.push(rows.length + ' Zeilen statt 7');
-    rows.forEach((r, i) => { if (r.length !== head.length) bad.push('Zeile ' + i + ': ' + r.length + ' statt ' + head.length + ' Felder'); });
+    const bad = [], errors = [];
     let geprueft = 0;
-    for (const e of FRAME_SOLL) {
-      const c = head.indexOf(e[0]);
-      if (c < 0) { bad.push(e[0] + ' fehlt im Kopf'); continue; }
-      for (let r = 0; r < 6; r++) {
-        const want = expectFrame(e, S, r, dialect, A, V), got = rows[r + 1] && rows[r + 1][c];
-        if (got !== want) bad.push(e[0] + '[' + r + '] ' + JSON.stringify(got) + ' statt ' + JSON.stringify(want)); else geprueft++;
+    for (const [serie, art] of [[S, ''], [SV, 'alle stimmhaft ']]) {
+      const text = C.framesToCsv(serie, dialect, V), bom = text.charCodeAt(0) === 0xFEFF;
+      const p = parseCsv(bom ? text.slice(1) : text, sep), rows = p.rows, head = rows[0] || [];
+      errors.push(...p.errors);
+      if (bom !== (dialect === 'excelde')) bad.push(art + 'BOM ' + (bom ? 'vorhanden' : 'fehlt'));
+      if (rows.length !== 7) bad.push(art + rows.length + ' Zeilen statt 7');
+      rows.forEach((r, i) => { if (r.length !== head.length) bad.push(art + 'Zeile ' + i + ': ' + r.length + ' statt ' + head.length + ' Felder'); });
+      for (const e of FRAME_SOLL) {
+        const c = head.indexOf(e[0]);
+        if (c < 0) { bad.push(e[0] + ' fehlt im Kopf'); continue; }
+        for (let r = 0; r < 6; r++) {
+          const want = expectFrame(e, serie, r, dialect, A, V), got = rows[r + 1] && rows[r + 1][c];
+          if (got !== want) bad.push(art + e[0] + '[' + r + '] ' + JSON.stringify(got) + ' statt ' + JSON.stringify(want)); else geprueft++;
+        }
       }
     }
-    check(id, 'Rahmen-CSV ' + dialect + ': jede Spalte trägt ihr Feld bzw. Bit, NaN → −99 (6 Zeilen)', !errors.length && !bad.length && geprueft === 6 * FRAME_SOLL.length,
-      geprueft + '/' + 6 * FRAME_SOLL.length + ' Zellen' + (errors.length ? '; Form: ' + errors.slice(0, 2).join('; ') : '') + (bad.length ? '; ' + bad.length + ' falsch: ' + bad.slice(0, 4).join('; ') : ''));
+    check(id, 'Rahmen-CSV ' + dialect + ': jede Spalte trägt ihr Feld bzw. Bit, NaN → −99; Marken und Gründe in stimmlosen Zeilen −99 bzw. leer (6 Zeilen, dazu dieselben 6 stimmhaft)', !errors.length && !bad.length && geprueft === 12 * FRAME_SOLL.length,
+      geprueft + '/' + 12 * FRAME_SOLL.length + ' Zellen' + (errors.length ? '; Form: ' + errors.slice(0, 2).join('; ') : '') + (bad.length ? '; ' + bad.length + ' falsch: ' + bad.slice(0, 4).join('; ') : ''));
   }
 
   /* ---------- SFR normiert je Halbton (Physik §7.1: SFR − median(SFR | gleicher Halbton, gleicher Take)) ---------- */
@@ -374,7 +394,7 @@ module.exports = async function (H) {
     const sum = takeEins.summary, ser = takeEins.series, n = ser.t.length, fehlt = [];
     for (const [key, path] of TAKE_SOLL) if (path.indexOf('summary.') === 0 && !resolvePath({ summary: sum }, path).found) fehlt.push(key + '←' + path);
     for (const [name, kind, src] of FRAME_SOLL) {
-      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : kind === 'slotgrund' ? 'slotVerschmolzen' : 'cls';
+      const field = kind === 'feld' || kind === 'grund' ? src : kind === 'bit' ? src[0] : kind === 'gate' ? 'gate' : kind === 'slotgrund' ? 'slotVerschmolzen' : kind === 'nwin' ? 'nWin' : 'cls';
       if (!(ArrayBuffer.isView(ser[field]) && ser[field].length === n)) fehlt.push(name + '←' + field);
       if (kind === 'bit' && typeof src[1] === 'string' && typeof A.FLAG[src[1]] !== 'number') fehlt.push(name + '←FLAG.' + src[1]);
     }
