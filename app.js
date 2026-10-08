@@ -690,8 +690,6 @@
     };
   }
   function fehlerText(e) { return (e && (e.message || e.name)) || String(e); }
-  // Stellen im Signal, an denen Abtastwerte fehlen und die Teile aneinanderstoßen (analysis.js o.naehteS).
-  function nahtStellen(luecken) { return (luecken || []).filter(function (l) { return l && l.art === 'naht' && typeof l.beiS === 'number'; }).map(function (l) { return l.beiS; }); }
   function lueckeSumme(luecken) { if (!luecken) return null; var s = 0; luecken.forEach(function (l) { if (l && isFinite(l.dauerS)) s += l.dauerS; }); return s; }
   function wavRettenKnopf(box, text, name, blob) {
     var b = document.createElement('button'); b.className = 'danger'; b.textContent = text;
@@ -730,7 +728,7 @@
       status(vorabText, true);
     });
     var opts = {}; for (var schluessel in feld.opts) opts[schluessel] = feld.opts[schluessel];
-    opts.naehteS = nahtStellen(feld.signalLuecken);
+    opts.naehteS = A.nahtStellen(feld.signalLuecken);
     vorab.then(function () {
       return A.analyseTake(samples, sr, opts, function (done, total) { var t = $('take-progress-text'); if (t) t.textContent = 'Analyse ' + done + ' / ' + total + ' Rahmen'; });
     }).then(function (res) {
@@ -892,7 +890,7 @@
         return a.blob.arrayBuffer().then(function (buf) {
           var dec = W.decode(buf);
           // Die Nähte des Takes gelten auch bei jeder Neu-Analyse als Pause: das WAV enthält sie.
-          return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, abbrechen: abbrechen, naehteS: nahtStellen(t0.signalLuecken) }, fortschritt);
+          return A.analyseTake(dec.samples, dec.sampleRate, { floorDb: cal ? cal.floorDb : null, gate: gateOpts(), spreadMaxHz: st.settings.spreadMaxHz, hopS: st.settings.hopS, abbrechen: abbrechen, naehteS: A.nahtStellen(t0.signalLuecken) }, fortschritt);
         });
       });
     }).then(function (res) {

@@ -12,6 +12,8 @@
         C2b Rahmen- und Take-CSV, C2c Zusammenfassung, C2d Hover, Detail und Liste, C2e live und Ergebnis nach dem
         Take. Prüftake: Stücke, an denen der Kern jeden dieser Gründe tatsächlich meldet; Sollwerte aus analyseAt,
         Rahmen für Rahmen, Sollworte der Anzeige hier unabhängig gebildet.
+   C3a: Naht nach stehendem Kontext (Nachweis N7): Ihre Stelle kennt der Recorder nur auf einige Stücke genau; die Spanne
+        gilt als Naht, und über die echte Schnittstelle entsteht kein Sprung (Sonde s15 der Nachprüfung, Chromium).
    Testsignale: allgemeine Baritonlage, synthetische Vokale. Reißt ein Kriterium, ist das ein Befund. */
 'use strict';
 module.exports = async function (H) {
@@ -515,4 +517,46 @@ module.exports = async function (H) {
     check('C2e', 'Ergebnis nach dem Take: SFR · SHR max · CPP mit dem Rauschanteil in Rost, Kachel „Hohe Lage“ mit dem Anteil über 250 Hz in Rost',
       !badE.length, badE.length ? badE.join(' | ') + ' — ' + tagFrei(erg).slice(0, 300) : tagFrei((/SFR · SHR max · CPP[\s\S]*?<\/div>/.exec(erg) || [''])[0]).slice(0, 200) + ' | ' + tagFrei((/Hohe Lage[\s\S]*?<\/div>/.exec(erg) || [''])[0]).slice(0, 160));
   }
+  /* ---------- C3a · Naht nach stehendem Kontext: Stelle nur auf eine Spanne bekannt ---------- */
+  // Chromium (AudioContext.suspend/resume): Das zu spät gelieferte Stück war vor dem Anhalten angefangen, und die
+  // Eingangskette liefert danach noch gepuffertes Signal von vorher. Gemessen lag der echte Schnitt 1–2 Stücke nach
+  // dem Anfang dieses Stücks; als Punkt an den Anfang gesetzt blieb über ihm ein gehaltener Tonsprung (−7 HT).
+  try {
+    const R = require(require('path').join(__dirname, '..', '..', 'recorder.js')).VARERECORDER;
+    const BL = 2048, k0 = 36, T0 = 5e6, bad = [];
+    const beiS = k0 * BL / SR, echt = beiS + 0.08;   // echter Schnitt knapp 2 Stücke nach dem gemeldeten Anfang
+    const vok = (f0, d) => D.synthVowel(f0, FA, BW5, d, SR, { gain: 0.3 });
+    const sig = concat([noise(Math.round(0.2 * SR), 2e-4, 401), vok(196, echt - 0.2), vok(130.81, 1.5), noise(Math.round(0.2 * SR), 2e-4, 402)]);
+    { const z = noise(sig.length, 2e-4, 403); for (let i = 0; i < sig.length; i++) sig[i] += z[i]; }
+    const protokoll = sprungRahmen => {
+      const n = Math.ceil(sig.length / BL), b = { pos: [], frame: [], zeit: [], len: [], t0: T0 - BL / SR * 1000 };
+      for (let k = 0; k < n; k++) {
+        b.pos.push(k * BL); b.len.push(Math.min(BL, sig.length - k * BL));
+        b.frame.push(k * BL + (sprungRahmen && k >= k0 ? 96000 : 0));
+        b.zeit.push(T0 + k * BL / SR * 1000 + (!sprungRahmen && k >= k0 ? 2000 : 0));
+      }
+      b.tEnde = b.zeit[n - 1] + 10; return b;
+    };
+    const steht = R.lueckenAus(protokoll(false), SR), fehlt = R.lueckenAus(protokoll(true), SR);
+    const nSteht = steht.filter(l => l.art === 'naht'), nFehlt = fehlt.filter(l => l.art === 'naht');
+    if (!(nSteht.length === 1 && Math.abs(nSteht[0].beiS - beiS) < 1e-9 && nSteht[0].spanneS >= 2 * BL / SR)) bad.push('Kontext steht: ' + JSON.stringify(steht));
+    if (!(nFehlt.length === 1 && Math.abs(nFehlt[0].beiS - beiS) < 1e-9 && !(nFehlt[0].spanneS > 0))) bad.push('Eingang fehlt (genau): ' + JSON.stringify(fehlt));
+    const naehteS = A.nahtStellen(steht);
+    const mit = await A.analyseTake(Float32Array.from(sig), SR, { hopS: 0.01, naehteS });
+    const punkt = await A.analyseTake(Float32Array.from(sig), SR, { hopS: 0.01, naehteS: [beiS] });
+    const F = A.FLAG, s = mit.series, rand = Math.max.apply(null, D.WINDOWS.concat([D.MAIN_WINDOW])) / 2;
+    let ueber = 0, gemessen = 0, fern = 0, fernGemessen = 0;
+    for (let i = 0; i < s.t.length; i++) {
+      if (Math.abs(s.t[i] - echt) < rand) { ueber++; if (!(s.flags[i] & F.NAHT) || (s.flags[i] & F.VOICED)) gemessen++; }
+      if (s.t[i] > 0.5 && s.t[i] < sig.length / SR - 0.5 && (s.t[i] < beiS - 0.3 || s.t[i] > echt + 0.3)) { fern++; if (s.flags[i] & F.VOICED) fernGemessen++; }
+    }
+    const sp = mit.summary.spruenge, spP = punkt.summary.spruenge;
+    if (ueber === 0 || gemessen) bad.push('Rahmen über dem echten Schnitt ' + ueber + ', davon gemessen ' + gemessen);
+    if (sp.gehalten || sp.kante) bad.push('Sprünge mit Spanne: gehalten ' + sp.gehalten + ', Kanten ' + sp.kante + ' ' + JSON.stringify(sp.liste.map(e => e.halbtoene.toFixed(1) + '@' + e.startS.toFixed(2))));
+    if (fernGemessen < 0.95 * fern) bad.push('abseits der Naht gemessen nur ' + fernGemessen + '/' + fern);
+    // Gegenprobe: nur der gemeldete Punkt — dann bleibt der Sprung (sonst prüfte der Fall nichts).
+    if (spP.gehalten !== 1) bad.push('Gegenprobe Punkt-Naht: gehalten ' + spP.gehalten + ' statt 1');
+    check('C3a', 'Naht nach stehendem Kontext (N7): der Recorder meldet sie mit Spanne (genau gemeldete Naht ohne), die Spanne gilt als Naht — kein Rahmen über dem echten Schnitt 80 ms nach der gemeldeten Stelle gemessen, kein Sprung, abseits gemessen; als Punkt bliebe −7 HT gehalten',
+      !bad.length, bad.length ? bad.join(' | ') : 'Spanne ' + nSteht[0].spanneS.toFixed(3) + ' s, Rahmen über dem Schnitt ' + ueber + ' (alle Naht), abseits gemessen ' + fernGemessen + '/' + fern + ', Punkt-Naht: ' + spP.liste.map(e => e.art + ' ' + e.halbtoene.toFixed(1) + ' HT').join(', '));
+  } catch (e) { check('C3a', 'Ablauf Naht mit Spanne läuft durch', false, kurz(e)); }
 };

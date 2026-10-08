@@ -446,16 +446,23 @@
      Signal ohne Pause aneinandergesetzt; über einer Atempause entstand so ein gehaltener Tonsprung, der als
      sicherer Befund dastand (Befund N7). Jede Naht gilt als Pause: Rahmen, deren längstes Fenster sie
      überdeckt, werden nicht gemessen (NAHT, Pause), und die Feinspur samt Sprungsuche läuft je Abschnitt
-     zwischen den Nähten — kein Bezugston und kein Sprung reicht über eine Naht. */
+     zwischen den Nähten — kein Bezugston und kein Sprung reicht über eine Naht. Ein Eintrag [von, bis] ist eine Naht,
+     deren Stelle nur auf diese Spanne bekannt ist (Kontext stand, recorder.js spanneS): Die ganze Spanne gilt als Naht,
+     die Feinspur läuft nur davor und danach. */
   function analyseTake(samples, sr, o, onProgress) {
     var opts = {};
     for (var k in DEFAULTS) opts[k] = (o && o[k] != null) ? o[k] : DEFAULTS[k];
     var abbrechen = (o && typeof o.abbrechen === 'function') ? o.abbrechen : null;
-    var TSR = D.TARGET_SR, dauer = samples.length / sr, naehte = [];
-    ((o && o.naehteS) || []).forEach(function (x) { if (typeof x === 'number' && x > 0 && x < dauer) naehte.push(x); });
-    naehte.sort(function (a, b) { return a - b; });
+    var TSR = D.TARGET_SR, dauer = samples.length / sr, naehte = [], spannen = [];
+    ((o && o.naehteS) || []).forEach(function (x) {
+      var von = typeof x === 'number' ? x : (x && typeof x[0] === 'number' ? x[0] : NaN), bis = typeof x === 'number' ? x : (x && typeof x[1] === 'number' ? x[1] : NaN);
+      if (von > 0 && von < dauer && bis >= von) { naehte.push(x); spannen.push([von, Math.min(bis, dauer)]); }
+    });
+    function vonS(x) { return typeof x === 'number' ? x : x[0]; }
+    naehte.sort(function (a, b) { return vonS(a) - vonS(b); });
+    spannen.sort(function (a, b) { return a[0] - b[0]; });
     var nahtRand = Math.max.apply(null, D.WINDOWS.concat([D.MAIN_WINDOW])) / 2 + 1 / TSR;
-    function anNaht(t) { for (var q = 0; q < naehte.length; q++) if (Math.abs(t - naehte[q]) < nahtRand) return true; return false; }
+    function anNaht(t) { for (var q = 0; q < spannen.length; q++) if (t > spannen[q][0] - nahtRand && t < spannen[q][1] + nahtRand) return true; return false; }
     var ds = D.resample(samples, sr, TSR);
     var hop = Math.max(1, Math.round(opts.hopS * TSR)), half = Math.round(0.03 * TSR);
     var centres = [];
@@ -491,10 +498,11 @@
              gehaltener Sprung (ab 5 Halbtönen) ist nicht automatisch ein Registerwechsel: Ein legato
              gesungener Melodiesprung (Quarte bis Oktave) zählt genauso. Einen Registerbruch zeigt
              erst ein Qualitätseinbruch am Übergang, und den prüft diese Zählung nicht. */
+          // Abschnitte zwischen den Nähten; die Spanne einer ungenau bekannten Naht gehört zu keinem.
           var grenzen = [0], fein = null, spruenge = [];
-          for (var g = 0; g < naehte.length; g++) grenzen.push(Math.min(ds.length, Math.round(naehte[g] * TSR)));
+          for (var g = 0; g < spannen.length; g++) grenzen.push(Math.min(ds.length, Math.round(spannen[g][0] * TSR)), Math.min(ds.length, Math.round(spannen[g][1] * TSR)));
           grenzen.push(ds.length);
-          for (g = 0; g + 1 < grenzen.length; g++) {
+          for (g = 0; g + 1 < grenzen.length; g += 2) {
             var spur = D.pitchTrackFine(ds.subarray(grenzen[g], grenzen[g + 1]), TSR, opts.fine || {}), ab = grenzen[g] / TSR;
             if (!fein) fein = spur;
             D.detectJumps(spur, opts.jumps || {}).forEach(function (e) { e.startS += ab; spruenge.push(e); });
@@ -606,6 +614,12 @@
   /* Ein Take mit Signallücke (app.js signalLuecken, recorder.js) ist eine unvollständige Aufnahme: Was in der
      Lücke gesungen wurde, fehlt. Er bleibt in der Chronik, sichtbar gekennzeichnet, ist aber keine Referenz. */
   function lueckenhaft(take) { var l = take && take.signalLuecken; return !!(l && l.length); }
+  /* Nähte eines Takes für analyseTake (o.naehteS) aus seinen Signallücken (recorder.js): nur Stellen, an denen die Teile
+     aneinanderstoßen; eine nur ungefähr bekannte Stelle (spanneS) als Spanne [von, bis]. */
+  function nahtStellen(luecken) {
+    return (luecken || []).filter(function (l) { return l && l.art === 'naht' && typeof l.beiS === 'number'; })
+      .map(function (l) { return l.spanneS > 0 ? [l.beiS, l.beiS + l.spanneS] : l.beiS; });
+  }
 
   /* Referenzen je Vokal: engstes Bestsegment über alle Takes, mit Herkunft. aktuell (optional, siehe
      unvergleichbar): Takes, die anders gerechnet sind, zählen nicht. Ohne aktuell wird die
@@ -679,7 +693,7 @@
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, slotGrundAus: slotGrundAus, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, nahtStellen: nahtStellen, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, slotGrundAus: slotGrundAus, stats: stats };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

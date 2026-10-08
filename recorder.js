@@ -18,8 +18,11 @@
        Stopp, fehlt dort Signal (ab RAND_MIN_S, der Schwelle der Live-Warnung „kein Signal“).
      Ohne Rahmenzähler (Rückfall ScriptProcessor, ältere Worklet-Datei im Cache) gilt die Ankunftszeit im
      Hauptfaden; dort kann ein langer Hänger der Seite eine Lücke vortäuschen, nie eine verdecken.
-     Ergebnis: [{ beiS (Stelle im aufgenommenen Signal), dauerS (fehlende Zeit), art: 'anfang'|'naht'|'ende' }]. */
-  var NAHT_MIN_S = 0.1, RAND_MIN_S = 0.3, FENSTER_S = 0.5, ENDE_WARTEN_MS = 600;
+     Ergebnis: [{ beiS (Stelle im aufgenommenen Signal), dauerS (fehlende Zeit), art: 'anfang'|'naht'|'ende' }].
+     Stand der Kontext, ist die Stelle nur auf einige Stücke genau: Das Stück, das zu spät kommt, war vor dem Anhalten
+     angefangen, und die Eingangskette liefert danach noch gepuffertes Signal von vorher. Die Naht liegt also zwischen
+     beiS und beiS + spanneS (gemessen in Chromium: 1–2 Stücke später); analysis.js misst diese Spanne nicht. */
+  var NAHT_MIN_S = 0.1, RAND_MIN_S = 0.3, FENSTER_S = 0.5, ENDE_WARTEN_MS = 600, NAHT_SPANNE_STUECKE = 3;
   function lueckenAus(b, sr) {
     var n = b.pos.length, out = [], k, j;
     if (!n || !(sr > 0)) return out;
@@ -36,10 +39,14 @@
     }
     for (k = 0; k < n; k++) { var m = lag[k]; for (j = k + 1; j < n && a[j] - a[k] <= FENSTER_S; j++) if (lag[j] < m) m = lag[j]; lvl.push(m); }
     for (k = 1; k < n; k++) {
-      var fehlt = 0;
+      var fehlt = 0, verzug = 0;
       if (mitRahmen) { var sprung = b.frame[k] - (b.frame[k - 1] + b.len[k - 1]); if (sprung > 0) fehlt += sprung / sr; }
-      if (lvl[k] - lvl[k - 1] > NAHT_MIN_S) fehlt += lvl[k] - lvl[k - 1];
-      if (fehlt > 0) out.push({ beiS: b.pos[k] / sr, dauerS: fehlt, art: 'naht' });
+      if (lvl[k] - lvl[k - 1] > NAHT_MIN_S) { verzug = lvl[k] - lvl[k - 1]; fehlt += verzug; }
+      if (fehlt > 0) {
+        var l = { beiS: b.pos[k] / sr, dauerS: fehlt, art: 'naht' };
+        if (verzug > 0) l.spanneS = NAHT_SPANNE_STUECKE * maxLen / sr;
+        out.push(l);
+      }
     }
     var schwanz = (b.tEnde - b.zeit[n - 1]) / 1000;
     if (schwanz - maxLen / sr > RAND_MIN_S) out.push({ beiS: (b.pos[n - 1] + b.len[n - 1]) / sr, dauerS: schwanz, art: 'ende' });
@@ -160,5 +167,5 @@
     return navigator.mediaDevices.enumerateDevices().then(function (ds) { return ds.filter(function (d) { return d.kind === 'audioinput'; }); });
   }
 
-  root.VARERECORDER = { createRecorder: createRecorder, listDevices: listDevices, lueckenAus: lueckenAus, NAHT_MIN_S: NAHT_MIN_S, RAND_MIN_S: RAND_MIN_S };
+  root.VARERECORDER = { createRecorder: createRecorder, listDevices: listDevices, lueckenAus: lueckenAus, NAHT_MIN_S: NAHT_MIN_S, RAND_MIN_S: RAND_MIN_S, NAHT_SPANNE_STUECKE: NAHT_SPANNE_STUECKE };
 })(typeof self !== 'undefined' ? self : this);
