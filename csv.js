@@ -15,9 +15,13 @@
      Fehlermeldung statt Notiz. Im Dialekt Excel DE steht vor solchem TEXT ein Apostroph; Excel zeigt es
      mit an, der Text dahinter bleibt unverändert. Zahlen betrifft das nie: −99,00 bleibt eine Zahl.
      Der Standard-Dialekt (pandas) schreibt den Text unverändert — dort ist er Wert, kein Code. */
+  /* chronik: der Dialekt des Übergabepakets (Chronik-Standard, vare_standard.py). Fehlende Zahl leer (NULL), nie −99;
+     Zahlen mit gespeicherter Genauigkeit (Float32: 9 signifikante Stellen, damit der Wert bitgleich zurückgelesen
+     wird), nicht auf die Anzeigestellen gerundet; Wahrheitswerte 0/1. Kein BOM, kein Formelschutz: Leser ist Python. */
   var DIALECTS = {
     standard: { sep: ',', dec: '.', bom: false, formelSchutz: false, name: 'Standard (Komma, Punkt) — pandas' },
-    excelde: { sep: ';', dec: ',', bom: true, formelSchutz: true, name: 'Excel DE (Semikolon, Komma, Text gegen Formeln geschützt)' }
+    excelde: { sep: ';', dec: ',', bom: true, formelSchutz: true, name: 'Excel DE (Semikolon, Komma, Text gegen Formeln geschützt)' },
+    chronik: { sep: ',', dec: '.', bom: false, formelSchutz: false, leer: true, genau: true, name: 'Chronik-Paket (Komma, Punkt, fehlend leer, volle Genauigkeit)' }
   };
   var FORMEL_ANFANG = /^\s*[=+\-@]/;
 
@@ -37,14 +41,51 @@
       { key: prefix + '_teilton_share', get: g(key + '.teiltonShare'), dec: 3 });
     return cols;
   }
+  /* Zeitbezug: eine Zeile, ein Zeitbezug (Chronik-Standard 9.10.). datetime_iso und time_local nennen den START des
+     Takes, wie pause_before_s und warmup_min; das Ende steht eigens in end_iso und end_local. Ältere Takes kennen nur
+     createdAt (das Ende): ihr Start ist Ende minus Dauer, auf die Sekunde — kein geratener Wert, eine Rechnung. */
+  function startDate(t) {
+    if (!t) return null;
+    if (t.startedAt) { var d = new Date(t.startedAt); if (!isNaN(d.getTime())) return d; }
+    var e = t.createdAt ? new Date(t.createdAt) : null;
+    if (!e || isNaN(e.getTime())) return null;
+    return (typeof t.durationS === 'number' && isFinite(t.durationS)) ? new Date(e.getTime() - Math.round(t.durationS * 1000)) : e;
+  }
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+  function startIso(t) { var d = startDate(t); return d ? d.toISOString() : null; }
+  // Wanduhrzeit zu einem Zeitpunkt: mit dem gespeicherten UTC-Abstand des Takes (unabhängig von der Uhr des Lesers), sonst örtlich.
+  function wanduhr(d, t) {
+    if (t && typeof t.tzOffsetMin === 'number' && isFinite(t.tzOffsetMin)) { var u = new Date(d.getTime() + t.tzOffsetMin * 60000); return p2(u.getUTCHours()) + ':' + p2(u.getUTCMinutes()); }
+    return p2(d.getHours()) + ':' + p2(d.getMinutes());
+  }
+  function startLocal(t) {
+    if (!t) return null;
+    if (t.startedAt) return t.timeLocal || wanduhr(new Date(t.startedAt), t);
+    // Älterer Take: timeLocal war das Ende. Ohne Dauer ist der Start nicht zu rechnen, dann bleibt das Ende stehen.
+    if (!(typeof t.durationS === 'number' && isFinite(t.durationS))) return t.timeLocal || null;
+    var d = startDate(t); return d ? wanduhr(d, t) : null;
+  }
+  function endIso(t) { return t ? (t.endedAt || t.createdAt || null) : null; }
+  function endLocal(t) { if (!t) return null; if (t.timeLocalEnd) return t.timeLocalEnd; if (!t.startedAt && t.timeLocal) return t.timeLocal; var d = t.endedAt || t.createdAt ? new Date(t.endedAt || t.createdAt) : null; return (d && !isNaN(d.getTime())) ? wanduhr(d, t) : null; }
+  /* Bearbeitet der Browser das Signal (Echo-, Rausch-, Pegelautomatik)? 1 = mindestens eine an, 0 = alle aus, fehlend =
+     nicht bekannt (ältere Takes, Gerät ohne Auskunft). Teil des Kettenprotokolls (These 30). */
+  function browserBearbeitung(t) {
+    var f = t && t.captureFlags; if (!f) return null;
+    var k = ['echoCancellation', 'noiseSuppression', 'autoGainControl'], an = false, bekannt = false;
+    for (var i = 0; i < k.length; i++) { if (f[k[i]] === true) an = true; if (typeof f[k[i]] === 'boolean') bekannt = true; }
+    return an ? 1 : (bekannt ? 0 : null);
+  }
+  // Angaben des Formulars (Stichpunkte zum Take): die aktuelle Fassung; ältere Fassungen in angabenVersionen.
+  function angabe(feld) { return function (t) { var a = t && t.angaben; return a && a[feld] != null && a[feld] !== '' ? a[feld] : null; }; }
   var TAKE_COLUMNS = [
     { key: 'code', get: g('code') },
+    { key: 'take_id', get: g('id') },
     { key: 'label', get: g('label') },
-    { key: 'datetime_iso', get: g('createdAt') },
+    { key: 'datetime_iso', get: startIso },
     /* Schritt 0 aus dem Manual: ohne Uhrzeit, Position in der Sitzung, Pause davor und
        Einsing-Status sind zwei Takes nicht vergleichbar. datetime_iso ist UTC, time_local ist
        die Wanduhrzeit — beides steht da, damit keins aus dem anderen geraten werden muss. */
-    { key: 'time_local', get: g('timeLocal') },
+    { key: 'time_local', get: startLocal },
     { key: 'tz_offset_min', get: g('tzOffsetMin'), dec: 0 },
     { key: 'session_nr', get: g('sitzung.nr'), dec: 0 },
     { key: 'session_id', get: g('sitzung.id') },
@@ -53,12 +94,22 @@
     { key: 'pause_same_session', get: g('sitzung.pauseSelbeSitzung'), dec: 0 },
     { key: 'warmup_state', get: g('sitzung.warmup') },
     { key: 'warmup_min', get: g('sitzung.warmupMin'), dec: 0 },
+    // Ende des Takes (UTC und Wanduhr); Start steht in datetime_iso/time_local.
+    { key: 'end_iso', get: endIso },
+    { key: 'end_local', get: endLocal },
     { key: 'duration_s', get: g('durationS'), dec: 2 },
     /* Signallücke: Sekunden, die in der Aufnahme fehlen (Gerätewechsel, Aussetzer). 0 = geprüft, keine;
        −99 = nicht geprüft (ältere Takes). Ein Take mit Lücke ist keine Referenz, seine Nähte gelten als Pause. */
     { key: 'signal_gap_s', get: g('signalLueckeS'), dec: 2 },
+    /* Kette je Take (These 30, Hülle-/Kabelbefund vom 6.10.): Kontextrate, Geräterate, Gerät mit Kennung, Bearbeitung durch
+       den Browser, Erfassungsweg, WAV-Format. track_sample_rate wurde gespeichert, aber bis Kern 4.1 nicht exportiert. */
     { key: 'sample_rate', get: g('sampleRate'), dec: 0 },
+    { key: 'track_sample_rate', get: g('trackSampleRate'), dec: 0 },
     { key: 'device', get: g('deviceLabel') },
+    { key: 'device_id', get: g('deviceId') },
+    { key: 'browser_processing', get: browserBearbeitung, dec: 0 },
+    { key: 'capture', get: g('captureFlags.capture') },
+    { key: 'audio_format', get: g('audioFormat') },
     { key: 'kernel_version', get: g('analysis.kernelVersion') },
     /* Gültigkeitsgrenze der Streuung, mit der dieser Take gerechnet wurde (Hz). Ohne sie musste, wer in der Rahmen-CSV
        sdw/sdo gegen den Grund „Streuung“ nachprüft, 130 Hz annehmen; ältere Takes ohne Angabe −99. */
@@ -141,7 +192,19 @@
       { key: 'valid_share', get: g('summary.validShare'), dec: 3 },
       { key: 'stable_share', get: g('summary.stableShare'), dec: 3 },
       { key: 'n_frames', get: g('summary.nFrames'), dec: 0 },
-      { key: 'comment', get: g('comment') }
+      { key: 'comment', get: g('comment') },
+      /* Stichpunkte zum Take (Formular, Chronik-Standard 2.2): Haltung, Ort, Kette-Zusatz, Gefühl, manuelle Angaben zu
+         Biphonation und Periodenverdopplung (ja/nein/offen), Stand der Angaben und Zahl früherer Fassungen. Nachgetragen
+         wird als neue Fassung, nichts wird überschrieben. */
+      { key: 'haltung', get: angabe('haltung') },
+      { key: 'ort', get: angabe('ort') },
+      { key: 'kette_zusatz', get: angabe('kette') },
+      { key: 'gefuehl', get: angabe('gefuehl') },
+      { key: 'biphonation_manuell', get: angabe('biphonation') },
+      { key: 'periodenverdopplung_manuell', get: angabe('periodenverdopplung') },
+      { key: 'angaben_stand', get: angabe('zeit') },
+      // Zahl der FRÜHEREN Fassungen (0 = nur die aktuelle); ältere Takes ohne Fassungen: fehlend.
+      { key: 'angaben_fassungen', get: g('angabenVersionen.length'), dec: 0 }
     ]);
 
   /* Gründe je Rahmen stehen in der Serie als Codes (analysis.js GRUND, codeAus); hier werden sie wieder
@@ -241,14 +304,20 @@
     ['flags', 'flags', 0]
   ];
 
+  /* Zahl mit gespeicherter Genauigkeit (Dialekt chronik): ganze Zahlen ohne Nachkommastellen; sonst 9 signifikante
+     Stellen — genug, dass ein Float32-Wert bitgleich zurückgelesen wird (JSON und Python lesen beides als Zahl). */
+  function genau(v) {
+    if (v === Math.round(v) && Math.abs(v) < 1e15) return String(v);
+    return String(Number(v.toPrecision(9)));
+  }
   function fmtNum(v, dec, dialect) {
-    if (v == null || (typeof v === 'number' && !isFinite(v))) v = SENTINEL;
-    var s = (typeof v === 'number') ? v.toFixed(dec == null ? 2 : dec) : String(v);
+    if (v == null || (typeof v === 'number' && !isFinite(v))) { if (dialect.leer) return ''; v = SENTINEL; }
+    var s = (typeof v === 'number') ? (dialect.genau ? genau(v) : v.toFixed(dec == null ? 2 : dec)) : String(v);
     if (dialect.dec !== '.') s = s.replace('.', dialect.dec);
     return s;
   }
   function fmtCell(v, dec, dialect) {
-    if (v == null) return (dec == null) ? '' : fmtNum(v, dec, dialect);   // Textspalte leer, Zahlenspalte Sentinel
+    if (v == null) return (dec == null) ? '' : fmtNum(v, dec, dialect);   // Textspalte leer, Zahlenspalte Sentinel (chronik: leer)
     if (typeof v === 'number') return fmtNum(v, dec, dialect);
     if (typeof v === 'boolean') return v ? '1' : '0';
     var s = String(v);
@@ -265,9 +334,18 @@
     for (var i = 0; i < takes.length; i++) lines.push(takeRow(takes[i], d));
     return (d.bom ? '﻿' : '') + lines.join('\r\n') + '\r\n';
   }
+  /* Spaltennamen im Übergabepaket (Dialekt chronik), Regel aus These 30: gleiche Spalte nur bei gleicher Formel. Was der
+     Browser anders rechnet als vare_standard.py, bekommt die Endung _b; was dort gleich heißt und gleich gerechnet ist,
+     behält den Namen der Chronik. f0 bleibt f0_b, bis der Abgleich gegen die Praat-Entscheidungen der Chronik gelaufen ist
+     (Reihenfolge, Punkt 3). Nicht genannte Spalten behalten ihren Namen. Die Formeln stehen in vare-tools/schema.md. */
+  var PAKET_NAMEN = { t_s: 't', f0_hz: 'f0_b', f0_grund: 'f0_grund', f0_korrektur: 'f0_korr', f0_cep: 'f0_cep_b', f0_yin: 'f0_yin_b', rms_dbfs: 'rms',
+    f1: 'f1_b', f2: 'f2_b', f3: 'f3_b', f4: 'f4_b', f5: 'f5_b', d34: 'd34_b', d45: 'd45_b', score_d34: 'd34_stable_b',
+    sfr_db: 'sfr0_b', sfr_norm_db: 'sfr0_norm_b', shr_db: 'shr_b', shr_grid_hz: 'shr_raster', shr_other_db: 'shr_other_b', shr_zweitpuls: 'zweitpuls',
+    cpp_db: 'cpp_b', h1h2_db: 'h1h2_b', h1h2c_db: 'h1h2c_b', h1h2_unsure: 'h1h2_filter' };
+  function paketName(key) { return Object.prototype.hasOwnProperty.call(PAKET_NAMEN, key) ? PAKET_NAMEN[key] : key; }
   function framesToCsv(series, dialectName, VOWEL) {
     var d = DIALECTS[dialectName] || DIALECTS.standard;
-    var lines = [FRAME_COLUMNS.map(function (c) { return c[0]; }).join(d.sep)];
+    var lines = [FRAME_COLUMNS.map(function (c) { return d === DIALECTS.chronik ? paketName(c[0]) : c[0]; }).join(d.sep)];
     for (var i = 0; i < series.t.length; i++) {
       var cells = [];
       for (var c = 0; c < FRAME_COLUMNS.length; c++) {
@@ -278,6 +356,89 @@
       lines.push(cells.join(d.sep));
     }
     return (d.bom ? '﻿' : '') + lines.join('\r\n') + '\r\n';
+  }
+
+  /* ---------- Übergabepaket je Take (Chronik-Standard 2.6) ----------
+     <id>.take.json (Metadaten, Formular, Kette, Kalibrier-ID, Kennwerte, Kernversion), <id>.frames.csv (Dialekt chronik),
+     <id>.ereignisse.csv (Sprünge aus detectJumps). Fehlend = null bzw. leer, nie −99. Gelesen von vare_import_ui.py. */
+
+  /* Take-ID nach Chronik-Schema JJJJMMTT-hhmm-kurztitel aus der STARTZEIT (Wanduhr). Der Code A…Z bleibt Zweitschlüssel.
+     Dateinamen = ID. kurztitel: Kleinbuchstaben a–z und Ziffern, Umlaute aufgelöst, alles andere wird Bindestrich, höchstens
+     24 Zeichen; ohne Titel „ohne-titel“. vergeben: Liste oder Prüffunktion schon vergebener IDs — dann -2, -3, … */
+  function kurztitel(label) {
+    var s = String(label == null ? '' : label).toLowerCase();
+    s = s.replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+    if (typeof s.normalize === 'function') s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    s = s.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    // Über 24 Zeichen: am letzten Bindestrich kürzen, wenn dann noch mindestens 12 bleiben; sonst hart.
+    if (s.length > 24) { var k = s.slice(0, 25).lastIndexOf('-'); s = (k >= 12 ? s.slice(0, k) : s.slice(0, 24)).replace(/-+$/g, ''); }
+    return s || 'ohne-titel';
+  }
+  function takeId(start, label, vergeben) {
+    var d = start instanceof Date ? start : new Date(start);
+    if (isNaN(d.getTime())) throw new Error('Take-ID: keine gültige Startzeit');
+    var basis = d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()) + '-' + kurztitel(label);
+    var da = typeof vergeben === 'function' ? vergeben : function (id) { return !!(vergeben && (Array.isArray(vergeben) ? vergeben.indexOf(id) >= 0 : vergeben[id])); };
+    var id = basis, n = 2;
+    while (da(id)) id = basis + '-' + (n++);
+    return id;
+  }
+  var ID_SCHEMA = /^\d{8}-\d{4}-[a-z0-9-]+$/;
+  // Dateiname eines Takes: seine ID, wenn sie dem Chronik-Schema folgt; sonst (ältere Takes mit UUID) Code und Zeitstempel.
+  function dateiStamm(take) {
+    if (take && ID_SCHEMA.test(String(take.id))) return String(take.id);
+    var d = startDate(take) || new Date(0);
+    return 'vare-' + String(take && take.code || 'take') + '-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
+  }
+  /* Zahlen für JSON: NaN und ±Infinity werden null (fehlend), nicht {"$nf":…} wie in der Sicherung — das Paket liest
+     Python, dort ist null ein NULL. Typisierte Felder werden zu Listen. */
+  function jsonRein(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    if (v === null || v === undefined) return null;
+    if (typeof v !== 'object') return v;
+    var i, out;
+    if (Array.isArray(v) || ArrayBuffer.isView(v)) { out = []; for (i = 0; i < v.length; i++) out.push(jsonRein(v[i])); return out; }
+    out = {};
+    var ks = Object.keys(v);
+    for (i = 0; i < ks.length; i++) out[ks[i]] = jsonRein(v[ks[i]]);
+    return out;
+  }
+  function takeJson(take) {
+    var s = take.summary || {}, kenn = {};
+    for (var k in s) if (k !== 'spruenge') kenn[k] = s[k];
+    var sp = s.spruenge || null, spKurz = null;
+    if (sp) { spKurz = {}; for (var q in sp) if (q !== 'liste') spKurz[q] = sp[q]; }
+    var cf = take.captureFlags || {};
+    return jsonRein({
+      format: 'vare-take', version: 1, id: take.id, code: take.code || null, titel: take.label || null,
+      zeit: { start_iso: startIso(take), start_lokal: startLocal(take), ende_iso: endIso(take), ende_lokal: endLocal(take), utc_abstand_min: take.tzOffsetMin == null ? null : take.tzOffsetMin },
+      dauer_s: take.durationS, signal_luecke_s: take.signalLueckeS == null ? null : take.signalLueckeS, signal_luecken: take.signalLuecken || null,
+      sitzung: take.sitzung || null, vokal_absicht: take.vowelIntent || null,
+      angaben: take.angaben || null, angaben_versionen: take.angabenVersionen || [], notiz: take.comment || null,
+      kette: { geraet: take.deviceLabel || null, geraet_id: take.deviceId || null, kontextrate_hz: take.sampleRate, geraeterate_hz: take.trackSampleRate || null,
+        browser_bearbeitung: browserBearbeitung(take), echo: cf.echoCancellation == null ? null : !!cf.echoCancellation, rauschen: cf.noiseSuppression == null ? null : !!cf.noiseSuppression,
+        pegel: cf.autoGainControl == null ? null : !!cf.autoGainControl, erfassung: cf.capture || null, wav_format: take.audioFormat || null, kalibrier_id: take.calibrationId || null },
+      analyse: take.analysis || null, kern_version: take.analysis ? take.analysis.kernelVersion : null,
+      kennwerte: kenn, spruenge: spKurz, historie_fassungen: Array.isArray(take.history) ? take.history.length : 0,
+      dateien: { wav: dateiStamm(take) + '.wav', frames: dateiStamm(take) + '.frames.csv', ereignisse: dateiStamm(take) + '.ereignisse.csv' }
+    });
+  }
+  /* Sprünge aus detectJumps als Tabelle ereignisse: t, von_hz, nach_hz, halbtoene, art, uebergang_ms, oktave, ap_spitze (dazu
+     dauer_s und richtung). Dialekt chronik, fehlend leer. */
+  var EREIGNIS_SPALTEN = [['t', 'startS'], ['dauer_s', 'dauerS'], ['von_hz', 'vonHz'], ['nach_hz', 'nachHz'], ['halbtoene', 'halbtoene'], ['richtung', 'richtung'], ['art', 'art'], ['uebergang_ms', 'uebergangMs'], ['oktave', 'oktave'], ['ap_spitze', 'apSpitze']];
+  function ereignisseToCsv(liste) {
+    var d = DIALECTS.chronik, lines = [EREIGNIS_SPALTEN.map(function (c) { return c[0]; }).join(d.sep)];
+    (liste || []).forEach(function (e) {
+      lines.push(EREIGNIS_SPALTEN.map(function (c) { var v = e ? e[c[1]] : null; return fmtCell(typeof v === 'number' ? v : (v == null ? null : v), typeof v === 'string' ? undefined : 0, d); }).join(d.sep));
+    });
+    return lines.join('\r\n') + '\r\n';
+  }
+  // Das Paket als Liste von Dateien { name, text } (ohne WAV; die legt app.js dazu).
+  function takePaket(take, series, VOWEL) {
+    var stamm = dateiStamm(take), out = [{ name: stamm + '.take.json', text: JSON.stringify(takeJson(take), null, 2) + '\n' }];
+    if (series) out.push({ name: stamm + '.frames.csv', text: framesToCsv(series, 'chronik', VOWEL) });
+    out.push({ name: stamm + '.ereignisse.csv', text: ereignisseToCsv(take.summary && take.summary.spruenge && take.summary.spruenge.liste) });
+    return out;
   }
 
   /* ---------- JSON-Sicherung ---------- */
@@ -444,7 +605,8 @@
     return { takes: takes, series: series, audio: audio, refs: lies(o.refs || null), calibrations: lies(o.calibrations || []), settings: lies(o.settings || null), exportedAt: o.exportedAt, kernelVersion: o.kernelVersion };
   }
 
-  var api = { SENTINEL: SENTINEL, BACKUP_VERSION: BACKUP_VERSION, SICHERUNG_MAX_BYTES: SICHERUNG_MAX_BYTES, DIALECTS: DIALECTS, TAKE_COLUMNS: TAKE_COLUMNS, FRAME_COLUMNS: FRAME_COLUMNS, takesToCsv: takesToCsv, framesToCsv: framesToCsv, fmtCell: fmtCell, serializeBackup: serializeBackup, parseBackup: parseBackup, packSeries: packSeries, unpackSeries: unpackSeries };
+  var api = { SENTINEL: SENTINEL, BACKUP_VERSION: BACKUP_VERSION, SICHERUNG_MAX_BYTES: SICHERUNG_MAX_BYTES, DIALECTS: DIALECTS, TAKE_COLUMNS: TAKE_COLUMNS, FRAME_COLUMNS: FRAME_COLUMNS, takesToCsv: takesToCsv, framesToCsv: framesToCsv, fmtCell: fmtCell, serializeBackup: serializeBackup, parseBackup: parseBackup, packSeries: packSeries, unpackSeries: unpackSeries,
+    PAKET_NAMEN: PAKET_NAMEN, paketName: paketName, EREIGNIS_SPALTEN: EREIGNIS_SPALTEN, kurztitel: kurztitel, takeId: takeId, ID_SCHEMA: ID_SCHEMA, dateiStamm: dateiStamm, startIso: startIso, startLocal: startLocal, endIso: endIso, endLocal: endLocal, browserBearbeitung: browserBearbeitung, jsonRein: jsonRein, takeJson: takeJson, ereignisseToCsv: ereignisseToCsv, takePaket: takePaket };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VARECSV = api;
 })(typeof self !== 'undefined' ? self : this);

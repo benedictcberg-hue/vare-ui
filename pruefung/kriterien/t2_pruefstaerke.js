@@ -10,11 +10,17 @@
 
 /* Take-CSV: Spalte, Pfad im Take, Nachkommastellen ('text' = Text, 'bool' = Ja/Nein als 1/0). */
 const TAKE_SOLL = [
-  ['code', 'code', 'text'], ['label', 'label', 'text'], ['datetime_iso', 'createdAt', 'text'],
-  ['time_local', 'timeLocal', 'text'], ['tz_offset_min', 'tzOffsetMin', 0], ['session_nr', 'sitzung.nr', 0],
+  ['code', 'code', 'text'], ['take_id', 'id', 'text'], ['label', 'label', 'text'],
+  /* Zeitbezug Start (Chronik-Standard 2.1 Nr. 3): datetime_iso/time_local = Start, end_iso/end_local = Ende. Der Prüftake trägt
+     startedAt und timeLocal; die Ableitung für ältere Takes (Ende minus Dauer) prüft n_paket.js. */
+  ['datetime_iso', 'startedAt', 'text'], ['time_local', 'timeLocal', 'text'],
+  ['tz_offset_min', 'tzOffsetMin', 0], ['session_nr', 'sitzung.nr', 0],
   ['session_id', 'sitzung.id', 'text'], ['take_in_session', 'sitzung.position', 0], ['pause_before_s', 'sitzung.pauseVorherS', 1],
   ['pause_same_session', 'sitzung.pauseSelbeSitzung', 'bool'], ['warmup_state', 'sitzung.warmup', 'text'], ['warmup_min', 'sitzung.warmupMin', 0],
-  ['duration_s', 'durationS', 2], ['signal_gap_s', 'signalLueckeS', 2], ['sample_rate', 'sampleRate', 0], ['device', 'deviceLabel', 'text'],
+  ['end_iso', 'endedAt', 'text'], ['end_local', 'timeLocalEnd', 'text'],
+  ['duration_s', 'durationS', 2], ['signal_gap_s', 'signalLueckeS', 2], ['sample_rate', 'sampleRate', 0], ['track_sample_rate', 'trackSampleRate', 0], ['device', 'deviceLabel', 'text'],
+  // Kette je Take (2.1 Nr. 4): browser_processing ist aus den drei Flags abgeleitet (1 = eine an, 0 = alle aus); hier als 'bool' über captureFlags.echoCancellation.
+  ['device_id', 'deviceId', 'text'], ['browser_processing', 'captureFlags.echoCancellation', 'bool'], ['capture', 'captureFlags.capture', 'text'], ['audio_format', 'audioFormat', 'text'],
   ['kernel_version', 'analysis.kernelVersion', 'text'], ['spread_max_hz', 'analysis.spreadMaxHz', 0], ['calibration_id', 'calibrationId', 'text'], ['vowel_intent', 'vowelIntent', 'text'],
   ['vowel_class', 'summary.vowel.dominant', 'text'], ['vowel_share', 'summary.vowel.dominantShare', 3],
   ['f0_med_hz', 'summary.f0.med', 1], ['f0_q1_hz', 'summary.f0.q1', 1], ['f0_q3_hz', 'summary.f0.q3', 1], ['f0_note', 'summary.f0.note', 'text'],
@@ -44,16 +50,22 @@ TAKE_SOLL.push(
   ['teilton_share', 'summary.teiltonShare', 3], ['teilton_hoch_share', 'summary.teiltonHochShare', 3], ['jumps_held', 'summary.spruenge.gehalten', 0], ['jumps_edge', 'summary.spruenge.kante', 0],
   ['lambda_held_per_s', 'summary.spruenge.lambdaGehalten', 4], ['lambda_edge_per_s', 'summary.spruenge.lambdaKante', 4],
   ['voiced_share', 'summary.voicedShare', 3], ['valid_share', 'summary.validShare', 3], ['stable_share', 'summary.stableShare', 3],
-  ['n_frames', 'summary.nFrames', 0], ['comment', 'comment', 'text']
+  ['n_frames', 'summary.nFrames', 0], ['comment', 'comment', 'text'],
+  // Stichpunkte zum Take (Formular, 2.2): aktuelle Fassung; angaben_fassungen = Zahl der früheren Fassungen.
+  ['haltung', 'angaben.haltung', 'text'], ['ort', 'angaben.ort', 'text'], ['kette_zusatz', 'angaben.kette', 'text'], ['gefuehl', 'angaben.gefuehl', 'text'],
+  ['biphonation_manuell', 'angaben.biphonation', 'text'], ['periodenverdopplung_manuell', 'angaben.periodenverdopplung', 'text'], ['angaben_stand', 'angaben.zeit', 'text'],
+  ['angaben_fassungen', 'angabenVersionen.length', 0]
 );
 
 /* Texte mit allen Fallen: Trenner des einen Dialekts ohne Anführungszeichen (Excel DE: 'x; y'),
    Anführungszeichen, Zeilenumbruch, Nicht-ASCII. Jeder Text ist eindeutig. */
 const TEXTE = {
-  code: 'AB', label: 'x; y', createdAt: '2026-09-03T10:00:00.000Z', timeLocal: '12:00', 'sitzung.id': 's-7, Abend',
-  'sitzung.warmup': 'teilweise', deviceLabel: 'Mikro "USB"; Kanal 1, links', 'analysis.kernelVersion': 'kern-test',
+  code: 'AB', id: '20260903-1159-x-y', label: 'x; y', startedAt: '2026-09-03T09:59:00.000Z', timeLocal: '11:59', endedAt: '2026-09-03T10:00:00.000Z', timeLocalEnd: '12:00', 'sitzung.id': 's-7, Abend',
+  'sitzung.warmup': 'teilweise', deviceLabel: 'Mikro "USB"; Kanal 1, links', deviceId: 'dev; "7"', 'captureFlags.capture': 'AudioWorklet', audioFormat: 'f32', 'analysis.kernelVersion': 'kern-test',
   calibrationId: 'c-3', vowelIntent: 'ɔ', 'summary.vowel.dominant': 'ɐ', 'summary.f0.note': 'G3', 'summary.best.cls': 'ø',
-  'summary.floorSource': 'estimate', comment: 'Zeile 1\r\nZeile 2; "x", y'
+  'summary.floorSource': 'estimate', comment: 'Zeile 1\r\nZeile 2; "x", y',
+  'angaben.haltung': 'sitzend gerade', 'angaben.ort': 'Küche; Fenster zu', 'angaben.kette': 'Hülle "B", 12 cm', 'angaben.gefuehl': 'wach, etwas heiser',
+  'angaben.biphonation': 'nein', 'angaben.periodenverdopplung': 'offen', 'angaben.zeit': '2026-09-03T10:01:30.000Z'
 };
 
 /* Rahmen-CSV: Spalte, Art, Quelle, Nachkommastellen.

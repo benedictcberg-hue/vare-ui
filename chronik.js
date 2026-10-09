@@ -259,7 +259,7 @@
       var s = t.summary || {}, old = t.analysis && t.analysis.kernelVersion !== D.VERSION, thr = f3Schwelle(t), f3u = f3Unter(t);
       var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(t) : '';
       h += '<tr data-id="' + esc(t.id) + '">' +
-        '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s</span>'
+        '<td><a href="#/take/' + esc(t.id) + '"><strong>' + esc(t.code) + '</strong> ' + esc(t.label) + '</a><br><span class="small muted">' + esc(dateShort(t.startedAt || t.createdAt)) + ' · ' + fmt(t.durationS, 1) + ' s' + (/^\d{8}-\d{4}-/.test(String(t.id)) ? ' · <span class="mono">' + esc(t.id) + '</span>' : '') + '</span>'
           + (A.lueckenhaft(t) ? ' <span class="tag rust" title="' + esc(lueckenText(t)) + '">Signallücke</span>' : '') + '</td>' +
         '<td class="mono">' + esc(t.vowelIntent || '–') + ' / ' + esc(s.vowel && s.vowel.dominant || '–') + '</td>' +
         '<td class="num">' + (s.f0 ? fmt(s.f0.med) + (noteText(s.f0.med, s.f0.note) ? ' ' + esc(s.f0.note) : '') + listeUnsicher(s.f0UnsureShare, 'Grundton unsicher') : '–') + '</td>' +
@@ -270,7 +270,7 @@
         '<td class="num">' + (s.shr ? (shrBefund(s) ? '<span class="befund" title="über der Warnschwelle ' + String(SHR_WARN_DB).replace('-', '−') + ' dB">' : '<span>') + fmt(s.shr.max, 1) + '</span>' + listeUnsicher(s.shrUnsureShare, 'SHR-Raster oder Grundton unsicher') : '–') + '</td>' +
         '<td class="num">' + fmt((s.validShare || 0) * 100) + ' %</td>' +
         '<td class="small">' + esc(t.analysis && t.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">alt</span>' : '') + (uv ? ' <span class="tag" title="' + esc(uv) + '">anders gerechnet</span>' : '') + '</td>' +
-        '<td class="actions"><button data-act="csv">CSV</button>' + (audioIds[t.id] ? '<button data-act="wav">WAV</button><button data-act="re">Neu analysieren</button>' : '') + '<button data-act="del" class="danger">Löschen</button></td></tr>';
+        '<td class="actions"><button data-act="csv">CSV</button><button data-act="paket" title="ZIP: WAV, take.json, frames.csv, ereignisse.csv">Paket</button>' + (audioIds[t.id] ? '<button data-act="wav">WAV</button><button data-act="re">Neu analysieren</button>' : '') + '<button data-act="del" class="danger">Löschen</button></td></tr>';
     });
     el.innerHTML = h + '</tbody></table>';
     el.querySelectorAll('tr[data-id]').forEach(function (tr) {
@@ -279,7 +279,7 @@
       tr.querySelectorAll('button[data-act]').forEach(function (b) {
         b.addEventListener('click', function () {
           var act = b.getAttribute('data-act');
-          if (act === 'csv') handlers.rowCsv(take); else if (act === 'wav') handlers.downloadWav(take); else if (act === 're') handlers.reanalyse(take); else if (act === 'del') handlers.remove(take);
+          if (act === 'csv') handlers.rowCsv(take); else if (act === 'paket') handlers.paket(take); else if (act === 'wav') handlers.downloadWav(take); else if (act === 're') handlers.reanalyse(take); else if (act === 'del') handlers.remove(take);
         });
       });
     });
@@ -525,8 +525,27 @@
     return esc(a.kernelVersion || '?') + ' (' + (wann ? esc(wann) : 'Zeitpunkt unbekannt') + ')';
   }
 
+  /* Stichpunkte zum Take (Formular) im Detail: aktuelle Fassung in den Feldern, frühere Fassungen lesbar darunter. Werte sind
+     Nutzereingaben, ggf. aus einer importierten Sicherung: maskiert. */
+  var HALTUNGEN = ['', 'stehend', 'sitzend gerade', 'sitzend', 'liegend', 'gehend', 'frei'];
+  var JA_NEIN = ['offen', 'ja', 'nein'];
+  function angabenAktuell(take) {
+    var a = take.angaben || {};
+    return { titel: a.titel != null ? a.titel : (take.label || ''), haltung: a.haltung || '', ort: a.ort || '', kette: a.kette || '', gefuehl: a.gefuehl || '',
+      notiz: a.notiz != null ? a.notiz : (take.comment || ''), biphonation: a.biphonation || 'offen', periodenverdopplung: a.periodenverdopplung || 'offen', zeit: a.zeit || null };
+  }
+  function auswahl(id, werte, wert, texte) {
+    return '<select id="' + id + '">' + werte.map(function (v) { return '<option value="' + esc(v) + '"' + (v === wert ? ' selected' : '') + '>' + esc(texte ? texte(v) : (v || '– nicht angegeben')) + '</option>'; }).join('') + '</select>';
+  }
+  function fassungText(a) {
+    var t = [];
+    ['titel', 'haltung', 'ort', 'kette', 'gefuehl', 'notiz'].forEach(function (k) { if (a && a[k]) t.push(k + ' „' + esc(a[k]) + '“'); });
+    if (a && a.biphonation && a.biphonation !== 'offen') t.push('Biphonation ' + esc(a.biphonation));
+    if (a && a.periodenverdopplung && a.periodenverdopplung !== 'offen') t.push('Periodenverdopplung ' + esc(a.periodenverdopplung));
+    return (a && a.zeit ? esc(dateShort(a.zeit)) : 'Zeitpunkt unbekannt') + ': ' + (t.join(', ') || 'keine Angaben');
+  }
   function renderDetail(el, take, series, refs, hasAudio, handlers) {
-    var s = take.summary || {}, old = take.analysis && take.analysis.kernelVersion !== D.VERSION;
+    var s = take.summary || {}, old = take.analysis && take.analysis.kernelVersion !== D.VERSION, ang = angabenAktuell(take), fassungen = take.angabenVersionen || [];
     // Eine Referenz gilt nur unter gleicher Rechenweise; app.js sagt, ob dieser Take jetzt vergleichbar ist.
     var uv = (handlers && typeof handlers.unvergleichbar === 'function') ? handlers.unvergleichbar(take) : '';
     var intents = [''].concat(V.CENTROIDS.map(function (c) { return c.cls; }));
@@ -536,17 +555,28 @@
       '<div class="small muted">' + esc(dateShort(take.createdAt)) + ' · ' + esc(take.deviceLabel || '') + ' · ' + fmt(take.sampleRate) + ' Hz · Kern ' + esc(take.analysis && take.analysis.kernelVersion || '?') + (old ? ' <span class="tag rust">älterer Kern</span>' : '') + (s.floorSource === 'calibration' ? ' · kalibriert' : ' · <span class="rust">Rauschboden ' + (s.floorSource === 'unknown' ? 'unbekannt' : 'geschätzt') + '</span>') + '</div>' +
       '<div class="small">' + kontextZeile(take) + '</div>' +
       (A.lueckenhaft(take) ? '<div class="small rust">' + esc(lueckenText(take)) + '</div>' : '') +
-      '<div class="row"><label>Bezeichnung <input type="text" id="d-label" value="' + esc(take.label) + '" size="24"></label>' +
-      '<label>Vokalabsicht <select id="d-intent">' + intents.map(function (v) { return '<option value="' + esc(v) + '"' + (v === (take.vowelIntent || '') ? ' selected' : '') + '>' + (v ? '/' + esc(v) + '/' : '–') + '</option>'; }).join('') + '</select></label>' +
-      '<label>Einsing-Status <select id="d-warmup">' +
+      '<div class="small muted">ID <span class="mono">' + esc(take.id) + '</span>' + (take.startedAt ? ' · Start ' + esc(take.timeLocal || '') + ' · Ende ' + esc(take.timeLocalEnd || '') : '') + '</div>' +
+      '<div class="formular">' +
+      '<label for="d-label">Titel <span class="pflicht">Pflicht</span></label><input type="text" id="d-label" value="' + esc(ang.titel) + '">' +
+      '<label for="d-intent">Vokalabsicht <span class="optional">optional</span></label><select id="d-intent">' + intents.map(function (v) { return '<option value="' + esc(v) + '"' + (v === (take.vowelIntent || '') ? ' selected' : '') + '>' + (v ? '/' + esc(v) + '/' : '–') + '</option>'; }).join('') + '</select>' +
+      '<label for="d-haltung">Haltung <span class="optional">optional</span></label>' + auswahl('d-haltung', HALTUNGEN, ang.haltung) +
+      '<label for="d-ort">Ort <span class="optional">optional</span></label><input type="text" id="d-ort" value="' + esc(ang.ort) + '">' +
+      '<label for="d-kette">Kette-Zusatz <span class="optional">optional</span></label><input type="text" id="d-kette" value="' + esc(ang.kette) + '" placeholder="Hülle, Kabel, Abstand, Mikro">' +
+      '<label for="d-gefuehl">Gefühl <span class="optional">optional</span></label><input type="text" id="d-gefuehl" value="' + esc(ang.gefuehl) + '">' +
+      '<label for="d-comment">Notiz <span class="optional">optional</span></label><textarea id="d-comment">' + esc(ang.notiz) + '</textarea>' +
+      '<label for="d-biphonation">Biphonation manuell <span class="optional">optional</span></label>' + auswahl('d-biphonation', JA_NEIN, ang.biphonation, function (v) { return v; }) +
+      '<label for="d-perioden">Periodenverdopplung manuell <span class="optional">optional</span></label>' + auswahl('d-perioden', JA_NEIN, ang.periodenverdopplung, function (v) { return v; }) +
+      '<label for="d-warmup">Einsing-Status <span class="optional">optional</span></label><select id="d-warmup">' +
         [''].concat(Object.keys(WARMUP_TEXT)).map(function (v) { return '<option value="' + esc(v) + '"' + (v === ((take.sitzung && take.sitzung.warmup) || '') ? ' selected' : '') + '>' + (v ? esc(WARMUP_TEXT[v]) : '– nicht angegeben') + '</option>'; }).join('') +
-      '</select></label>' +
-      '<label>seit (min) <input type="number" id="d-warmup-min" min="0" max="600" step="1" size="4" value="' + (take.sitzung && take.sitzung.warmupMin != null ? esc(String(take.sitzung.warmupMin)) : '') + '"></label>' +
-      '<button id="d-save">Speichern</button></div>' +
-      '<label>Kommentar <textarea id="d-comment">' + esc(take.comment || '') + '</textarea></label></div>' +
+      '</select>' +
+      '<label for="d-warmup-min">Minuten seit Einsingbeginn <span class="optional">optional</span></label><input type="number" id="d-warmup-min" min="0" max="600" step="1" value="' + (take.sitzung && take.sitzung.warmupMin != null ? esc(String(take.sitzung.warmupMin)) : '') + '">' +
+      '</div>' +
+      '<div class="row"><button id="d-save">Speichern (neue Fassung)</button><span class="small muted">' + (ang.zeit ? 'Stand der Angaben ' + esc(dateShort(ang.zeit)) : 'Angaben ohne Zeitstempel (älterer Take)') + (fassungen.length ? ' · ' + fassungen.length + (fassungen.length === 1 ? ' frühere Fassung' : ' frühere Fassungen') : '') + '</span></div>' +
+      (fassungen.length ? '<details class="small muted"><summary>Frühere Fassungen der Angaben</summary><ul class="fassungen">' + fassungen.slice().reverse().map(function (a) { return '<li>' + fassungText(a) + '</li>'; }).join('') + '</ul></details>' : '') +
+      '</div>' +
       '<div class="panel">' + summaryGrid(s, take) + '</div>' +
       '<div class="panel"><canvas id="d-lanes" height="420"></canvas><div id="d-hover" class="mono small muted hover-zeile">Maus über die Spuren bewegen.</div></div>' +
-      '<div class="panel actions"><button id="d-frames">Rahmen-CSV</button><button id="d-row">CSV-Zeile</button>' + (hasAudio ? '<button id="d-wav">WAV</button><button id="d-re">Neu analysieren (Kern ' + esc(D.VERSION) + ')</button>' : '<span class="small muted">kein Audio gespeichert — Neu-Analyse nicht möglich</span> ') +
+      '<div class="panel actions"><button id="d-frames">Rahmen-CSV</button><button id="d-row">CSV-Zeile</button><button id="d-paket" title="ZIP: WAV, take.json, frames.csv, ereignisse.csv">Paket</button><button id="d-ablegen" title="take.json, frames.csv.gz, ereignisse.csv nach data/takes/<id>/ im privaten Repo">Ins Repo</button>' + (hasAudio ? '<button id="d-wav">WAV</button><button id="d-re">Neu analysieren (Kern ' + esc(D.VERSION) + ')</button>' : '<span class="small muted">kein Audio gespeichert — Neu-Analyse nicht möglich</span> ') +
       (uv ? '<span class="small muted">Nicht als Referenz wählbar — anders gerechnet als jetzt eingestellt: ' + esc(uv) + '.</span> '
         : A.lueckenhaft(take) ? '<span class="small muted">Nicht als Referenz wählbar — Signallücke im Take.</span> '
         : Object.keys(s.perVowel || {}).map(function (k) { return s.perVowel[k].bestSegment ? '<button data-pin="' + esc(k) + '">Als Referenz für /' + esc(k) + '/ anpinnen</button>' : ''; }).join('')) +
@@ -563,18 +593,22 @@
     });
     el.querySelector('#d-save').addEventListener('click', function () {
       var wm = el.querySelector('#d-warmup-min').value.trim(), n = wm === '' ? null : Number(wm);
+      var q = function (id) { return el.querySelector(id).value; };
       handlers.saveEdit(take, {
-        label: el.querySelector('#d-label').value.trim(), vowelIntent: el.querySelector('#d-intent').value,
-        comment: el.querySelector('#d-comment').value, warmup: el.querySelector('#d-warmup').value,
-        warmupMin: (n != null && isFinite(n) && n >= 0) ? n : null
+        label: q('#d-label').trim(), vowelIntent: q('#d-intent'),
+        comment: q('#d-comment'), warmup: q('#d-warmup'),
+        warmupMin: (n != null && isFinite(n) && n >= 0) ? n : null,
+        angaben: { titel: q('#d-label').trim(), haltung: q('#d-haltung'), ort: q('#d-ort'), kette: q('#d-kette'), gefuehl: q('#d-gefuehl'), notiz: q('#d-comment'), biphonation: q('#d-biphonation'), periodenverdopplung: q('#d-perioden') }
       });
     });
     el.querySelector('#d-frames').addEventListener('click', function () { handlers.frameCsv(take, series); });
     el.querySelector('#d-row').addEventListener('click', function () { handlers.rowCsv(take); });
+    el.querySelector('#d-paket').addEventListener('click', function () { handlers.paket(take); });
+    el.querySelector('#d-ablegen').addEventListener('click', function () { handlers.ablegen(take); });
     if (hasAudio) { el.querySelector('#d-wav').addEventListener('click', function () { handlers.downloadWav(take); }); el.querySelector('#d-re').addEventListener('click', function () { handlers.reanalyse(take); }); }
     el.querySelectorAll('button[data-pin]').forEach(function (b) { b.addEventListener('click', function () { handlers.pinRef(b.getAttribute('data-pin'), take); }); });
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, teiltonText: teiltonText, rauschText: rauschText, rauschZusatz: rauschZusatz, hoheLage: hoheLage, RAUSCHANTEIL_TEXT: RAUSCHANTEIL_TEXT, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, H1C_BW_TEXT: H1C_BW_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, angabenAktuell: angabenAktuell, fassungText: fassungText, HALTUNGEN: HALTUNGEN, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, teiltonText: teiltonText, rauschText: rauschText, rauschZusatz: rauschZusatz, hoheLage: hoheLage, RAUSCHANTEIL_TEXT: RAUSCHANTEIL_TEXT, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, H1C_BW_TEXT: H1C_BW_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

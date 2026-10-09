@@ -168,7 +168,7 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
     clearInterval: h => { clearInterval(h); const i = intervalle.findIndex(x => x.h === h); if (i >= 0) intervalle.splice(i, 1); },
     confirm: () => true, alert() { }, crypto: { randomUUID: () => nodeCrypto.randomUUID() },
     Blob, URL, btoa, atob, Date: uhr.Date, devicePixelRatio: 1,
-    localStorage: webSpeicher(sp.web.local), sessionStorage: webSpeicher(sp.web.session), fetch: korpusAbruf, TextDecoder
+    localStorage: webSpeicher(sp.web.local), sessionStorage: webSpeicher(sp.web.session), fetch: korpusAbruf, TextDecoder, TextEncoder
   };
   sb.window = sb; sb.self = sb;
   vm.createContext(sb);
@@ -355,7 +355,7 @@ module.exports = async function (H) {
     busy = null;
     const C = await p.take(async () => {
       busy = p.st().busy;
-      p.st().settings.storeAudio = false; p.st().settings.audioFormat = 'f32';
+      p.st().settings.storeAudio = false; p.st().settings.audioFormat = 'i24';   // Vorgabe ist Float32; der Take behält f32
       p.klick('btn-mic'); await p.warte(() => !p.st().rec.active);
       p.el('mic-device').value = 'zweit';
       p.klick('btn-mic'); await p.warte(() => p.st().rec.active && p.st().rec.info.deviceLabel === 'Zweitgerät');
@@ -363,7 +363,7 @@ module.exports = async function (H) {
     });
     const audio = sp.d.audio.get(C.id);
     check('U1.9', 'Gerätewechsel und Audio-Einstellung während der Analyse: Take behält Gerät und Audioablage seiner Aufnahme',
-      busy === true && C.deviceLabel === 'Testmikrofon' && C.deviceId === 'standard' && C.hasAudio === true && !!audio && audio.format === 'i16',
+      busy === true && C.deviceLabel === 'Testmikrofon' && C.deviceId === 'standard' && C.hasAudio === true && !!audio && audio.format === 'f32' && C.audioFormat === 'f32',
       'Analyse lief während des Wechsels=' + busy + ' | Gerät ' + C.deviceLabel + ' (' + C.deviceId + ') | hasAudio=' + C.hasAudio + ' Audio ' + (audio ? audio.format : 'fehlt'));
     p.schliessen();
   } catch (e) { check('U1.7', 'Ablauf Eingaben während der Analyse läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
@@ -925,6 +925,83 @@ module.exports = async function (H) {
       && /data-pin="a"/.test(dv.innerHTML) && !/data-pin/.test(dn.innerHTML) && /Nicht als Referenz wählbar.*Kern 2\.9\.0 statt 3\.0\.0/.test(dn.innerHTML) && /title="Kern 2\.9\.0 statt 3\.0\.0">anders gerechnet/.test(ln2.innerHTML),
       'Bestes Segment „' + best.v + '“ | „' + va.k + '“ = „' + va.v + '“ | Pin-Knopf vergleichbar ' + /data-pin="a"/.test(dv.innerHTML) + ', unvergleichbar ' + /data-pin/.test(dn.innerHTML));
   } catch (e) { check('U3.21', 'Ablauf Anzeige Referenzen läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 2).join(' | ')); }
+
+  /* ---------- U4 · Chronik-Standard Stufe 1 in der Seite: Take-ID, Startzeit, Formular mit Fassungen, Ablage des Pakets ---------- */
+  try {
+    const uhr = uhrNeu(Date.parse('2026-10-09T01:00:30+02:00')), sp = speicherNeu();
+    let p = await seiteOeffnen(sp, uhr, SIG, SR);
+    p.kalibriert('cal-S1'); await p.mikrofon();
+    p.el('take-label').value = 'Stand by Me'; p.el('take-haltung').value = 'stehend'; p.el('take-ort').value = 'Küche'; p.el('take-kette').value = 'Hülle B';
+    p.el('take-gefuehl').value = 'wach'; p.el('take-comment').value = 'leise'; p.el('take-biphonation').value = 'nein'; p.el('take-perioden').value = '';
+    const t0 = uhr.jetzt();
+    const A = await p.take(null, 2500);
+    const d = new Date(t0), soll = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + '-' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + '-stand-by-me';
+    const felder = ['take-label', 'take-haltung', 'take-ort', 'take-kette', 'take-gefuehl', 'take-comment', 'take-biphonation', 'take-perioden'].map(id => p.el(id).value).join('|');
+    const zuletzt = sp.d.meta.get('formularZuletzt');
+    check('U4.1', 'Take-ID aus Startzeit und Titel; Start vor Ende um die Singdauer; Wanduhr des Starts; Audio-Format am Take; Formular gespeichert mit Zeitstempel, offene Angabe „offen“',
+      !!A && A.id === soll && A.schemaVersion === 2 && Date.parse(A.endedAt) - Date.parse(A.startedAt) === 2500 && A.createdAt === A.endedAt && A.timeLocal === String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+      && A.audioFormat === 'f32' && A.angaben && A.angaben.titel === 'Stand by Me' && A.angaben.haltung === 'stehend' && A.angaben.kette === 'Hülle B' && A.angaben.biphonation === 'nein' && A.angaben.periodenverdopplung === 'offen'
+      && A.angaben.zeit === A.endedAt && Array.isArray(A.angabenVersionen) && A.angabenVersionen.length === 0 && A.label === 'Stand by Me' && A.comment === 'leise',
+      (A ? A.id + ' (soll ' + soll + ') Start ' + A.startedAt + ' Ende ' + A.endedAt + ' ' + JSON.stringify(A.angaben) : 'kein Take'));
+    check('U4.2', 'Nach dem Take: Titel, Gefühl, Notiz geleert, manuelle Angaben „offen“; Haltung, Ort und Kette bleiben und sind gemerkt',
+      felder === '|stehend|Küche|Hülle B|||offen|offen' && !!zuletzt && zuletzt.haltung === 'stehend' && zuletzt.ort === 'Küche' && zuletzt.kette === 'Hülle B', felder + ' | ' + JSON.stringify(zuletzt));
+    // Gleiche Minute, gleicher Titel: -2. Dann ohne Titel: ohne-titel und Vorgabebezeichnung.
+    p.el('take-label').value = 'Stand by Me';
+    const B = await p.take(null, 1500);
+    p.el('take-label').value = '';
+    const Cc = await p.take(null, 1500);
+    check('U4.3', 'Gleiche Minute, gleicher Titel: ID mit -2; ohne Titel: „ohne-titel“ und Vorgabebezeichnung aus Code und Zeit',
+      !!B && B.id === soll + '-2' && !!Cc && /-ohne-titel$/.test(Cc.id) && /^C \d{1,2}\.\d{1,2}\. \d\d:\d\d$/.test(Cc.label), (B && B.id) + ' | ' + (Cc && Cc.id) + ' „' + (Cc && Cc.label) + '“');
+    // Nachtrag im Detail: neue Fassung, die alte bleibt; unverändertes Speichern legt keine Fassung an.
+    p.sb.VAREAPP.handlers.saveEdit(A, { label: 'Stand by Me', vowelIntent: 'a', comment: 'leise, dann lauter', warmup: '', warmupMin: null,
+      angaben: { titel: 'Stand by Me', haltung: 'sitzend', ort: 'Küche', kette: 'Hülle B', gefuehl: 'wach', notiz: 'leise, dann lauter', biphonation: 'nein', periodenverdopplung: 'ja' } });
+    await p.warte(() => /Gespeichert/.test(p.st().statusEl ? p.st().statusEl.textContent : ''), 5000);
+    const A2 = sp.d.takes.get(A.id);
+    uhr.vor(1000);
+    p.sb.VAREAPP.handlers.saveEdit(A2, { label: 'Stand by Me', vowelIntent: 'a', comment: 'leise, dann lauter', warmup: '', warmupMin: null,
+      angaben: { titel: 'Stand by Me', haltung: 'sitzend', ort: 'Küche', kette: 'Hülle B', gefuehl: 'wach', notiz: 'leise, dann lauter', biphonation: 'nein', periodenverdopplung: 'ja' } });
+    await p.ruhe(50);
+    const A3 = sp.d.takes.get(A.id);
+    check('U4.4', 'Nachtrag im Detail: neue Fassung mit Zeitstempel, alte Fassung bleibt lesbar; Titel und Notiz auch in label/comment; gleiche Angaben noch einmal gespeichert = keine neue Fassung',
+      !!A2 && A2.angaben.haltung === 'sitzend' && A2.angaben.periodenverdopplung === 'ja' && A2.angaben.notiz === 'leise, dann lauter' && A2.comment === 'leise, dann lauter' && A2.angabenVersionen.length === 1 && A2.angabenVersionen[0].haltung === 'stehend' && A2.angabenVersionen[0].zeit === A.endedAt
+      && Date.parse(A2.angaben.zeit) > Date.parse(A.angaben.zeit) && !!A3 && A3.angabenVersionen.length === 1 && A3.angaben.zeit === A2.angaben.zeit,
+      A2 ? 'Fassungen ' + A2.angabenVersionen.length + ' → ' + (A3 && A3.angabenVersionen.length) + ', aktuell ' + JSON.stringify(A2.angaben) : 'Take fehlt');
+    // Ablage: ohne Token wartet das Paket in der Warteschlange — drei Dateien je Take unter data/takes/<id>/, dazu der Hinweis.
+    const offen = sp.d.meta.get('ablageOffen') || [], pfade = offen.map(x => x.pfad), vonA = pfade.filter(x => x.indexOf('data/takes/' + A.id + '/') === 0);
+    const inhaltA = offen.filter(x => x.pfad.indexOf('data/takes/' + A.id + '/') === 0);
+    const tj = inhaltA.find(x => /take\.json$/.test(x.pfad)), fr = inhaltA.find(x => /frames\.csv(\.gz)?$/.test(x.pfad)), er = inhaltA.find(x => /ereignisse\.csv$/.test(x.pfad));
+    let tjo = null; try { tjo = JSON.parse(tj.inhalt); } catch (e) { }
+    check('U4.5', 'Ablage des Pakets: je Take drei Dateien unter data/takes/<id>/ (take.json, frames.csv oder .gz, ereignisse.csv) in der Warteschlange, Hinweis unter der Kalibrierung nennt die Takes; take.json trägt ID, Kette und Formular',
+      vonA.length === 3 && pfade.filter(x => x.indexOf('data/takes/' + B.id + '/') === 0).length === 3 && pfade.filter(x => x.indexOf('data/takes/' + Cc.id + '/') === 0).length === 3 && !!tj && !!fr && !!er
+      && !!tjo && tjo.id === A.id && tjo.kette.geraet === 'Testmikrofon' && tjo.angaben.titel === 'Stand by Me' && (fr.inhalt ? /^t,voiced,gate,vowel,f0_b,/.test(fr.inhalt) : !!fr.inhaltB64) && /^t,dauer_s,von_hz/.test(er.inhalt)
+      && /Take .* warten auf die Ablage/.test(p.el('ablage-status').textContent),
+      pfade.join(' ') + ' | ' + p.el('ablage-status').textContent);
+    // Verbinden: alle Dateien gehen hinaus (PUT), die Warteschlange ist leer.
+    const puts = [];
+    const altFetch = p.sb.fetch;
+    p.sb.fetch = (url, o) => { if (o && o.method === 'PUT') { puts.push({ url, body: JSON.parse(o.body) }); return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve({}) }); } return korpusAbruf(url, o); };
+    await anmelden(p, false);
+    await p.warte(() => (sp.d.meta.get('ablageOffen') || []).length === 0, 10000);
+    p.sb.fetch = altFetch;
+    const urlsA = puts.map(x => x.url).filter(u => u.indexOf('/contents/data/takes/' + A.id + '/') > 0);
+    check('U4.6', 'Nach dem Verbinden: jede Datei als PUT an die Contents-API unter data/takes/<id>/, mit Nachricht des Takes; Warteschlange leer, Anzeige meldet „abgelegt“ mit den Takes',
+      puts.length === 9 && urlsA.length === 3 && puts.every(x => x.body.branch === 'main' && /^Take /.test(x.body.message) && typeof x.body.content === 'string') && (sp.d.meta.get('ablageOffen') || []).length === 0 && /abgelegt/i.test(p.el('ablage-status').textContent) && p.el('ablage-status').textContent.indexOf(A.id) > 0,
+      puts.length + ' PUTs | ' + p.el('ablage-status').textContent.slice(0, 160));
+    // Einstellung aus: kein Paket in die Warteschlange.
+    p.st().settings.ablageTakes = false;
+    p.el('take-label').value = 'Ohne Ablage';
+    const Dd = await p.take(null, 1500);
+    check('U4.7', 'Einstellung „Paket ins Repo“ aus: der Take wird gespeichert, nichts geht in die Warteschlange', !!Dd && (sp.d.meta.get('ablageOffen') || []).length === 0 && puts.length === 9, (Dd && Dd.id) + ' | offen ' + (sp.d.meta.get('ablageOffen') || []).length);
+    // IDs werden nie wiedervergeben: Take löschen, gleiche Minute, gleicher Titel → -2 statt der alten ID.
+    p.sb.VAREAPP.handlers.remove(Dd);
+    await p.warte(() => !sp.d.takes.has(Dd.id), 3000);
+    p.el('take-label').value = 'Ohne Ablage';
+    const Ee = await p.take(null, 1500);
+    check('U4.8', 'Nach dem Löschen eines Takes bekommt ein neuer Take in derselben Minute mit demselben Titel nicht dessen ID (Gedächtnis idsVergeben)', !!Ee && Ee.id !== Dd.id && Ee.id === Dd.id + '-2' && (sp.d.meta.get('idsVergeben') || []).indexOf(Dd.id) >= 0, (Dd && Dd.id) + ' → ' + (Ee && Ee.id));
+    // Dateinamen der Downloads = ID.
+    const n0 = p.sb.VAREAPP.handlers.rowCsv.length; void n0;
+    p.schliessen();
+  } catch (e) { check('U4.0', 'Ablauf Chronik-Standard Stufe 1 läuft durch', false, String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
 
   check('U1.0', 'app.js: keine Ausnahme in den nachgespielten Abläufen', fehler.length === 0, fehler.slice(0, 3).join(' || '));
   process.removeListener('unhandledRejection', aufFehler);
