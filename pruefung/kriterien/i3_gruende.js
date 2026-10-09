@@ -205,7 +205,7 @@ module.exports = async function (H) {
       localStorage: leer(), sessionStorage: leer(), fetch: () => Promise.reject(new Error('kein Netz')), TextDecoder };
     ab.window = ab; ab.self = ab;
     vm.createContext(ab);
-    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
+    for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
     ab.VARESTORE = store; ab.VARERECORDER = { createRecorder: () => rec, listDevices: () => P([]) };
     vm.runInContext(quelle('app.js'), ab, { filename: 'app.js' });
     const st = ab.VAREAPP.state;
@@ -270,7 +270,7 @@ module.exports = async function (H) {
     // Hover im Detail: dieselben Gründe aus den Masken der Serie, ungültige Formanten und ΔF3–4 in Rost.
     const sb = { console: { log() { }, warn() { }, error() { } }, devicePixelRatio: 1 };
     sb.self = sb; sb.window = sb; vm.createContext(sb);
-    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+    for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
     const CHR = sb.VARECHRONIK, bad = [], zaehl = {};
     let geprueft = 0;
     /* Seit B2 trägt die Serie die Fensterzahl (nWin): „nur in 2 Fenstern“ steht dann auch neben anderen Gründen, wie
@@ -429,7 +429,7 @@ module.exports = async function (H) {
     const z2 = (v, dec) => (typeof v === 'number' && isFinite(v) ? v : -99).toFixed(dec);
     const sb = { console: { log() { }, warn() { }, error() { } }, devicePixelRatio: 1 };
     sb.self = sb; sb.window = sb; vm.createContext(sb);
-    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+    for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
     const CHR = sb.VARECHRONIK;
     const El = function () { this.innerHTML = ''; };
     El.prototype.querySelector = function () { return { addEventListener() { }, value: '', hidden: false, getContext: () => leinwand().cv.getContext() }; };

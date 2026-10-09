@@ -53,7 +53,7 @@ module.exports = async function (H) {
   let st = null, defaults = null;
   try {
     vm.createContext(ab);
-    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
+    for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
     ab.VARESTORE = store; ab.VARERECORDER = { createRecorder: () => rec, listDevices: () => P([]) };
     vm.runInContext(quelle('app.js'), ab, { filename: 'app.js' });
     st = ab.VAREAPP.state; defaults = ab.VAREAPP.SETTINGS_DEFAULT;

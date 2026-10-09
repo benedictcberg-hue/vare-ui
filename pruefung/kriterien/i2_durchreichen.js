@@ -260,7 +260,7 @@ module.exports = async function (H) {
   const chronikSb = () => {
     const sb = { console: { log() { }, warn() { }, error() { } }, devicePixelRatio: 1 };
     sb.self = sb; sb.window = sb; vm.createContext(sb);
-    for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+    for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
     return sb;
   };
   const sb = chronikSb(), CHR = sb.VARECHRONIK, COL = CHR.COL;
@@ -434,7 +434,7 @@ module.exports = async function (H) {
     const bad = [], belege = [];
     try {
       vm.createContext(ab);
-      for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
+      for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), ab, { filename: f });
       ab.VARESTORE = store; ab.VARERECORDER = { createRecorder: () => rec, listDevices: () => P([]) };
       vm.runInContext(quelle('app.js'), ab, { filename: 'app.js' });
       const st = ab.VAREAPP.state;

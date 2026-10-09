@@ -5,6 +5,9 @@
   'use strict';
   var D = (typeof module !== 'undefined' && module.exports) ? require('./dsp.js') : root.VAREDSP;
   var V = (typeof module !== 'undefined' && module.exports) ? require('./vowel.js') : root.VAREVOWEL;
+  /* Hochband 1.0 (hochband.js, eigene Version neben dem Kern): Teiltonstruktur 4–6,5 kHz aus den Abtastwerten in Geräterate.
+     Fehlt das Modul (ältere Seite ohne hochband.js), wird es nicht gerechnet: summary.hochband trägt dann den Grund, kein Wert. */
+  var HB = (typeof module !== 'undefined' && module.exports) ? require('./hochband.js') : (root.VAREHOCHBAND || null);
 
   var DEFAULTS = { hopS: 0.010, floorDb: null, gate: null, spreadMaxHz: D.SPREAD_MAX_HZ, chunk: 40, yieldMs: 0 };
   var GATE_CODE = { pause: 0, uebergang: 1, stabil: 2 };
@@ -133,9 +136,23 @@
       shrBoden: f(), fensterPegelDb: f(), fensterF0Lo: f(), fensterF0Hi: f(), teiltonHz: f(), huellAbstandDb: f(), fensterRauschAp: f(), fensterRauschHochDb: f(),
       f0Grund: b(), f0Korrektur: b(), shrGrund: b(), d34Grund: b(), d45Grund: b(), sfrGrund: b(), cppGrund: b(),
       valid: b(), slotUnsure: b(), slotVerschmolzen: b(), slotTeilton: b(), slotWechsel: b(), rauschBoden: b(), nPeaks: b(),
+      /* Hochband 1.0 je stimmhaftem Rahmen (hochband.js rahmen): Linie−Zwischenraum 4–6,5 kHz (hbLz) und 2,4–3,2 kHz (sfLz),
+         Hochband-Linien und -Zwischenraum gegen die Linien 300–2000 Hz (hbStimme, hbZw), sfStimme, Zwischenraum im Stimmband
+         (zwLo), Kamm-Kontrast und feiner Grundton, Hochband über dem Boden (hbSnr), Rahmenpegel des 80-ms-Fensters (hbPegel);
+         hbGatter = Bits aus hochband.js GATTER (gerechnet, laut, Kern, SNR, Grundton sicher, Kernrahmen). Serien ohne diese
+         Felder stammen aus der Zeit vor dem Hochband: dort ist nichts gerechnet (CSV −99). */
+      hbLz: f(), sfLz: f(), hbStimme: f(), hbZw: f(), sfStimme: f(), zwLo: f(), hbKamm: f(), hbF0Fein: f(), hbSnr: f(), hbPegel: f(), hbGatter: b(),
       gate: b(), flags: new Uint16Array(n), nWin: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
     return s;
+  }
+  var HB_FELDER = ['hbLz', 'sfLz', 'hbStimme', 'hbZw', 'sfStimme', 'zwLo', 'hbKamm', 'hbF0Fein', 'hbSnr', 'hbPegel'];
+  // Hochband-Werte eines Rahmens in die Serie (r aus hochband.js rahmen, null = nicht gerechnet: NaN, Gatter 0).
+  function fillHochband(series, i, r) {
+    if (!r) { for (var k = 0; k < HB_FELDER.length; k++) series[HB_FELDER[k]][i] = NaN; series.hbGatter[i] = 0; return; }
+    series.hbLz[i] = r.hbLz; series.sfLz[i] = r.sfLz; series.hbStimme[i] = r.hbStimme; series.hbZw[i] = r.hbZw; series.sfStimme[i] = r.sfStimme;
+    series.zwLo[i] = r.zwLo; series.hbKamm[i] = r.kamm; series.hbF0Fein[i] = r.f0Fein; series.hbSnr[i] = r.snr; series.hbPegel[i] = r.pegel;
+    series.hbGatter[i] = HB ? HB.GATTER.GERECHNET : 1;
   }
 
   // Zahl der Fenster, in denen Formant k+1 im Rahmen i stand; null, wenn die Serie sie nicht kennt (ältere Fassung).
@@ -437,6 +454,23 @@
       octaveCorrected: false, octaveAmbiguous: false, octaveUnterGrenze: false, f0Unsure: false, shrUnsure: false };
   }
 
+  /* Kennwerte des Hochbands (hochband.js kennwerte) über die gerechneten Rahmen; die Gatterbits gehen zurück in die Serie
+     (hbGatter). Immer ein Objekt mit allen Schlüsseln: ohne Modul oder ohne Rahmen tragen die Zahlen NaN und grund den Grund —
+     die CSV schreibt dann −99, nie eine erfundene Null. Dazu Boden (RMS der stillsten Blöcke, dBFS) und Geräterate, denn die
+     Bänder liegen in Hz fest und der Vergleich mit der Chronik (48 kHz) gilt nur bei gleicher Rate ohne Einschränkung. */
+  function hochbandZusammenfassung(series, R, idx, boden, sr) {
+    var k;
+    if (!HB) { k = { version: null, nRahmen: 0, nKernLaut: 0, hbLz: NaN, hbLzAnt3: NaN, hbStimme: NaN, hbZw: NaN, sfLz: NaN, sfStimme: NaN, zwLo: NaN, hbSnr: NaN, kamm: NaN, pegelMax: NaN, f0UnsureShare: NaN, verlauf: '', verlaufListe: [], grund: 'hochband.js nicht geladen' }; }
+    else if (!boden) { k = HB.leer(); k.grund = 'Aufnahme kürzer als ein Block (' + Math.round(HB.FENSTER_S * 1000) + ' ms)'; }
+    else {
+      var e = HB.kennwerte(R);
+      k = e.kennwerte;
+      for (var j = 0; j < idx.length; j++) series.hbGatter[idx[j]] = e.gatter[j];
+    }
+    k.bodenRmsDbfs = boden ? boden.rmsBoden : NaN; k.bodenBloecke = boden ? boden.nBloecke : 0; k.sampleRate = sr;
+    return k;
+  }
+
   /* Hauptaufruf. samples: Float32Array/Float64Array bei sr. Liefert Promise<{ summary, series, meta }>.
      onProgress(done, total) wird je Block gerufen; zwischen Blöcken gibt die Funktion den Faden frei.
      o.abbrechen (Funktion): liefert sie vor einem Block true, endet die Analyse ohne Ergebnis — das Promise
@@ -472,6 +506,11 @@
     else { var est = estimateFloor(ds, TSR, opts.hopS); floorDb = est.db; floorKnown = est.known; floorSource = est.known ? 'estimate' : 'unknown'; }
     var series = makeSeries(centres.length), inputs = [];
     var frameOpts = { align: 'centre', floorDb: floorDb, spreadMaxHz: opts.spreadMaxHz };
+    /* Hochband 1.0 aus den Abtastwerten in Geräterate (nicht aus ds: der Kern sieht nur bis 6 kHz). Erst der Rauschboden je Band
+       aus den stillsten Blöcken der ganzen Aufnahme, dann je stimmhaftem Rahmen das 80-ms-Fenster um die Rahmenmitte t (der Rahmen
+       der Chronik beginnt bei t; hier ist t die Fenstermitte des Kerns, also beginnt das Hochband-Fenster 40 ms davor). */
+    var hbBoden = null, hbW = 0, hbRahmen = [], hbIdx = [];
+    if (HB) { hbW = HB.fensterLaenge(sr); if (samples.length >= hbW) hbBoden = HB.boden(samples, sr); }
     var i = 0;
     return new Promise(function (resolve, reject) {
       function step() {
@@ -484,6 +523,9 @@
             inputs.push(inp);
             fillFrame(series, i, t, r);
             if (naht) series.flags[i] |= FLAG.NAHT;
+            var hr = (hbBoden && r.voiced) ? HB.rahmen(samples, sr, Math.round(t * sr - hbW / 2), r.f0, hbBoden.hb) : null;
+            fillHochband(series, i, hr);
+            if (hr) { hr.t = t; hr.sicher = !r.f0Unsure; hbRahmen.push(hr); hbIdx.push(i); }
           }
           if (onProgress) onProgress(i, centres.length);
           if (i < centres.length) { setTimeout(step, opts.yieldMs); return; }
@@ -507,9 +549,11 @@
             if (!fein) fein = spur;
             D.detectJumps(spur, opts.jumps || {}).forEach(function (e) { e.startS += ab; spruenge.push(e); });
           }
-          var meta = { hopS: opts.hopS, durationS: samples.length / sr, naehteS: naehte, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15 };
+          var meta = { hopS: opts.hopS, durationS: samples.length / sr, naehteS: naehte, floorDb: floorDb, floorSource: floorSource, floorKnown: floorKnown, sampleRate: sr, kernelVersion: D.VERSION, summaryVersion: SUMMARY_VERSION, gate: V.createGate(opts.gate || {}).opts, spreadMaxHz: opts.spreadMaxHz, windowsS: D.WINDOWS, orders: D.ORDERS, yinThresh: 0.15,
+            hochbandVersion: HB ? HB.VERSION : null };
           var summary = summarise(series, meta);
           summary.sfrByNote = sfrByNote;
+          summary.hochband = hochbandZusammenfassung(series, hbRahmen, hbIdx, hbBoden, sr);
           var stimmSek = summary.voicedShare * meta.durationS;
           var gehalten = spruenge.filter(function (e) { return e.art === 'gehalten'; });
           var kanten = spruenge.filter(function (e) { return e.art === 'kante'; });
@@ -693,7 +737,7 @@
   }
 
   var api = { bodenAusPegeln: bodenAusPegeln, DEFAULTS: DEFAULTS, FLAG: FLAG, GRUND: GRUND, CODE_UNBEKANNT: CODE_UNBEKANNT, codeAus: codeAus, textAus: textAus, GATE_CODE: GATE_CODE, AMBIG_MAX_SHARE: AMBIG_MAX_SHARE, SUMMARY_VERSION: SUMMARY_VERSION, analyseTake: analyseTake, applyGate: applyGate,
-    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, nahtStellen: nahtStellen, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, slotGrundAus: slotGrundAus, stats: stats };
+    indexFromCode: indexFromCode, nextCodeIndex: nextCodeIndex, CODES_GESPERRT: CODES_GESPERRT, lueckenhaft: lueckenhaft, nahtStellen: nahtStellen, summarise: summarise, segments: segments, estimateFloor: estimateFloor, normaliseSfr: normaliseSfr, computeRefs: computeRefs, unvergleichbar: unvergleichbar, aenderungen: aenderungen, makeSeries: makeSeries, nWinAus: nWinAus, slotGrundAus: slotGrundAus, stats: stats, HB_FELDER: HB_FELDER, fillHochband: fillHochband, hochbandZusammenfassung: hochbandZusammenfassung };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREANALYSIS = api;
 })(typeof self !== 'undefined' ? self : this);

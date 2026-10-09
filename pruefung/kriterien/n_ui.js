@@ -216,7 +216,7 @@ async function seiteNeu(browser, liefern, sr) {
   };
   sb.window = sb; sb.self = sb;
   vm.createContext(sb);
-  for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'storage.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+  for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'storage.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
   sb.VARERECORDER = recorderNeu(liefern, sr);
   vm.runInContext(quelle('app.js'), sb, { filename: 'app.js' });
   const st = () => sb.VAREAPP.state, S = sb.VARESTORE;
@@ -1138,7 +1138,7 @@ async function kriterienB3(H) {
   // Chronik wie im Browser in einer eigenen Umgebung.
   const csb = { console: { log() { }, warn() { }, error: aufFehler }, devicePixelRatio: 1 };
   csb.self = csb; csb.window = csb; vm.createContext(csb);
-  for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), csb, { filename: f });
+  for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), csb, { filename: f });
   const CHR = csb.VARECHRONIK;
   // Zeichenfläche, die jeden Aufruf mit der gerade gesetzten Füllfarbe mitschreibt.
   function leinwand() {

@@ -49,7 +49,19 @@
     ['windowS', 'sdF1Max', 'sdF2Max', 'minValidShare', 'f3MinHz', 'smooth', 'spreadMaxHz', 'hopS'].forEach(function (k) {
       if (typeof g[k] === 'number' && isFinite(g[k])) gatter[k] = g[k];
     });
-    return { marken: sauber, gatter: gatter, stand: typeof o.stand === 'string' ? o.stand : '', notiz: typeof o.notiz === 'string' ? o.notiz : '' };
+    /* Marken des Hochbands (Hochband 1.0, Tröte): marken.hb_lz und marken.sf_lz als Listen von { db, text } oder Zahlen, in dB,
+       −30 … +40. Sie kommen wie die ΔF3–4-Marken aus dem privaten Korpus (Perzentile der Chronik), nie aus dem Code. Fehlen sie, zeigt
+       die Kachel den Wert ohne Lage. */
+    var hochband = { hb_lz: [], sf_lz: [] };
+    ['hb_lz', 'sf_lz'].forEach(function (k) {
+      var liste = o.marken && Array.isArray(o.marken[k]) ? o.marken[k] : [];
+      for (var j = 0; j < liste.length; j++) {
+        var e = liste[j], db = (typeof e === 'number') ? e : (e && e.db);
+        if (typeof db !== 'number' || !isFinite(db) || db < -30 || db > 40) continue;
+        hochband[k].push({ db: db, text: (e && typeof e.text === 'string') ? e.text : '' });
+      }
+    });
+    return { marken: sauber, gatter: gatter, hochband: hochband, stand: typeof o.stand === 'string' ? o.stand : '', notiz: typeof o.notiz === 'string' ? o.notiz : '' };
   }
 
   /* Liest korpus.json aus dem privaten Repo. Liefert Promise<{marken, gatter, stand, notiz}>. */

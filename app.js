@@ -3,6 +3,7 @@
 (function () {
   'use strict';
   var D = window.VAREDSP, KO = window.VAREKORPUS, V = window.VAREVOWEL, A = window.VAREANALYSIS, C = window.VARECSV, W = window.VAREWAV, S = window.VARESTORE, K = window.VARECAL, R = window.VARERECORDER, CH = window.VARECHRONIK, Z = window.VAREZIP;
+  var HB = window.VAREHOCHBAND || null;   // Hochband 1.0 (Tröte); fehlt es, bleibt die Kachel leer
   var $ = function (id) { return document.getElementById(id); };
   var TSR = D.TARGET_SR, COL = CH.COL, MONO = CH.MONO;
 
@@ -32,7 +33,7 @@
     { key: 'ruhig', type: 'check', label: 'Ruhige Live-Anzeige: Median über 1 s, zweimal pro Sekunde, auf 10 Hz (aus = jeder Einzelrahmen mit allen Gründen, zur Fehlersuche)' }
   ];
 
-  var st = { takeStart: null, idsVergeben: {}, korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {}, liveBuf: [], ruhigZuletzt: 0 };
+  var st = { takeStart: null, idsVergeben: {}, korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {}, liveBuf: [], ruhigZuletzt: 0, hbBloecke: [], hbPegel: [], hbLauf: { start: NaN, letzt: -Infinity } };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -175,7 +176,7 @@
       $('notice-flags').hidden = !on.length;
       $('notice-flags').textContent = on.length ? 'Der Browser bearbeitet das Signal (' + on.join(', ') + ' aktiv). Diese Messungen sind dann nicht belastbar — anderes Gerät oder Browsereinstellung prüfen.' : '';
       $('btn-cal').disabled = false; updateTakeButton(); fillDevices();
-      st.rmsRing = []; st.hist = []; st.lastTick = 0; st.gate.reset();
+      st.rmsRing = []; st.hist = []; st.lastTick = 0; st.gate.reset(); hochbandReset();
       st.raf = requestAnimationFrame(tick);
     }).catch(function (e) { $('btn-mic').disabled = false; status('Mikrofon: ' + (e && e.message || e), true); });
   }
@@ -221,23 +222,67 @@
     var ds = D.resample(slice, sr, TSR), fl = floorNow();
     var fr = D.analyseAt(ds, TSR, ds.length - 1, { align: 'end', floorDb: fl.db, spreadMaxHz: st.settings.spreadMaxHz, wantSpectrum: true });
     st.rmsRing.push(fr.rmsDb); if (st.rmsRing.length > 250) st.rmsRing.shift();
-    var t = now / 1000;
+    var t = now / 1000, hb = hochbandLive(slice, sr, fr, t);
     var gs = st.gate.update({ t: t, voiced: fr.voiced, F1: fr.F[0], F2: fr.F[1], F3: fr.F[2], valid1: fr.valid[0], valid2: fr.valid[1], d34: fr.d34, d34valid: fr.d34valid });
     // Nur stimmhafte Rahmen in den Verlauf: dsp.js füllt F und valid auch in Pausen, und ein
     // Formantpunkt aus Raumgeräusch sah in der 20-s-Spur genauso aus wie ein Messwert.
     st.hist.push({ t: t, f2: fr.voiced ? fr.F[1] : NaN, f3: fr.voiced ? fr.F[2] : NaN,
       f0x2: fr.voiced ? 2 * fr.f0 : NaN, v2: fr.voiced && fr.valid[1], v3: fr.voiced && fr.valid[2], u0: !!(fr.voiced && fr.f0Unsure) });
     while (st.hist.length && st.hist[0].t < t - 20) st.hist.shift();
-    if (!st.settings.ruhig) { renderLive(fr, gs, fl); return; }
+    if (!st.settings.ruhig) { renderLive(fr, gs, fl, hb); return; }
     /* Ruhige Anzeige: Jeder Takt fließt in einen Puffer der letzten Sekunde (RUHIG_FENSTER_S); die Kacheln zeigen alle
        500 ms (RUHIG_TAKT_MS) den Median daraus. Ein Einzelrahmen, der für 40 ms kippt, ändert die Zahl nicht mehr. */
-    st.liveBuf.push({ t: t, fr: fr, score: gs.score, state: gs.state, reason: gs.reason });
+    st.liveBuf.push({ t: t, fr: fr, hb: hb, score: gs.score, state: gs.state, reason: gs.reason });
     while (st.liveBuf.length && st.liveBuf[0].t < t - RUHIG_FENSTER_S) st.liveBuf.shift();
     drawLevel(fr.rmsDb, fl.db, fl.src); drawHist();
     var zustand = gs.state === 'pause' ? 'pause' : 'stimme';
     if (now - st.ruhigZuletzt >= RUHIG_TAKT_MS || zustand !== st.ruhigZustand) { st.ruhigZuletzt = now; st.ruhigZustand = zustand; renderRuhig(gs, fl); }
   }
-  var STAT_KEYS = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'd34', 'd45', 'sfr', 'shr', 'cpp', 'h1h2', 'tube', 'floor'];
+  var STAT_KEYS = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'd34', 'd45', 'sfr', 'shr', 'cpp', 'h1h2', 'tube', 'troete', 'floor'];
+  /* ---------- Hochband 1.0 live („Tröte“) ---------- */
+  /* Je Takt ein Block der letzten 80 ms in Geräterate für den Boden-Ring (auch in Pausen: daraus kommt der Boden), bei stimmhaftem
+     Rahmen der Teiltonwert mit dem Grundton des Kerns (hochband.js rahmen). Gatter wie offline, mit dem, was live bekannt ist:
+     laut = innerhalb 12 dB unter dem 95. Perzentil der stimmhaften Rahmenpegel der letzten 20 s (500 Takte); Kern = seit mindestens
+     60 ms stimmhaft (eine Lücke über 45 ms beginnt einen neuen Lauf; das Ende eines Laufs kennt die Live-Anzeige nicht); Boden = die
+     leisesten 3 % der Blöcke der letzten 60 s (bodenAusBloecken), unbekannt, solange keine 5 Blöcke über −90 dBFS da sind — dann
+     steht „Boden unbekannt“, kein Wert gegen einen erfundenen Boden. Grundton unsicher (f0Unsure) zählt wie offline nicht. */
+  var HB_RING_BLOECKE = 1500, HB_RING_PEGEL = 500;
+  function hochbandReset() { st.hbBloecke = []; st.hbPegel = []; st.hbLauf = { start: NaN, letzt: -Infinity }; }
+  function hochbandLive(slice, sr, fr, t) {
+    if (!HB) return null;
+    var W = HB.fensterLaenge(sr), start = slice.length - W;
+    if (start < 0) return null;
+    var bl = HB.block(slice, sr, start);
+    if (bl) { st.hbBloecke.push(bl); if (st.hbBloecke.length > HB_RING_BLOECKE) st.hbBloecke.shift(); }
+    if (!fr.voiced) return null;
+    if (!(st.hbLauf.start >= 0) || t - st.hbLauf.letzt > HB.LUECKE_S) st.hbLauf.start = t;
+    st.hbLauf.letzt = t;
+    var boden = HB.bodenAusBloecken(st.hbBloecke), r = HB.rahmen(slice, sr, start, fr.f0, boden);
+    if (!r) return { lz: NaN, grund: 'Grundton außerhalb ' + HB.F0_MIN_HZ + '–' + HB.F0_MAX_HZ + ' Hz', ok: false };
+    st.hbPegel.push(r.pegel); if (st.hbPegel.length > HB_RING_PEGEL) st.hbPegel.shift();
+    var p95 = D.quantile(st.hbPegel, HB.LAUT_QUANTIL), h = { lz: r.hbLz, sfLz: r.sfLz, stimme: r.hbStimme, zisch: r.hbZw, pegel: r.pegel, snr: r.snr,
+      laut: r.pegel > p95 - HB.LAUT_DB, kern: t - st.hbLauf.start >= HB.RAND_S, bodenBekannt: isFinite(boden), snrOk: r.snr >= HB.SNR_MIN_DB, sicher: !fr.f0Unsure };
+    h.ok = h.laut && h.kern && h.bodenBekannt && h.snrOk && h.sicher;
+    h.grund = h.ok ? '' : hochbandGrund(h);
+    return h;
+  }
+  // Kurzgrund, warum ein Rahmen nicht zum Kern zählt (Reihenfolge wie die Gatter offline).
+  function hochbandGrund(h) {
+    if (!h) return 'kein Hochband';
+    if (h.grund && !isFinite(h.lz)) return h.grund;
+    if (!h.sicher) return 'Grundton unsicher';
+    if (!h.bodenBekannt) return 'Boden unbekannt';
+    if (!h.laut) return 'leise';
+    if (!h.kern) return 'Einsatz';
+    if (!h.snrOk) return 'im Rauschen';
+    return 'unsicher';
+  }
+  function vorz(v) { return (v >= 0 ? '+' : '') + fmt(v, 1); }
+  // Kacheltext: Linie−Zwischenraum, Lage zwischen den Korpusmarken, Pegel des Hochbands gegen das Stimmband.
+  function hochbandKachel(lz, stimme) {
+    var lage = CH.hochbandLage(lz, 'hb_lz');
+    return vorz(lz) + ' dB' + (lage ? ' · ' + lage.replace(/„|“/g, '') : '') + (isFinite(stimme) ? ' · Pegel ' + fmt(stimme, 0) + ' dB' : '');
+  }
   /* Alles, was eine Messung zeigt, sichtbar einfrieren — in einem Zug, damit es nicht wieder
      auseinanderläuft. Nach „Mikrofon stoppen“ und während der Kalibrierung blieben sonst die
      letzten Zahlen in Gold stehen, als würden sie weiter gemessen. */
@@ -384,6 +429,11 @@
     setStat('h1h2', h12.traegt ? fmt(h12.wert, 1) + ' · ' + (h12c.traegt ? fmt(h12c.wert, 1) : '–') + ' dB' + (h12c.traegt && artefakt ? ' · ' + CH.H1C_BW_TEXT : '') : '– · ' + h12.grund, !h12.traegt);
     var tube = ueberFenster(V, function (fr) { return D.tubeLength(fr.F, fr.valid).cm; }, function () { return true; });
     setStat('tube', tube.traegt ? fmt(tube.wert, 1) + ' cm' : '– (zu wenig stabile Formanten)', !tube.traegt);
+    // Tröte: Median von Linie−Zwischenraum über die Kernrahmen des Fensters, wenn sie die Mehrheit stellen; sonst der häufigste Grund.
+    var hbOk = [], hbSt = [], hbGr = [];
+    V.forEach(function (e) { var h = e.hb; if (h && h.ok && isFinite(h.lz)) { hbOk.push(h.lz); hbSt.push(h.stimme); } else hbGr.push(hochbandGrund(h)); });
+    if (hbOk.length / V.length >= RUHIG_ANTEIL && hbOk.length >= 2) setStat('troete', hochbandKachel(median(hbOk), median(hbSt)));
+    else setStat('troete', '– · ' + (haeufigster(hbGr) || 'unsicher'), true);
     $('live-hints').textContent = hintText();
     var cls = gs.state === 'stabil' ? gs.cls : null, ref = cls ? st.refs[cls] : null;
     if (cls) { var rz = CH.refZeile(cls, ref, aggScore, st.refsUebergangen[cls] || 0); $('live-ref').textContent = rz; $('live-ref').title = rz; }
@@ -391,7 +441,7 @@
     drawSpec(neu, null);
   }
 
-  function renderLive(fr, gs, fl) {
+  function renderLive(fr, gs, fl, hb) {
     drawLevel(fr.rmsDb, fl.db, fl.src);
     // Ein angenommener Boden ist kein Messwert: keine Rauschboden-Zahl, sondern die angenommene Stimmschwelle.
     if (fl.src === 'angenommen') setStat('floor', 'unbekannt · Stimmschwelle angenommen: ' + fmt(fl.db + 12, 1) + ' dBFS', true);
@@ -487,6 +537,9 @@
     hint.textContent = (fr.f0Unsure ? 'Grundton unsicher (' + CH.f0GrundText(fr.f0Grund, fr.f0Cep, fr.fensterF0Lo, fr.fensterF0Hi) + '): Note, F1/F0, Teiltonleiter, SHR und H1−H2 hängen an ihm. ' : '') + hinweis;
     var tl = D.tubeLength(fr.F, fr.valid);
     setStat('tube', isFinite(tl.cm) ? fmt(tl.cm, 1) + ' cm (ΔF ' + fmt(tl.dF) + ')' : '– (zu wenig stabile Formanten)', !isFinite(tl.cm));
+    // Tröte im Einzeltakt: der Wert des Rahmens; zählt er nicht zum Kern, steht er in Rost mit dem Grund.
+    if (hb && isFinite(hb.lz)) setStat('troete', hochbandKachel(hb.lz, hb.stimme) + (hb.ok ? '' : ' — ' + hb.grund), !hb.ok);
+    else setStat('troete', '– · ' + hochbandGrund(hb), true);
     var ref = cls ? st.refs[cls] : null;
     // Eine verwaiste Referenz hat keinen Wert: keine Zielmarke, keine Differenz, dafür der Grund.
     $('live-ref').textContent = CH.refZeile(cls, ref, gs.score, cls ? (st.refsUebergangen[cls] || 0) : 0);
@@ -1596,7 +1649,7 @@
     fehler.textContent = ''; stand.textContent = 'verbinde …'; knopf.disabled = true;
     return KO.laden(token).then(function (korpus) {
       st.korpus = korpus; st.token = token;
-      CH.setMarken(korpus.marken);
+      CH.setMarken(korpus.marken); CH.setHochbandMarken(korpus.hochband);
       if (merken !== null) KO.tokenSchreiben(token, !!merken);
       /* Der Korpus liefert die Ausgangswerte, überschreibt aber nichts, was hier am Regler
          verstellt wurde — sonst wäre jede Einstellung nach dem nächsten Neuladen wieder weg.
