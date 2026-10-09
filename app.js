@@ -250,7 +250,7 @@
   function setGateWord(state, cls, reason) {
     var el = $('gate-state'); el.className = state;
     el.textContent = state === 'pause' ? 'Pause' : state === 'uebergang' ? 'Übergang' : 'stabil /' + cls + '/';
-    $('gate-reason').textContent = reason || '';
+    $('gate-reason').textContent = reason || ''; $('gate-reason').title = reason || '';
   }
   /* Drei Zustände, nicht zwei: Rost und gestrichelt heißt „Messwert trägt nicht“. Ein Befund, der
      sicher gemessen ist und trotzdem Aufmerksamkeit braucht — F3 unter dem Zielwert, SHR über der
