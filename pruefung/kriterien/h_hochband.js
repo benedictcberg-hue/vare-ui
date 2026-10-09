@@ -1,7 +1,7 @@
-/* Kriterien HB — Hochband 1.0 („Tröte“, hochband.js): Teiltonstruktur 4–6,5 kHz nach vare_hochband.py.
+/* Kriterien HB — Hochband 1.1 („Tröte“, hochband.js): Teiltonstruktur 4–6,5 kHz nach vare_hochband.py; 1.1 mit Oktavprüfung im Kamm.
    HB1 Rechenvorschrift gegen eine unabhängige Nachrechnung (Masken über alle Teiltöne, Bandsummen, Normierung);
    HB2 Trennschärfe: Vokal mit F6/F7 gegen denselben Vokal ohne, Rauschen ohne Linien ≈ 0 dB;
-   HB3 feiner Grundton: Kamm findet den wahren Grundton innerhalb ±2 % um den Wert des Kerns, nicht darüber hinaus;
+   HB3 feiner Grundton: Kamm findet den wahren Grundton innerhalb ±2 % um den Wert des Kerns, nicht darüber hinaus; Oktavprüfung (f0/2, 2·f0);
    HB4 Gatter und Kennwerte: laut, Rand, Boden, Grundton unsicher, Mindestzahlen, Verlauf — gegen eine von Hand gebaute Rahmenliste;
    HB5 Rauschboden aus den stillsten Blöcken, digitale Stille ausgenommen;
    HB6 analyseTake: Serie, Zusammenfassung, CSV (beide Dialekte, Paketnamen) und take.json tragen das Hochband; Pausen ohne Wert;
@@ -68,6 +68,13 @@ module.exports = async function (H) {
     check('HB3', 'Kamm: Grundton des Kerns −1,5 … +1,8 % daneben → f0 fein innerhalb 0,15 % des wahren Werts (200,5 Hz)', !bad.length, bad.join('; ') || 'alle fünf Lagen');
     const weit = HB.teiltonRahmen(P, wahr * 1.04, SR, N);
     check('HB3', 'Kern 4 % daneben: der Kamm reicht nur ±2 %, f0 fein bleibt am Rand (≥ 2 % über dem wahren Wert) — der Kamm schärft, er korrigiert nicht', weit.f0Fein / wahr > 1.019, r2(weit.f0Fein));
+    // 1.1: Oktavprüfung — eine Oktave zu hoch (H2 als Grundton) oder zu tief gelesen, der Kamm findet den wahren Grundton
+    const rWahr = HB.teiltonOktav(P, wahr, SR, N), rHoch = HB.teiltonOktav(P, 2 * wahr, SR, N), rTief = HB.teiltonOktav(P, wahr / 2, SR, N), rOhne = HB.teiltonRahmen(P, 2 * wahr, SR, N);
+    check('HB3', 'Oktavprüfung: Grundton eine Oktave zu hoch → Kandidat f0/2 gewinnt (oktav 1), Linie−Zwischenraum wie beim wahren Grundton (±0,5 dB); ohne Prüfung fiele er um über 6 dB',
+      rWahr.oktav === 0 && rHoch.oktav === 1 && Math.abs((rHoch.hbLin - rHoch.hbZw) - (rWahr.hbLin - rWahr.hbZw)) < 0.5 && (rOhne.hbLin - rOhne.hbZw) < (rWahr.hbLin - rWahr.hbZw) - 6 && Math.abs(rHoch.f0Fein / wahr - 1) < 0.0015,
+      'oktav ' + rWahr.oktav + '/' + rHoch.oktav + ', hb_lz wahr ' + r1(rWahr.hbLin - rWahr.hbZw) + ', korrigiert ' + r1(rHoch.hbLin - rHoch.hbZw) + ', ohne Prüfung ' + r1(rOhne.hbLin - rOhne.hbZw) + ', f0 fein ' + r2(rHoch.f0Fein));
+    check('HB3', 'Oktavprüfung: Grundton eine Oktave zu tief → Kandidat 2·f0 gewinnt (oktav 2), Kamm um mehr als 6 dB besser', rTief.oktav === 2 && rTief.kamm > HB.teiltonRahmen(P, wahr / 2, SR, N).kamm + 6 && Math.abs(rTief.f0Fein / wahr - 1) < 0.0015, 'oktav ' + rTief.oktav + ', Kamm ' + r1(rTief.kamm) + ' vs ' + r1(HB.teiltonRahmen(P, wahr / 2, SR, N).kamm));
+    check('HB3', 'Oktavprüfung am Rand: f0/2 unter 60 Hz bzw. 2·f0 über 600 Hz werden nicht geprüft (rahmen() mit 100 Hz bzw. 350 Hz liefert oktav 0 oder den zulässigen Kandidaten, keine Ausnahme)', (function () { try { const a = HB.rahmen(sig, SR, 3000, 100, NaN), b = HB.rahmen(sig, SR, 3000, 350, NaN); return !!a && !!b && a.oktav !== 1 && b.oktav !== 2; } catch (e) { return false; } })(), '');
     check('HB3', 'Grundton außerhalb 60–600 Hz oder Fenster außerhalb des Signals: rahmen() liefert null', HB.rahmen(sig, SR, 3000, 50, NaN) === null && HB.rahmen(sig, SR, 3000, 650, NaN) === null && HB.rahmen(sig, SR, sig.length - 100, 200, NaN) === null && HB.rahmen(sig, SR, -1, 200, NaN) === null, '');
   } catch (e) { check('HB3', 'feiner Grundton läuft durch', false, kurz(e)); }
 
@@ -120,7 +127,7 @@ module.exports = async function (H) {
   try {
     const sil = noise(Math.round(0.4 * SR), 3e-4, 31), sig = concat([sil, vokal(196, FA67, BW67, 2.0, SR, 33, 3e-4), sil]);
     const r = await A.analyseTake(Float32Array.from(sig), SR, {}), s = r.series, h = r.summary.hochband, G = HB.GATTER;
-    check('HB6', 'analyseTake: summary.hochband mit Version 1.0, hb_lz > 3 dB, Anteil über 3 dB > 0,8, Kernrahmen ≥ 30, Verlauf „0-10s“, meta.hochbandVersion', h && h.version === '1.0' && h.hbLz > 3 && h.hbLzAnt3 > 0.8 && h.nKernLaut >= 30 && /^0-10s/.test(h.verlauf) && r.meta.hochbandVersion === '1.0' && h.sampleRate === SR,
+    check('HB6', 'analyseTake: summary.hochband mit Version 1.1, hb_lz > 3 dB, Anteil über 3 dB > 0,8, Kernrahmen ≥ 30, Verlauf „0-10s“, meta.hochbandVersion', h && h.version === '1.1' && h.hbLz > 3 && h.hbLzAnt3 > 0.8 && h.nKernLaut >= 30 && /^0-10s/.test(h.verlauf) && r.meta.hochbandVersion === '1.1' && h.sampleRate === SR,
       h ? r1(h.hbLz) + ' dB, ' + h.nKernLaut + '/' + h.nRahmen + ', ' + h.verlauf : 'kein hochband');
     let pause = 0, pauseFalsch = 0, erst = -1, letzt = -1, kernOhneLaut = 0;
     for (let i = 0; i < s.t.length; i++) {
@@ -132,11 +139,14 @@ module.exports = async function (H) {
     const mitteKern = (s.hbGatter[Math.round((erst + letzt) / 2)] & G.KERNRAHMEN) !== 0;
     check('HB6', 'Serie: stimmlose Rahmen ohne Wert (NaN) und ohne Gatterbits; erste und letzte 60 ms des Laufs gerechnet, aber ohne KERN; Mitte Kernrahmen', pause > 10 && pauseFalsch === 0 && randOhneKern && mitteKern && kernOhneLaut === 0,
       'Pause ' + pause + ' (falsch ' + pauseFalsch + '), Rand ' + randOhneKern + ', Mitte ' + mitteKern);
-    const felder = A.HB_FELDER.concat(['hbGatter']).filter(k => !(ArrayBuffer.isView(s[k]) && s[k].length === s.t.length));
-    check('HB6', 'Serie trägt hbLz, sfLz, hbStimme, hbZw, sfStimme, zwLo, hbKamm, hbF0Fein, hbSnr, hbPegel, hbGatter in Rahmenlänge', !felder.length, felder.join(','));
+    const felder = A.HB_FELDER.concat(['hbGatter', 'hbOktav']).filter(k => !(ArrayBuffer.isView(s[k]) && s[k].length === s.t.length));
+    check('HB6', 'Serie trägt hbLz, sfLz, hbStimme, hbZw, sfStimme, zwLo, hbKamm, hbF0Fein, hbSnr, hbPegel, hbGatter, hbOktav in Rahmenlänge', !felder.length, felder.join(','));
+    let okt = 0, oktFalsch = 0; for (let i = 0; i < s.t.length; i++) { if (s.hbGatter[i] & G.GERECHNET) { okt++; if (s.hbOktav[i] !== 0) oktFalsch++; } }
+    check('HB6', 'sauberer Vokal mit richtigem Grundton: kein Rahmen auf f0/2 oder 2·f0 gesetzt (hbOktav 0), Anteile 0, geprüfter Grundton 196 Hz auf 1 %', okt > 50 && oktFalsch === 0 && h.oktavHalbShare === 0 && h.oktavDoppeltShare === 0 && near(h.f0GeprMed, 196, 2), 'gerechnet ' + okt + ', verschoben ' + oktFalsch + ', f0 geprüft ' + r1(h.f0GeprMed));
     for (const [d, sep] of [['standard', ','], ['excelde', ';'], ['chronik', ',']]) {
       const z = C.framesToCsv(s, d, V).replace(/^﻿/, '').split(/\r?\n/).filter(Boolean).map(x => x.split(sep)), kopf = z[0];
-      const name = d === 'chronik' ? 'hb_lz_b' : 'hb_lz', c = kopf.indexOf(name), ck = kopf.indexOf('hb_kernrahmen'), m = Math.round((erst + letzt) / 2);
+      const name = d === 'chronik' ? 'hb_lz_b' : 'hb_lz', c = kopf.indexOf(name), ck = kopf.indexOf('hb_kernrahmen'), m = Math.round((erst + letzt) / 2), co = kopf.indexOf(d === 'chronik' ? 'oktav_b' : 'hb_oktav');
+      if (co < 0 || z[m + 1][co] !== '0' || !(d === 'chronik' ? z[1][co] === '' : /^-99/.test(z[1][co]))) check('HB6', 'Rahmen-CSV ' + d + ': Spalte hb_oktav (Paket oktav_b) 0 in gerechneten Rahmen, fehlend in der Pause', false, 'Spalte ' + co + ' Werte „' + (co >= 0 ? z[m + 1][co] + '“/„' + z[1][co] : '') + '“');
       const wert = z[m + 1][c].replace(',', '.'), kern = z[m + 1][ck], pz = z[1][c], pk = z[1][ck];
       check('HB6', 'Rahmen-CSV ' + d + ': Spalte ' + name + ' trägt den Serienwert (Mitte), hb_kernrahmen 1; in der Pause ' + (d === 'chronik' ? 'leer' : '−99'),
         c >= 0 && ck >= 0 && near(parseFloat(wert), s.hbLz[m], d === 'chronik' ? 1e-6 : 0.0051) && kern === '1' && (d === 'chronik' ? (pz === '' && pk === '') : (/^-99/.test(pz) && /^-99/.test(pk))),
@@ -145,8 +155,8 @@ module.exports = async function (H) {
     const take = { id: '20260903-1159-hb', code: 'A', label: 'hb', startedAt: '2026-09-03T09:59:00.000Z', durationS: sig.length / SR, sampleRate: SR, summary: r.summary, analysis: r.meta };
     const tj = C.takeJson(take), tcsv = C.takesToCsv([take], 'standard').split('\r\n'), hk = tcsv[0].split(','), hv = tcsv[1].split(',');
     const col = k => hv[hk.indexOf(k)];
-    check('HB6', 'take.json: kennwerte.hochband mit allen Kennwerten und kein NaN; Take-CSV: hb_lz_med, hb_n_kern_laut, hb_verlauf, hochband_version aus der Zusammenfassung',
-      tj.kennwerte.hochband && near(tj.kennwerte.hochband.hbLz, h.hbLz, 1e-9) && !/NaN/.test(JSON.stringify(tj)) && near(parseFloat(col('hb_lz_med')), h.hbLz, 0.0051) && col('hb_n_kern_laut') === String(h.nKernLaut) && col('hb_verlauf').replace(/"/g, '') === h.verlauf && col('hochband_version') === '1.0',
+    check('HB6', 'take.json: kennwerte.hochband mit allen Kennwerten und kein NaN; Take-CSV: hb_lz_med, hb_n_kern_laut, hb_verlauf, hb_oktav_halb_share, hb_f0_gepr_med_hz, hochband_version aus der Zusammenfassung',
+      tj.kennwerte.hochband && near(tj.kennwerte.hochband.hbLz, h.hbLz, 1e-9) && !/NaN/.test(JSON.stringify(tj)) && near(parseFloat(col('hb_lz_med')), h.hbLz, 0.0051) && col('hb_n_kern_laut') === String(h.nKernLaut) && col('hb_verlauf').replace(/"/g, '') === h.verlauf && col('hochband_version') === '1.1' && col('hb_oktav_halb_share') === '0.000' && near(parseFloat(col('hb_f0_gepr_med_hz')), h.f0GeprMed, 0.051),
       'hb_lz_med ' + col('hb_lz_med') + ', n ' + col('hb_n_kern_laut') + ', Verlauf ' + col('hb_verlauf') + ', Version ' + col('hochband_version'));
     // Ältere Auswertung ohne Hochband: Spalten −99 bzw. leer, Serie ohne Felder → −99, Kachel bittet um Neu-Analyse
     const alt = { id: 'alt', code: 'B', createdAt: 'x', summary: { f0: { med: 100 } } }, acsv = C.takesToCsv([alt], 'standard').split('\r\n'), ak = acsv[0].split(','), av = acsv[1].split(',');

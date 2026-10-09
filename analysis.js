@@ -139,9 +139,10 @@
       /* Hochband 1.0 je stimmhaftem Rahmen (hochband.js rahmen): Linie−Zwischenraum 4–6,5 kHz (hbLz) und 2,4–3,2 kHz (sfLz),
          Hochband-Linien und -Zwischenraum gegen die Linien 300–2000 Hz (hbStimme, hbZw), sfStimme, Zwischenraum im Stimmband
          (zwLo), Kamm-Kontrast und feiner Grundton, Hochband über dem Boden (hbSnr), Rahmenpegel des 80-ms-Fensters (hbPegel);
-         hbGatter = Bits aus hochband.js GATTER (gerechnet, laut, Kern, SNR, Grundton sicher, Kernrahmen). Serien ohne diese
+         hbGatter = Bits aus hochband.js GATTER (gerechnet, laut, Kern, SNR, Grundton sicher, Kernrahmen); hbOktav (1.1) = welcher Kandidat
+         im Kamm gewann (0 f0, 1 f0/2, 2 2·f0). Serien ohne diese
          Felder stammen aus der Zeit vor dem Hochband: dort ist nichts gerechnet (CSV −99). */
-      hbLz: f(), sfLz: f(), hbStimme: f(), hbZw: f(), sfStimme: f(), zwLo: f(), hbKamm: f(), hbF0Fein: f(), hbSnr: f(), hbPegel: f(), hbGatter: b(),
+      hbLz: f(), sfLz: f(), hbStimme: f(), hbZw: f(), sfStimme: f(), zwLo: f(), hbKamm: f(), hbF0Fein: f(), hbSnr: f(), hbPegel: f(), hbGatter: b(), hbOktav: b(),
       gate: b(), flags: new Uint16Array(n), nWin: new Uint16Array(n), cls: new Int8Array(n) };
     for (var k = 1; k <= 5; k++) { s['f' + k] = f(); s['sdo' + k] = f(); s['sdw' + k] = f(); s['bw' + k] = f(); }
     return s;
@@ -149,7 +150,9 @@
   var HB_FELDER = ['hbLz', 'sfLz', 'hbStimme', 'hbZw', 'sfStimme', 'zwLo', 'hbKamm', 'hbF0Fein', 'hbSnr', 'hbPegel'];
   // Hochband-Werte eines Rahmens in die Serie (r aus hochband.js rahmen, null = nicht gerechnet: NaN, Gatter 0).
   function fillHochband(series, i, r) {
-    if (!r) { for (var k = 0; k < HB_FELDER.length; k++) series[HB_FELDER[k]][i] = NaN; series.hbGatter[i] = 0; return; }
+    if (!r) { for (var k = 0; k < HB_FELDER.length; k++) series[HB_FELDER[k]][i] = NaN; series.hbGatter[i] = 0; series.hbOktav[i] = 0; return; }
+    // Hochband 1.1: welcher Kandidat im Kamm gewann (0 = Grundton des Kerns, 1 = f0/2, 2 = 2·f0) — Oktavfehler des Kerns werden so sichtbar.
+    series.hbOktav[i] = r.oktav || 0;
     series.hbLz[i] = r.hbLz; series.sfLz[i] = r.sfLz; series.hbStimme[i] = r.hbStimme; series.hbZw[i] = r.hbZw; series.sfStimme[i] = r.sfStimme;
     series.zwLo[i] = r.zwLo; series.hbKamm[i] = r.kamm; series.hbF0Fein[i] = r.f0Fein; series.hbSnr[i] = r.snr; series.hbPegel[i] = r.pegel;
     series.hbGatter[i] = HB ? HB.GATTER.GERECHNET : 1;
@@ -460,7 +463,7 @@
      Bänder liegen in Hz fest und der Vergleich mit der Chronik (48 kHz) gilt nur bei gleicher Rate ohne Einschränkung. */
   function hochbandZusammenfassung(series, R, idx, boden, sr) {
     var k;
-    if (!HB) { k = { version: null, nRahmen: 0, nKernLaut: 0, hbLz: NaN, hbLzAnt3: NaN, hbStimme: NaN, hbZw: NaN, sfLz: NaN, sfStimme: NaN, zwLo: NaN, hbSnr: NaN, kamm: NaN, pegelMax: NaN, f0UnsureShare: NaN, verlauf: '', verlaufListe: [], grund: 'hochband.js nicht geladen' }; }
+    if (!HB) { k = { version: null, nRahmen: 0, nKernLaut: 0, hbLz: NaN, hbLzAnt3: NaN, hbStimme: NaN, hbZw: NaN, sfLz: NaN, sfStimme: NaN, zwLo: NaN, hbSnr: NaN, kamm: NaN, pegelMax: NaN, f0UnsureShare: NaN, oktavHalbShare: NaN, oktavDoppeltShare: NaN, f0GeprMed: NaN, f0GeprP95: NaN, verlauf: '', verlaufListe: [], grund: 'hochband.js nicht geladen' }; }
     else if (!boden) { k = HB.leer(); k.grund = 'Aufnahme kürzer als ein Block (' + Math.round(HB.FENSTER_S * 1000) + ' ms)'; }
     else {
       var e = HB.kennwerte(R);
