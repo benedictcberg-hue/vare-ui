@@ -26,8 +26,13 @@ const WAV = path.join(SP, 'fake.wav');
 {
   const sr = 48000;
   const rausch = (s, seed) => { const n = Math.round(s * sr), o = new Float64Array(n); let x = seed; for (let i = 0; i < n; i++) { x = (x * 1664525 + 1013904223) >>> 0; o[i] = ((x / 4294967296) * 2 - 1) * 2e-4; } return o; };
-  const teile = [rausch(1, 1), rausch(5, 2), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 3, sr, { gain: 0.3 }),
-    rausch(1, 3), rausch(2, 4), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 4, sr, { gain: 0.3 }), rausch(3, 5)];
+  /* Zeitplan zur Kalibrierung (calibration.js): Klick etwa 1 s nach Mikrofonstart, dann Vorlauf, Stille und
+     Einatmen als Rauschen, /a/ über die /a/-Phase, danach Rauschen für den Ausklang. Der zweite Vokal liegt
+     dort, wo der erste Take nach der Kalibrierung aufnimmt. */
+  const K = require(path.join(ROOT, 'calibration.js')), dauer = key => K.PHASES.find(p => p.key === key).seconds;
+  const vorA = 1 + K.VORLAUF_S + dauer('stille') + dauer('einatmen');
+  const teile = [rausch(vorA, 2), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], dauer('a') + 0.5, sr, { gain: 0.3 }),
+    rausch(3, 3), D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 8, sr, { gain: 0.3 }), rausch(3, 5)];
   let n = 0; for (const t of teile) n += t.length;
   const alles = new Float64Array(n); let o = 0; for (const t of teile) { alles.set(t, o); o += t.length; }
   fs.writeFileSync(WAV, Buffer.from(W.encode(alles, sr, 'i16')));
@@ -146,7 +151,16 @@ const WAV = path.join(SP, 'fake.wav');
     const stateWord = await page.textContent('#gate-state');
     check('Live-Anzeige zeigt Pause in Stille', /Pause/.test(stateWord), stateWord);
     await page.click('#btn-cal');
-    await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 25000 });
+    // Ablauf zum Mitmachen: erst Vorlauf (große Ansage, Abbrechen-Knopf), dann die Phasen mit eigener Ansage.
+    const ansage0 = await page.evaluate(() => ({ sichtbar: !document.getElementById('cal-ansage').hidden, wort: document.getElementById('cal-wort').textContent, stop: !document.getElementById('btn-cal-stop').hidden, zahl: document.getElementById('cal-zahl').textContent, schritte: document.getElementById('cal-schritte').children.length }));
+    check('Kalibrierung: Vorlauf mit großer Ansage, Countdown, Schrittliste und Abbrechen-Knopf', ansage0.sichtbar && /Bereit/.test(ansage0.wort) && ansage0.stop && /^[1-3]$/.test(ansage0.zahl) && ansage0.schritte === 4, JSON.stringify(ansage0));
+    await page.evaluate(() => { const w = window.__calWorte = []; window.__calBeob = new MutationObserver(() => { const t = document.getElementById('cal-wort').textContent; if (w[w.length - 1] !== t) w.push(t); }); window.__calBeob.observe(document.getElementById('cal-wort'), { childList: true, characterData: true, subtree: true }); });
+    await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 40000 });
+    {
+      const worte = await page.evaluate(() => { window.__calBeob.disconnect(); return window.__calWorte; });
+      check('Kalibrierung: Ansagen in der Reihenfolge Still, Einatmen, /a/, Aufhören — je einmal, ohne Flackern', worte.slice(0, 4).join(' | ') === 'Still sein | Einatmen | /a/ singen | Aufhören!', worte.join(' | '));
+      check('Kalibrierung: Ansage und Abbrechen-Knopf nach dem Ende verborgen', await page.isHidden('#cal-ansage') && await page.isHidden('#btn-cal-stop'));
+    }
     const cal = await page.textContent('#cal-status');
     check('Kalibrierung abgeschlossen', /Kalibriert/.test(cal), cal.slice(0, 220));
     const m = /Rauschboden (-?[\d,.]+) dBFS · \/a\/ (-?[\d,.]+) dBFS · SNR ([\d,.]+) dB/.exec(cal);
@@ -182,6 +196,13 @@ const WAV = path.join(SP, 'fake.wav');
     await page.waitForTimeout(3000);
     const live = await page.evaluate(() => ({ state: document.getElementById('gate-state').textContent, f0: document.getElementById('v-f0').textContent, f1: document.getElementById('v-f1').textContent, f3: document.getElementById('v-f3').textContent, d34: document.getElementById('v-d34').textContent, ref: document.getElementById('live-ref').textContent, sfr: document.getElementById('v-sfr').textContent, shr: document.getElementById('v-shr').textContent, floor: document.getElementById('v-floor').textContent }));
     check('Live während /a/: stimmhaft, F0 ≈ 196', /19[4-8]/.test(live.f0), JSON.stringify(live));
+    {
+      // Sichtbar ist nur die große Zahl mit Grundton; alle übrigen Kacheln liegen zugeklappt unter „Alle Messwerte“.
+      const h = await page.evaluate(() => ({ zahl: document.getElementById('hero-d34').textContent, kachel: document.getElementById('v-d34').textContent, f0: document.getElementById('hero-f0').textContent, zu: !document.getElementById('live-mehr').open }));
+      h.gridSichtbar = await page.isVisible('#live-grid');
+      const ohne = t => t.replace(/[\s·]+/g, '');
+      check('Live einfach: große ΔF3–4-Zahl wie die Kachel, Grundton darunter, übrige Kacheln zugeklappt', ohne(h.zahl) === ohne(h.kachel) && /^F0 19[4-8]/.test(h.f0) && h.zu && !h.gridSichtbar, JSON.stringify(h));
+    }
     await page.screenshot({ path: path.join(SP, 'shot-live.png'), fullPage: true });
     await page.waitForTimeout(3500);
     const liveLog = await page.evaluate(() => { window.__liveBeob.disconnect(); window.__liveLog.push({ t: performance.now() - window.__liveT0, ende: true }); return window.__liveLog; });
@@ -206,6 +227,15 @@ const WAV = path.join(SP, 'fake.wav');
         summe >= 1500 && laengster >= 500 && !falsch.length,
         'zusammen ' + (summe / 1000).toFixed(2) + ' s in ' + stuecke + ' Stück(en), am Stück ' + (laengster / 1000).toFixed(2) + ' s, ' + liveLog.length + ' Änderungen' + (falsch.length ? ' | falsch: ' + falsch.slice(0, 4).join(' | ') : '') +
         (summe < 1500 || laengster < 500 ? ' | Verlauf: ' + liveLog.slice(0, 40).map(e => (e.t / 1000).toFixed(2) + ' ' + (e.g || '') + ' / ' + (e.d || '')).join(' ; ').slice(0, 900) : ''));
+    }
+    {
+      /* Ruhige Anzeige (Vorgabe): die Kacheln zeigen zweimal pro Sekunde den Median der letzten Sekunde.
+         Der ΔF3–4-Text darf sich deshalb höchstens etwa dreimal pro Sekunde ändern — vorher sprang er
+         mit jedem Takt (bis 25-mal pro Sekunde). */
+      let wechsel = 0;
+      for (let i = 1; i < liveLog.length; i++) if (liveLog[i].d !== undefined && liveLog[i].d !== liveLog[i - 1].d) wechsel++;
+      const dauer = (liveLog[liveLog.length - 1].t - liveLog[0].t) / 1000;
+      check('Live ruhig: ΔF3–4-Text ändert sich höchstens 3-mal pro Sekunde', dauer > 3 && wechsel / dauer <= 3, wechsel + ' Wechsel in ' + dauer.toFixed(1) + ' s');
     }
     // Während der Analyse schon den nächsten Take beschriften: das gehört nicht in diesen Take.
     const busyBeiEingabe = await page.evaluate(() => VAREAPP.state.busy);
@@ -238,6 +268,7 @@ const WAV = path.join(SP, 'fake.wav');
       JSON.stringify({ luecken: takes[0].signalLuecken, summe: takes[0].signalLueckeS }));
     await page.screenshot({ path: path.join(SP, 'shot-result.png'), fullPage: true });
     // Prüfsignal
+    await page.evaluate(() => { document.getElementById('live-mehr').open = true; });   // Prüfsignal liegt unter „Alle Messwerte“
     await page.click('#btn-pruef');
     await page.waitForFunction(() => document.querySelector('#pruef-out table'), null, { timeout: 120000 });
     const pruef = await page.textContent('#pruef-out');
@@ -296,6 +327,14 @@ const WAV = path.join(SP, 'fake.wav');
     // Zugänglichkeit: Bedienelemente ≥ 46 px
     const small = await page.$$eval('button, select, input[type=text], input[type=range]', els => els.filter(e => !e.hidden && e.offsetParent !== null && e.getBoundingClientRect().height < 46).map(e => e.id || e.textContent.trim().slice(0, 20)));
     check('Alle sichtbaren Bedienelemente ≥ 46 px hoch', small.length === 0, small.join(', '));
+    {
+      // iPhone-Breite: nichts ragt über den Rand (vorher 399 px durch die Einsing-Auswahl), Live-Zahl und Take-Knopf nah beieinander.
+      const vorher = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+      const eng = await page.evaluate(() => ({ breit: document.documentElement.scrollWidth, abstand: Math.round(document.getElementById('btn-take').getBoundingClientRect().top - document.getElementById('hero-d34').getBoundingClientRect().top) }));
+      await page.setViewportSize(vorher);
+      check('iPhone-Breite 390 px: kein seitliches Scrollen, Take-Knopf weniger als ein Bildschirm unter der großen Zahl', eng.breit <= 390 && eng.abstand > 0 && eng.abstand < 844, JSON.stringify(eng));
+    }
 
     // ---------- Schritt 0 über Neuladen, Löschen und neue Sitzung; Einsing-Angaben ----------
     async function mikrofonUndKalibrieren() {
@@ -308,7 +347,7 @@ const WAV = path.join(SP, 'fake.wav');
       // Die Prüfdatei läuft in Schleife; trifft die Kalibrierung den Vokal nicht, nochmals.
       for (let v = 0; v < 4; v++) {
         await page.click('#btn-cal');
-        await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 30000 });
+        await page.waitForFunction(() => document.getElementById('cal-progress').hidden, null, { timeout: 40000 });
         if (/^Kalibriert/.test((await page.textContent('#cal-status')).trim())) return true;
         await page.waitForTimeout(1500);
       }
@@ -474,6 +513,8 @@ const WAV = path.join(SP, 'fake.wav');
     const liveFall = a => page.evaluate(async a => {
       const D = window.VAREDSP;
       if (!window.__echteAnalyse) window.__echteAnalyse = D.analyseAt;
+      // Geprüft werden die langen Gründe je Rahmen: Einzeltakt-Anzeige (die ruhige prüfen n_ruhig.js und „Live einfach“).
+      VAREAPP.state.settings.ruhig = false;
       const sig = D.resample(D.synthVowel(196, [700, 1200, 2500, 3300, 4200], [80, 90, 120, 150, 200], 0.4, 48000), 48000, D.TARGET_SR);
       const fr = Object.assign({}, window.__echteAnalyse(sig, D.TARGET_SR, sig.length - 1, { align: 'end', wantSpectrum: true, floorDb: -70 }), a);
       for (const k in a) if (a[k] === null) fr[k] = NaN;
@@ -487,7 +528,7 @@ const WAV = path.join(SP, 'fake.wav');
     const lK = await liveFall({ f0Korrektur: 'teiltonreihe', f0Yin: 98 });
     const lS = await liveFall({ shr: -10, shrGrid: 392, shrOther: -48.7, shrUnsure: true, shrGrund: 'kamm+zweitpuls', shrKamm: -10.1, shrZweitpuls: 0.79 });
     const lW = await liveFall({ shr: -10, shrUnsure: false, shrOther: null, shrGrund: '' });
-    await page.evaluate(() => { window.VAREDSP.analyseAt = window.__echteAnalyse; });
+    await page.evaluate(() => { window.VAREDSP.analyseAt = window.__echteAnalyse; VAREAPP.state.settings.ruhig = true; });
     check('Live im Browser: unsicherer Grundton in Rost mit Grund (auch SHR und H1−H2), F1/F0 als Teil in Rost neben schwarzem F1; korrigierter Grundton ohne Rost',
       lU.f0.farbe === ROST_L && /Grundton unsicher: Cepstrum zeigt 98\.0 Hz/.test(lU.f0.text) && lU.shr.farbe === ROST_L && lU.h1h2.farbe === ROST_L
       && !!lU.f1.teil && lU.f1.teil.farbe === ROST_L && lU.f1.farbe !== ROST_L && lK.f0.farbe !== ROST_L && /korrigiert aus 98\.0 Hz, Teiltonreihe/.test(lK.f0.text),
@@ -511,6 +552,18 @@ const WAV = path.join(SP, 'fake.wav');
     check('Token nur für diesen Tab: nach dem Neuladen verbunden, „merken“ nicht angehakt', ablage.lokal === null && ablage.tab && ablage.haken === false, JSON.stringify(ablage));
     await p2.click('#btn-mic');
     await p2.waitForFunction(() => !document.getElementById('btn-cal').disabled, null, { timeout: 15000 });
+    {
+      // Abbrechen mitten in der Aufnahme: nichts übernommen, keine Ablage, Knopf wieder frei.
+      const vorher = { cal: await p2.evaluate(() => VAREAPP.state.cal && VAREAPP.state.cal.id), puts: ablagePuts.length };
+      await p2.click('#btn-cal');
+      await p2.waitForTimeout(4500);
+      const mitten = await p2.evaluate(() => VAREAPP.state.rec && VAREAPP.state.calRunning);
+      await p2.click('#btn-cal-stop');
+      await p2.waitForTimeout(1200);
+      const nach = await p2.evaluate(() => ({ laeuft: VAREAPP.state.calRunning, cal: VAREAPP.state.cal && VAREAPP.state.cal.id, ansage: document.getElementById('cal-ansage').hidden, stop: document.getElementById('btn-cal-stop').hidden, knopf: !document.getElementById('btn-cal').disabled, meldung: (document.querySelector('main .notice') || {}).textContent || '' }));
+      check('Kalibrierung abbrechen: nichts übernommen, nichts abgelegt, Ansage weg, „Kalibrieren“ wieder frei',
+        mitten && !nach.laeuft && nach.cal === vorher.cal && ablagePuts.length === vorher.puts && nach.ansage && nach.stop && nach.knopf && /abgebrochen/.test(nach.meldung), JSON.stringify(nach));
+    }
     await p2.click('#btn-abmelden');
     await p2.waitForFunction(() => !document.getElementById('anmeldung').hidden, null, { timeout: 10000 });
     check('„Token entfernen“: Korpus-Kopfzeile leer', (await p2.textContent('#korpus-stand')) === '', await p2.textContent('#korpus-stand'));

@@ -259,6 +259,8 @@ async function seiteNeu(browser, liefern, sr) {
   if (!(await p.warte(() => st().settings && st().takesGeladen, 5000))) throw new Error('Seite nicht geladen');
   // Geprüft wird die Verdrahtung, nicht der Rechenkern: gröberer Rahmenabstand spart Laufzeit.
   st().settings.hopS = 0.05;
+  // Live-Kacheln werden hier Takt für Takt gelesen; die ruhige Anzeige (Median über 0,6 s) prüft n_ruhig.js.
+  st().settings.ruhig = false;
   return p;
 }
 

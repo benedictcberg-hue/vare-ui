@@ -76,7 +76,8 @@ module.exports = async function (H) {
     /* Hilfetext Schritt 0: Was er über die CSV sagt, muss die CSV auch schreiben. Früher stand dort
        „Sentinel −99,00“; geschrieben wird −99 mit den Stellen der Spalte, fehlender Text bleibt leer. */
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    const a = html.indexOf('<h2>Schritt 0'), b = html.indexOf('<h2>Take</h2>');
+    // Bis zur nächsten Überschrift: seit der Take-Kasten über Schritt 0 steht, ist das nicht mehr „Take“.
+    const a = html.indexOf('<h2>Schritt 0'), b0 = html.indexOf('<h2>', a + 4), b = b0 < 0 ? html.length : b0;
     const text = (a >= 0 && b > a ? html.slice(a, b) : '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     const geschrieben = new Set(), bad = [];
     for (const d of ['standard', 'excelde']) {
