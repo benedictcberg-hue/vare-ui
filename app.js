@@ -498,7 +498,8 @@
     if (!ruhig || !isFinite(rms) || st.pegelText == null || jetzt - st.pegelZeit >= 500) { st.pegelText = isFinite(rms) ? fmt(rms, ruhig ? 0 : 1) + ' dBFS' : ''; st.pegelZeit = jetzt; }
     var links = ang ? 'Boden unbekannt · Stimmschwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS' : 'Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB';
     ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'left';
-    if (ang && ctx.measureText && ctx.measureText(links).width > w - 8) links = 'Schwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS';
+    var mLang = ctx.measureText ? ctx.measureText(links) : null;
+    if (ang && mLang && mLang.width > w - 8) links = 'Schwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS';
     ctx.fillText(links, 4, 10);
     var mL = ctx.measureText ? ctx.measureText(links) : null, mR = ctx.measureText ? ctx.measureText(st.pegelText) : null;
     if (st.pegelText && !(mL && mR && mL.width + mR.width + 16 > w)) { ctx.textAlign = 'right'; ctx.fillText(st.pegelText, w - 4, 10); ctx.textAlign = 'left'; }
