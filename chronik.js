@@ -9,7 +9,7 @@
   function setMarken(liste) { MARKEN = (liste || []).filter(function (m) { return m && isFinite(m.hz); }); }
 
   var COL = { bg: '#0C1410', panel: '#14201A', line: '#24352C', ink: '#E8EDE7', muted: '#8FA396', gold: '#C9A227', rust: '#A85A3C' };
-  var MONO = '12px Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace';
+  var MONO = '12px ui-monospace, Menlo, Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace';
 
   /* Gemessen heißt: eine endliche Zahl. null ist keine 0 — isFinite(null) ist wahr, und eine ältere
      Sicherung (Version 1) trägt jeden nicht gemessenen Wert als null (Bericht 4, Befund 5). */

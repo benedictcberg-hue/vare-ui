@@ -548,12 +548,18 @@ for (const srIn of [44100, 48000, 96000]) {
 /* ---------- T20: Kalibrierung ---------- */
 {
   const K = require('./calibration.js');
-  const a = D.synthVowel(196, CASES[0].F, BW5, 3.0, SR, { gain: 0.3 });
-  const tail = new Float64Array(Math.round(1.0 * SR)), ring = D.synthVowel(196, CASES[0].F, BW5, 0.3, SR, { gain: 0.3 });
+  // Signal nach dem Ablauf in calibration.js: Stille, Einatmen (hier Rauschen), /a/, Ausklang mit 300 dB/s.
+  const dauer = key => K.PHASES.find(p => p.key === key).seconds;
+  const a = D.synthVowel(196, CASES[0].F, BW5, dauer('a'), SR, { gain: 0.3 });
+  const tail = new Float64Array(Math.round(dauer('ausklang') * SR)), ring = D.synthVowel(196, CASES[0].F, BW5, 0.3, SR, { gain: 0.3 });
   for (let i = 0; i < ring.length; i++) tail[i] = ring[i] * Math.pow(10, -300 * (i / SR) / 20);   // 300 dB/s
-  const s5 = noise(5 * SR, 3e-4, 5), s1 = noise(SR, 3e-4, 6);
+  const s5 = noise(Math.round((dauer('stille') + dauer('einatmen')) * SR), 3e-4, 5), s1 = noise(tail.length, 3e-4, 6);
   for (let i = 0; i < s1.length; i++) tail[i] += s1[i];
   const c = K.analyseCalibration(concat([s5, a, tail]), SR, { deviceLabel: 'test' });
+  check('T20', 'Kalibrierablauf: Vorlauf ≥ 3 s, Einatemphase zwischen Stille und /a/, /a/ ≥ 5 s, Ausklang ≥ 2 s; phaseAt zählt den Vorlauf nicht als Phase',
+    K.VORLAUF_S >= 3 && K.PHASES.map(p => p.key).join() === 'stille,einatmen,a,ausklang' && dauer('a') >= 5 && dauer('ausklang') >= 2 &&
+    K.phaseAt(1).vorlauf && K.phaseAt(K.VORLAUF_S + 0.1).phase.key === 'stille' && K.phaseAt(K.VORLAUF_S + dauer('stille') + 0.1).phase.key === 'einatmen' && K.phaseAt(K.VORLAUF_S + K.totalSeconds() + 0.1).phase === null,
+    K.PHASES.map(p => p.key + ' ' + p.seconds).join(', ') + ', Vorlauf ' + K.VORLAUF_S);
   const floorExp = 20 * Math.log10(3e-4 / Math.sqrt(3)) + 10 * Math.log10(0.46 * TSR / (SR / 2));   // weißes Rauschen, nach Tiefpass auf 0,46·12 kHz
   check('T20', 'Kalibrierung: Rauschboden der Stille = Rauschleistung im Analyseband ± 1,5 dB', near(c.floorDb, floorExp, 1.5), r1(c.floorDb) + ' vs ' + r1(floorExp));
   check('T20', 'Kalibrierung: SNR > 50 dB, Band-SNR gemessen', c.snrDb > 50 && isFinite(c.bandSnr.sf) && isFinite(c.bandSnr.low), r1(c.snrDb) + ' / sf ' + r1(c.bandSnr.sf));

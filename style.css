@@ -1,8 +1,9 @@
-/* VARE — Gestaltung: Forest Green und Gold. Rost ausschließlich für unsichere Messwerte. */
+/* VARE — Gestaltung: Forest Green und Gold. Rost ausschließlich für unsichere Messwerte.
+   Rost #C8774F: 4,9:1 auf dem Kasten, auch für kleine Schrift lesbar (#A85A3C hatte nur 3,4:1). */
 :root {
-  --bg: #0C1410; --panel: #14201A; --line: #24352C; --ink: #E8EDE7; --muted: #8FA396; --gold: #C9A227; --rust: #A85A3C;
+  --bg: #0C1410; --panel: #14201A; --line: #24352C; --ink: #E8EDE7; --muted: #8FA396; --gold: #C9A227; --rust: #C8774F;
   --serif: Georgia, "Times New Roman", "Noto Serif", serif;
-  --mono: Consolas, "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono", monospace;
+  --mono: ui-monospace, Menlo, Consolas, "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono", monospace;
   --sans: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Sans", sans-serif;
 }
 * { box-sizing: border-box; }
@@ -25,17 +26,22 @@ main { max-width: 980px; margin: 0 auto; padding: 1rem; display: flex; flex-dire
 .gold { color: var(--gold); }
 .row { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: center; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem .75rem; }
+@media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
 .stat { border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem; min-height: 46px; }
 .stat .k { display: block; color: var(--muted); font-size: .8rem; }
-.stat .v { display: block; font-family: var(--mono); font-size: 1.1rem; }
-.stat.unsure .v { color: var(--rust); border-bottom: 1px dashed var(--rust); }
+.stat .v { display: block; font-family: var(--mono); font-size: 1.1rem; border-bottom: 1px solid transparent; }
+.stat.unsure .v { color: var(--rust); border-bottom-style: dashed; border-bottom-color: var(--rust); }
+/* Live-Kacheln: feste Größe. Zwei Zeilen sind immer reserviert, damit „780 Hz“ und „– · zu wenig stabile
+   Formanten“ gleich hoch sind; breitere Spalten, damit die Gründe in zwei Zeilen passen. */
+#live-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+#live-grid .stat .v { font-size: 1rem; line-height: 1.45; min-height: 2.9em; }
 /* Befund: sicher gemessen, aber auffällig (F3 unter dem Mindestwert, SHR über −15 dB, gehaltene
    Tonsprünge). Gold ohne Strich — Rost und Strich bleiben unsicheren Messwerten vorbehalten. */
 .stat.befund .v, .befund { color: var(--gold); }
 .stat.frozen .v { color: var(--muted); }
 /* Unsicherer Teil einer Kachel, deren übriger Wert trägt (F1/F0 bei unsicherem Grundton). */
 .unsicher-teil { border-bottom: 1px dashed var(--rust); }
-button, select, input[type="text"], input[type="number"], input[type="file"], textarea { min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
+button, select, input[type="text"], input[type="number"], input[type="file"], textarea { max-width: 100%; min-height: 46px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .8rem; }
 button { cursor: pointer; }
 button.primary { border-color: var(--gold); color: var(--gold); }
 button.danger { border-color: var(--rust); color: var(--rust); }
@@ -43,12 +49,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 :focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 input[type="range"] { min-height: 46px; width: 100%; accent-color: var(--gold); }
 label { display: block; }
-label.inline { display: inline-flex; align-items: center; gap: .5rem; min-height: 46px; }
+label.inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-height: 46px; max-width: 100%; }
 textarea { width: 100%; min-height: 70px; }
 canvas { display: block; width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-#gate-state { font-family: var(--mono); font-size: 2.2rem; min-height: 46px; }
+/* Höhen wie in setupCanvas, damit das erste Zeichnen nichts verschiebt. */
+#level-canvas { height: 40px; } #d34-canvas { height: 56px; } #spec-canvas { height: 170px; } #hist-canvas { height: 140px; }
+#gate-state { font-family: var(--mono); font-size: 1.4rem; line-height: 1.5; min-height: 46px; display: inline-flex; align-items: center; min-width: 12ch; padding: 0 .5rem; border: 1px dashed transparent; border-radius: 6px; }
+/* Zustandswort und Grund in einer Zeile, die nie umbricht: ein langer Grund wird gekürzt (ganz im Tooltip). */
+.gate-zeile { display: flex; align-items: center; gap: .75rem; min-height: 46px; }
+#gate-reason { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #gate-state.pause { color: var(--muted); }
-#gate-state.uebergang { color: var(--rust); border: 1px dashed var(--rust); border-radius: 6px; padding: 0 .5rem; display: inline-block; }
+#gate-state.uebergang { color: var(--rust); border-color: var(--rust); }
 #gate-state.stabil { color: var(--gold); }
 table { border-collapse: collapse; width: 100%; font-size: .92rem; }
 th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -60,7 +71,7 @@ td.num, th.num { text-align: right; font-family: var(--mono); }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .small { font-size: .85rem; }
 .actions button { margin-right: .4rem; margin-bottom: .4rem; }
-details summary { cursor: pointer; min-height: 46px; line-height: 46px; color: var(--muted); }
+details summary { cursor: pointer; min-height: 46px; padding-block: .7rem; line-height: 1.45; color: var(--muted); }
 .setting { display: grid; grid-template-columns: 1fr auto; gap: .25rem .75rem; align-items: center; padding: .25rem 0; }
 .setting output { min-width: 5.5em; text-align: right; }
 .bar-row { display: grid; grid-template-columns: 90px 1fr; gap: .5rem; align-items: center; }
@@ -94,3 +105,45 @@ th.spalte-breit { min-width: 180px; }
 .optional { color: var(--muted); font-size: .8rem; margin-left: .4rem; }
 .pflicht { color: var(--gold); font-size: .8rem; margin-left: .4rem; }
 .fassungen { margin: .25rem 0 0; padding-left: 1.1rem; }
+
+/* Kalibrierung: große Ansage, damit man beim Singen nicht kleine Schrift lesen muss. */
+.cal-ansage { margin-top: .75rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px; text-align: center; }
+.cal-schritte { list-style: none; padding: 0; margin: 0 0 .75rem; display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; font-size: .85rem; color: var(--muted); }
+.cal-schritte li { padding: .1rem .5rem; border: 1px solid var(--line); border-radius: 6px; }
+.cal-schritte li.jetzt { color: var(--ink); border-color: var(--gold); }
+.cal-schritte li.fertig { opacity: .5; }
+.cal-wort { font-size: 2.6rem; line-height: 1.15; min-height: 1.15em; white-space: nowrap; font-weight: 600; }
+/* Feste Zeilenhöhen: der Kasten bleibt in allen Phasen gleich groß (vorher 192–255 px). */
+.cal-hinweis { color: var(--muted); margin: .25rem 0 .75rem; line-height: 1.45; min-height: 2.9em; }
+.cal-balken { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+#cal-balken-fuell { height: 100%; width: 0; background: var(--muted); }
+.cal-zahl { font-size: 1.6rem; line-height: 1.2; min-height: 1.2em; margin-top: .5rem; }
+.cal-ansage.p-vorlauf .cal-wort, .cal-ansage.p-stille .cal-wort { color: var(--ink); }
+.cal-ansage.p-einatmen .cal-wort { color: var(--muted); }
+.cal-ansage.p-a { border-color: var(--gold); }
+.cal-ansage.p-a .cal-wort { color: var(--gold); }
+.cal-ansage.p-a #cal-balken-fuell { background: var(--gold); }
+.cal-ansage.p-ausklang { border-color: var(--rust); }
+.cal-ansage.p-ausklang .cal-wort { color: var(--rust); }
+.cal-ansage.p-ausklang #cal-balken-fuell { background: var(--rust); }
+@media (max-width: 480px) { .cal-wort { font-size: 1.9rem; } }
+
+/* Live: eine große Zahl, der Rest zugeklappt. */
+.live-hero { margin: .5rem 0; }
+.live-hero .k { display: block; color: var(--muted); font-size: .9rem; }
+.hero-zahl { display: block; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 3.2rem; line-height: 1.1; min-height: 1.1em; }
+.hero-zahl.unsure { color: var(--muted); }
+.hero-zahl.unsure .hero-rest { color: var(--rust); }
+.hero-zahl.befund { color: var(--gold); }
+.hero-zahl.frozen { color: var(--muted); }
+.hero-f0 { display: block; color: var(--muted); font-size: 1.1rem; line-height: 1.45; min-height: 1.45em; }
+/* Referenzzeile einzeilig: ganz im Tooltip, kein Umbruch, kein Springen. */
+#live-ref { min-height: 1.45em; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Gleich breit als „Take starten“ und „Take beenden“: der Knopf bleibt unter dem Finger. */
+#btn-take { min-width: 10em; }
+.live-mehr { margin-top: .75rem; }
+.hero-rest { display: block; font-size: 1.1rem; line-height: 1.45; min-height: 1.45em; color: var(--muted); }
+/* Nur für Bildschirmleser: die große Ansage zeigt dasselbe sichtbar. */
+.nur-vorlesen { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cal-werte summary, .erklaerung summary { font-size: .85rem; }
+@media (max-width: 480px) { .hero-zahl { font-size: 2.6rem; } }
