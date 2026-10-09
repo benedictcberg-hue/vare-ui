@@ -175,6 +175,52 @@ gleicher Formel** — was der Browser anders rechnet, heißt `_b`.
 - Nicht in Stufe 1 (Plan, Punkte 2–6): Haltetöne, SFR300, Geräteprofil, Grundton-Abgleich, Datenbankgesetz
   (kein Löschen), Kalibrierung auf Singpegel, Korpus und Gatter.
 
+## Hochband 1.0 — Tröte (Chronik-Standard 2.8, erster Teil der Stufe 2)
+
+`hochband.js` rechnet neben dem Kern (eigene Version `HOCHBAND 1.0`, der Kern bleibt 4.1.0 und sein Fingerabdruck unverändert)
+die Teiltonstruktur im Band 4–6,5 kHz — Bens „Tröte“ (F6/F7) — nach derselben Rechenvorschrift wie `vare_hochband.py` in der
+Chronik (Tabellen `frames_teilton`, `take_boden_baender`, `takes_hochband`). Gerechnet wird aus den Abtastwerten in Geräterate,
+nicht aus dem 12-kHz-Weg des Kerns (der endet bei 6 kHz).
+
+- **Je stimmhaftem Rahmen (Grundton 60–600 Hz):** 80 ms Hann um die Rahmenmitte (die Chronik beginnt ihr Fenster bei t; hier
+  ist t die Fenstermitte des Kerns), FFT 8192 bei 48 kHz. **f0 fein** aus einem Kamm über die Teiltöne 500–3000 Hz, ±2 % um
+  den Grundton des Kerns in Schritten von 0,1 % (schärft, korrigiert keine Oktave). **Linie** = Bins höchstens 12 % f0 von einem
+  Teilton k·f0 (bis 7 kHz) entfernt, **Zwischenraum** = Bins mindestens 30 % f0 von jeder Linie entfernt. Je Band 300–2000,
+  2400–3200 und 4000–6500 Hz: Linienpegel = Summe der Linienbins, Zwischenraumpegel = Summe der Zwischenraumbins auf die Zahl der
+  Linienbins normiert.
+- **Maße:** `hb_lz` = Linie − Zwischenraum 4–6,5 kHz (0 dB = Rauschen, kettenrobust: gleiche Kette im Zähler und Nenner);
+  `sf_lz` dasselbe im Sängerformantband; `hb_stimme` = Hochband-Linien gegen Linien 300–2000 Hz und `hb_zw` = Hochband-
+  Zwischenraum gegen dieselben Linien (Zisch- und Atemanteil) — beide kettenabhängig, nur innerhalb eines Tages und Geräts
+  vergleichen; `sf_stimme` ebenso; `zw_lo` = Zwischenraum im Stimmband gegen dessen Linien (Rauschen in der Quelle).
+- **Rauschboden je Band** aus den stillsten 3 % der 80-ms-Blöcke der ganzen Aufnahme (mindestens 5, digitale Stille unter
+  −90 dBFS ausgenommen), FFT 4096. Beide Spektren sind rohe |X|²-Summen; gegen den Boden steht das 8192er-Spektrum mit doppelt
+  so vielen Bins im Band rund 3 dB höher. So rechnet `vare_hochband.py`, und so bleibt es, damit die Werte gleich sind.
+- **Kennwerte eines Takes** nur aus **lauten Kernrahmen:** Rahmenpegel (RMS des ungefensterten 80-ms-Ausschnitts) innerhalb 12 dB
+  unter dem 95. Perzentil, mindestens 60 ms von Anfang und Ende eines stimmhaften Laufs entfernt (Lücke über 45 ms trennt Läufe),
+  Hochband mindestens 6 dB über dem Boden — und, nur hier, **Grundton nicht unsicher** (`f0Unsure`: eine Oktave daneben macht jede
+  zweite Linie zum Zwischenraum, der Wert fällt; die Chronik kennt die Marke nicht, der ausgelassene Anteil steht in
+  `hb_f0_unsure_share`). Mindestens 50 Rahmen und 30 Kernrahmen, sonst kein Kennwert und der Grund in `hb_grund`. Median von
+  `hb_lz`, Anteil über 3 dB, Mediane der übrigen Maße, Verlauf je 10 s (Abschnitte mit mindestens 10 Kernrahmen).
+- **Geprüft gegen die Chronik:** derselbe Take (80 s, 1456 Rahmen, 48 kHz) mit den Rahmen und Grundtönen der Chronik gerechnet —
+  Boden je Band auf 0,001 dB, jeder Rahmenwert auf 10⁻⁵ dB, Kennwerte und Verlauf gleich. Was im Browser trotzdem anders ist:
+  das Rahmenraster (Fenstermitte, Rahmenabstand des Kerns) und der Grundton (`f0_b` statt der Chronik-Entscheidung). Darum heißen
+  die Rahmenspalten im Übergabepaket `hb_lz_b`, `sf_lz_b`, `hb_stimme_b`, `hb_zw_b`, `sf_stimme_b`, `zw_lo_b`, `kamm_b`, `f0_fein_b`,
+  `hb_snr_b`, `hb_pegel_b` (Regel aus These 30), bis der Grundton abgeglichen ist; die Gatterbits `hb_laut`, `hb_kern`, `hb_snr_ok`,
+  `hb_f0_sicher`, `hb_kernrahmen` haben in der Chronik keine Spalte und behalten ihren Namen.
+- **Anzeige.** Kachel „Tröte · Hochband 4–6,5 kHz Linie−Zwischenraum“ live (Median der Kernrahmen der letzten Sekunde, wenn sie
+  die Mehrheit stellen; sonst „– · leise / Einsatz / Boden unbekannt / im Rauschen / Grundton unsicher“) mit dem Pegel des
+  Hochbands gegen das Stimmband und der Lage zwischen den Korpusmarken (`korpus.json`: `marken.hb_lz`, `marken.sf_lz` als
+  `{ "db", "text" }`, nie im Code). Live gilt: laut = innerhalb 12 dB unter dem 95. Perzentil der stimmhaften Rahmenpegel der
+  letzten 20 s, Kern = seit mindestens 60 ms stimmhaft (das Ende eines Laufs kennt die Live-Anzeige nicht), Boden aus den
+  leisesten 3 % der Blöcke der letzten 60 s. In Chronik-Detail und Take-Ergebnis die Kachel mit Kennwerten, Anteil, Kernrahmen,
+  Lage, Pegel, Zisch, SF-Band, Quellrauschen und Verlauf; ältere Auswertungen zeigen „neu analysieren“.
+- **Was das Maß misst** (Chronik, 137 Takes, innerhalb Vokal und Pegel): `hb_lz` folgt dem CPP (r +0,64, in jedem Take positiv),
+  schwach F1, nicht F2/F3 — Struktur im Hochband heißt zuerst regelmäßige Quelle. Die vordere Enge (F2) hebt den **Pegel** des
+  Hochbands (`hb_stimme`), nicht seine Struktur. Beide Zahlen stehen deshalb nebeneinander.
+
+Prüfung: `h_hochband.js` (HB1–HB7). Nicht in diesem Schritt: Haltetöne, SFR300, Geräteprofil, Grundton-Abgleich, Datenbankgesetz,
+Kalibrierung auf Singpegel, Korpus und Gatter (Plan, Punkte 2–6).
+
 ## Was „ungültig“ heißt
 
 Ein Formant gilt nur als gültig, wenn alles zutrifft:
@@ -400,6 +446,7 @@ Windows länger.
 | `i1_versoehnen.js` | I1 | Nummerierung über alle Fenster an Vokalwechseln | 4 s |
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 4 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
+| `h_hochband.js` | HB1–HB7 | Hochband 1.0 (Tröte): Rechenvorschrift gegen Nachrechnung, Trennschärfe F6/F7 gegen Rauschen und Zisch, feiner Grundton im Kamm, Gatter und Kennwerte gegen eine Rahmenliste, Rauschboden ohne digitale Stille, analyseTake mit Serie, CSV (drei Dialekte, Paketnamen), take.json, Korpusmarken, 44,1 kHz | 6 s |
 | `n_ablage.js` | AB1–AB2 | Ablage der Kalibrierung: Dateiname unter `data/input/`, nur Messwerte und Uhrzeit ohne Gerätename, PUT an die Contents-API ohne Überschreiben, verständlicher Fehler bei fehlendem Schreibrecht | < 1 s |
 | `n_paket.js` | PK1–PK5 | Chronik-Standard Stufe 1: Take-ID und Kurztitel, Zeitbezug Start (auch für ältere Takes), Kette je Take, Übergabepaket (`take.json` ohne NaN/−99, `frames.csv` im Dialekt chronik mit `_b`-Namen und bitgleichen Float32-Werten, `ereignisse.csv`), ZIP mit Prüfsumme, Ablage nach `data/takes/<id>/` mit gz als Base64, WAV 24 Bit und Float32-Vorgabe | 2 s |
 | `n_ruhig.js` | RU0–RU3 | Ruhige Live-Anzeige: voreingestellt; springende Formanten als Median auf 10 Hz, höchstens zweimal je Sekunde neu (Gegenprobe Einzeltakt), große Zahl wie Kachel; Minderheitswert als „– · Grund“ in Rost; kurze Gründe | < 5 s |
@@ -468,7 +515,12 @@ die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`
 Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
 (nicht gemessen, als Pause geführt).
 
-Stand Kern 4.1.0, Chronik-Standard Stufe 1: 127 Spalten je Take, 88 je Rahmen. Neu mit Stufe 1 (Take): `take_id`,
+Stand Kern 4.1.0, Chronik-Standard Stufe 1 und Hochband 1.0: 144 Spalten je Take, 103 je Rahmen. Neu mit Hochband 1.0 (Take):
+`hb_lz_med`, `hb_lz_ant3`, `hb_stimme_med`, `hb_zw_med`, `sf_lz_med`, `sf_stimme_med`, `zw_lo_med`, `hb_snr_med`, `hb_kamm_med`,
+`hb_pegel_max_dbfs`, `hb_n_rahmen`, `hb_n_kern_laut`, `hb_f0_unsure_share`, `hb_boden_rms_dbfs`, `hb_verlauf`, `hb_grund`,
+`hochband_version`; (Rahmen): `hb_lz`, `sf_lz`, `hb_stimme`, `hb_zw`, `sf_stimme`, `zw_lo`, `hb_kamm_db`, `hb_f0_fein_hz`, `hb_snr_db`,
+`hb_pegel_dbfs`, `hb_laut`, `hb_kern`, `hb_snr_ok`, `hb_f0_sicher`, `hb_kernrahmen` (Gatterbits nur in gerechneten Rahmen, sonst −99;
+im Paket mit `_b`, siehe „Hochband 1.0“). Neu mit Stufe 1 (Take): `take_id`,
 `end_iso`, `end_local`, `track_sample_rate`, `device_id`, `browser_processing`, `capture`, `audio_format`, `haltung`,
 `ort`, `kette_zusatz`, `gefuehl`, `biphonation_manuell`, `periodenverdopplung_manuell`, `angaben_stand`,
 `angaben_fassungen`; `datetime_iso` und `time_local` nennen den Start. Neu mit Kern 4.1.0:
@@ -526,6 +578,7 @@ viel Platz bliebe; passen schon die Messwerte nicht, entsteht keine Datei, und d
 | Datei | Zweck | unter Node testbar |
 |---|---|---|
 | `dsp.js` | Rechenkern: Resampling je Eingangsrate, Burg-LPC, FFT-Hüllkurve, Gipfelsuche mit Lesarten- und Rauschbodenprüfung, YIN mit angepasstem Fenster und Gegenprobe, Feinspur und Sprungerkennung, Spektrum, Teilerkontrolle, SHR mit Rasterwahl, SFR, CPP, H1−H2, Rohrlänge, Ausklang, Alternation, Synthese für Prüfsignale | ja |
+| `hochband.js` | Hochband 1.0 (Tröte): Teiltonlinien und Zwischenraum 300–2000 / 2400–3200 / 4000–6500 Hz in Geräterate, feiner Grundton im Kamm, Rauschboden aus den stillsten Blöcken, Gatter und Kennwerte je Take — Rechenvorschrift von `vare_hochband.py` | ja |
 | `vowel.js` | Vokalklassen (Modell-Zentroide) und Stabilitätsgatter, live nachlaufend und offline zentriert | ja |
 | `analysis.js` | Analyse eines ganzen Takes, Aggregation (Quantile Typ 7), Segmente, Referenzen, Vergleichbarkeit | ja |
 | `calibration.js` | Kalibrierablauf auswerten und mit der letzten vergleichen | ja |
@@ -565,6 +618,9 @@ Content-Security-Policy verbietet Inline-Skripte und Inline-Styles.
   Bandbreiten von F1–F3 rechnet und eine solche auf 40 Hz begrenzt (live, im Hover, im Detail als Anteil, in der
   CSV als `h1h2c_bw_artifact_share`).
 - CPP auf eigener Skala, nicht Praat-CPPS. Rohrlänge ist eine Modellgröße, keine Messung.
+- Die Tröte-Kachel zeigt Linie−Zwischenraum im Hochband nur aus Kernrahmen (laut, nicht am Einsatz, über dem Boden, Grundton
+  sicher); sonst „–“ mit dem Grund. Ohne genug stille Blöcke heißt es „Boden unbekannt“, nie ein Wert gegen einen erfundenen Boden.
+  Der Wert ist zuerst ein Quellmaß (folgt dem CPP); die Resonanz steht als Pegel daneben (siehe „Hochband 1.0“).
 - Tonsprünge heißen „Tonsprünge ≥ 5 HT, gehalten ≥ 90 ms“ und „kurze Kanten unter 90 ms“, nicht
   „Registerwechsel“ (siehe „Tonsprünge: zwei Spuren“).
 - **Periodenverdopplung hat keinen eigenen Warner.** Geprüft und verworfen: über saubere Vokale

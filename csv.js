@@ -184,6 +184,28 @@
          ± Abstand/2) und über 375 Hz (kein Formant messbar). Ältere Auswertungen: −99. */
       { key: 'teilton_share', get: g('summary.teiltonShare'), dec: 3 },
       { key: 'teilton_hoch_share', get: g('summary.teiltonHochShare'), dec: 3 },
+      /* Hochband 1.0 (hochband.js, summary.hochband; Chronik takes_hochband): Kennwerte aus lauten Kernrahmen — Linie−Zwischenraum
+         4–6,5 kHz (Median, Anteil über 3 dB), Hochband-Linien und -Zwischenraum gegen die Linien 300–2000 Hz, dasselbe für das
+         Sängerformantband, Zwischenraum im Stimmband, Abstand zum Boden, Kamm-Kontrast, Pegelgrenze (95. Perzentil), Rahmenzahlen,
+         Anteil der sonst tauglichen Rahmen mit unsicherem Grundton (nur hier ausgelassen), Boden-RMS, Verlauf je 10 s als Text.
+         Reicht es nicht für Kennwerte, stehen −99 und der Grund in hb_grund; ältere Auswertungen ohne Hochband: alles −99 bzw. leer. */
+      { key: 'hb_lz_med', get: g('summary.hochband.hbLz'), dec: 2 },
+      { key: 'hb_lz_ant3', get: g('summary.hochband.hbLzAnt3'), dec: 3 },
+      { key: 'hb_stimme_med', get: g('summary.hochband.hbStimme'), dec: 2 },
+      { key: 'hb_zw_med', get: g('summary.hochband.hbZw'), dec: 2 },
+      { key: 'sf_lz_med', get: g('summary.hochband.sfLz'), dec: 2 },
+      { key: 'sf_stimme_med', get: g('summary.hochband.sfStimme'), dec: 2 },
+      { key: 'zw_lo_med', get: g('summary.hochband.zwLo'), dec: 2 },
+      { key: 'hb_snr_med', get: g('summary.hochband.hbSnr'), dec: 2 },
+      { key: 'hb_kamm_med', get: g('summary.hochband.kamm'), dec: 2 },
+      { key: 'hb_pegel_max_dbfs', get: g('summary.hochband.pegelMax'), dec: 2 },
+      { key: 'hb_n_rahmen', get: g('summary.hochband.nRahmen'), dec: 0 },
+      { key: 'hb_n_kern_laut', get: g('summary.hochband.nKernLaut'), dec: 0 },
+      { key: 'hb_f0_unsure_share', get: g('summary.hochband.f0UnsureShare'), dec: 3 },
+      { key: 'hb_boden_rms_dbfs', get: g('summary.hochband.bodenRmsDbfs'), dec: 2 },
+      { key: 'hb_verlauf', get: g('summary.hochband.verlauf') },
+      { key: 'hb_grund', get: g('summary.hochband.grund') },
+      { key: 'hochband_version', get: g('analysis.hochbandVersion') },
       { key: 'jumps_held', get: g('summary.spruenge.gehalten'), dec: 0 },
       { key: 'jumps_edge', get: g('summary.spruenge.kante'), dec: 0 },
       { key: 'lambda_held_per_s', get: g('summary.spruenge.lambdaGehalten'), dec: 4 },
@@ -261,6 +283,8 @@
   // SFR/CPP unsicher steht nur als Code in der Serie (analysis.js FLAG): 1, wenn ein Grund da ist; ohne Codefeld −99.
   function codeBit(name) { return function (s, i) { return s[name] ? (s[name][i] ? 1 : 0) : null; }; }
   function flagBit(bit) { return function (s, i) { return (s.flags[i] & bit) ? 1 : 0; }; }
+  // Gatterbit des Hochbands (hochband.js GATTER): nur in gerechneten Rahmen (Bit 1, stimmhaft); ältere Serien ohne hbGatter −99.
+  function hbBit(mask) { return function (s, i) { return (s.hbGatter && (s.flags[i] & 1) && (s.hbGatter[i] & 1)) ? ((s.hbGatter[i] & mask) ? 1 : 0) : null; }; }
 
   // Rahmenweise Spalten: Name → Serienfeld (oder Funktion) und Nachkommastellen.
   var FRAME_COLUMNS = [
@@ -301,6 +325,13 @@
     ['sfr_unsure', stimmhaft(codeBit('sfrGrund')), 0], ['sfr_grund', stimmhaft(grundSpalte('sfrGrund'))],
     ['cpp_unsure', stimmhaft(codeBit('cppGrund')), 0], ['cpp_grund', stimmhaft(grundSpalte('cppGrund'))],
     ['fenster_rausch_ap', 'fensterRauschAp', 3], ['fenster_rausch_hoch_db', 'fensterRauschHochDb', 2],
+    /* Hochband 1.0 (hochband.js, Serie hbLz…; Chronik frames_teilton): Linie−Zwischenraum 4–6,5 kHz und 2,4–3,2 kHz, Hochband-Linien und
+       -Zwischenraum gegen die Linien 300–2000 Hz, Zwischenraum im Stimmband, Kamm-Kontrast, feiner Grundton, Abstand zum Boden,
+       Rahmenpegel des 80-ms-Fensters. Die Gatterbits (laut, Kern, über dem Boden, Grundton sicher, Kernrahmen) stehen nur in
+       gerechneten Rahmen (stimmhaft, 60–600 Hz), sonst −99 — eine 0 hieße dort „leise“, wo nichts gerechnet ist. */
+    ['hb_lz', 'hbLz', 2], ['sf_lz', 'sfLz', 2], ['hb_stimme', 'hbStimme', 2], ['hb_zw', 'hbZw', 2], ['sf_stimme', 'sfStimme', 2], ['zw_lo', 'zwLo', 2],
+    ['hb_kamm_db', 'hbKamm', 2], ['hb_f0_fein_hz', 'hbF0Fein', 2], ['hb_snr_db', 'hbSnr', 2], ['hb_pegel_dbfs', 'hbPegel', 2],
+    ['hb_laut', hbBit(2), 0], ['hb_kern', hbBit(4), 0], ['hb_snr_ok', hbBit(8), 0], ['hb_f0_sicher', hbBit(16), 0], ['hb_kernrahmen', hbBit(32), 0],
     ['flags', 'flags', 0]
   ];
 
@@ -341,7 +372,12 @@
   var PAKET_NAMEN = { t_s: 't', f0_hz: 'f0_b', f0_grund: 'f0_grund', f0_korrektur: 'f0_korr', f0_cep: 'f0_cep_b', f0_yin: 'f0_yin_b', rms_dbfs: 'rms',
     f1: 'f1_b', f2: 'f2_b', f3: 'f3_b', f4: 'f4_b', f5: 'f5_b', d34: 'd34_b', d45: 'd45_b', score_d34: 'd34_stable_b',
     sfr_db: 'sfr0_b', sfr_norm_db: 'sfr0_norm_b', shr_db: 'shr_b', shr_grid_hz: 'shr_raster', shr_other_db: 'shr_other_b', shr_zweitpuls: 'zweitpuls',
-    cpp_db: 'cpp_b', h1h2_db: 'h1h2_b', h1h2c_db: 'h1h2c_b', h1h2_unsure: 'h1h2_filter' };
+    cpp_db: 'cpp_b', h1h2_db: 'h1h2_b', h1h2c_db: 'h1h2c_b', h1h2_unsure: 'h1h2_filter',
+    /* Hochband 1.0: dieselbe Formel wie vare_hochband.py (Fenster, Bänder, Kamm, Masken), aber auf dem Rahmenraster des Browsers
+       (Fenstermitte, 20 ms) und mit dem Grundton des Kerns (f0_b) statt der Chronik-Entscheidung — darum _b, bis der Grundton
+       abgeglichen ist (Reihenfolge, Punkt 3). Die Gatterbits haben in der Chronik keine Spalte und behalten ihren Namen. */
+    hb_lz: 'hb_lz_b', sf_lz: 'sf_lz_b', hb_stimme: 'hb_stimme_b', hb_zw: 'hb_zw_b', sf_stimme: 'sf_stimme_b', zw_lo: 'zw_lo_b',
+    hb_kamm_db: 'kamm_b', hb_f0_fein_hz: 'f0_fein_b', hb_snr_db: 'hb_snr_b', hb_pegel_dbfs: 'hb_pegel_b' };
   function paketName(key) { return Object.prototype.hasOwnProperty.call(PAKET_NAMEN, key) ? PAKET_NAMEN[key] : key; }
   function framesToCsv(series, dialectName, VOWEL) {
     var d = DIALECTS[dialectName] || DIALECTS.standard;

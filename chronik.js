@@ -445,6 +445,43 @@
      Schwelle, nicht als Boden und nicht in Rost: Sie ist kein unsicherer Messwert, sondern eine genannte
      Annahme. Ältere Auswertungen ohne voicingFloorDb trugen die Annahme in floorDb (vor V3: q05 − 12). */
   function stimmBoden(s) { return zahl(s.voicingFloorDb) ? s.voicingFloorDb : (s.voicingFloorDb == null && zahl(s.floorDb) ? s.floorDb : NaN); }
+
+  /* ---------- Hochband 1.0 („Tröte“) ---------- */
+  var HOCHBAND_KACHEL = 'Tröte: Hochband 4–6,5 kHz Linie−Zwischenraum';
+  /* Marken aus dem privaten Korpus (korpus.json marken.hb_lz / marken.sf_lz: [{ db, text }]), nie aus dem Code. Lage eines Werts
+     zwischen den Marken als Text: „über ‚p90‘“, „zwischen ‚p10‘ und ‚Median‘“, „unter ‚p10‘“; ohne Marken leer. */
+  var HB_MARKEN = { hb_lz: [], sf_lz: [] };
+  function setHochbandMarken(m) {
+    HB_MARKEN = { hb_lz: [], sf_lz: [] };
+    if (!m) return;
+    ['hb_lz', 'sf_lz'].forEach(function (k) {
+      HB_MARKEN[k] = (m[k] || []).filter(function (x) { return x && isFinite(x.db); }).sort(function (a, b) { return a.db - b.db; });
+    });
+  }
+  function hochbandLage(wert, art) {
+    var M = HB_MARKEN[art || 'hb_lz'] || [];
+    if (!zahl(wert) || !M.length) return '';
+    var unter = null, ueber = null;
+    for (var i = 0; i < M.length; i++) { if (M[i].db <= wert) unter = M[i]; else if (!ueber) ueber = M[i]; }
+    var name = function (x) { return '„' + esc(x.text || fmt(x.db, 1) + ' dB') + '“'; };
+    if (unter && ueber) return 'zwischen ' + name(unter) + ' und ' + name(ueber);
+    if (unter) return 'über ' + name(unter);
+    return 'unter ' + name(ueber);
+  }
+  /* Text der Kachel: Linie−Zwischenraum (Median der lauten Kernrahmen, Anteil über 3 dB), Pegel des Hochbands gegen das Stimmband,
+     Zahl der Kernrahmen; dazu die Lage zwischen den Korpusmarken. Ohne Kennwert steht der Grund da, bei älteren Auswertungen die
+     Bitte um Neu-Analyse. Alle Zahlen aus der Zusammenfassung sind Fremddaten einer Sicherung: durch fmt(), Texte maskiert. */
+  function hochbandText(h, take) {
+    if (!h) return '– (ältere Auswertung ohne Hochband: neu analysieren)';
+    if (!zahl(h.hbLz)) return '– (' + esc(h.grund || 'nicht gerechnet') + ')';
+    var lage = hochbandLage(h.hbLz, 'hb_lz');
+    return (h.hbLz >= 0 ? '+' : '') + fmt(h.hbLz, 1) + ' dB (' + fmt(h.hbLzAnt3 * 100) + ' % über 3 dB, ' + fmt(h.nKernLaut) + ' laute Kernrahmen)'
+      + (lage ? ' · ' + lage : '') + ' · Pegel gegen Stimmband ' + fmt(h.hbStimme, 1) + ' dB, Zisch ' + fmt(h.hbZw, 1) + ' dB'
+      + ' · SF-Band ' + (h.sfLz >= 0 ? '+' : '') + fmt(h.sfLz, 1) + ' dB · Quellrauschen ' + fmt(h.zwLo, 1) + ' dB'
+      + (zahl(h.f0UnsureShare) && h.f0UnsureShare > 0 ? ' · ohne ' + prozentHtml(h.f0UnsureShare) + ' % mit unsicherem Grundton' : '')
+      + (h.verlauf ? ' · Verlauf ' + esc(h.verlauf) : '')
+      + (take && take.sampleRate && take.sampleRate !== 48000 ? ' · ' + fmt(take.sampleRate) + ' Hz, Chronik rechnet mit 48 kHz' : '');
+  }
   function summaryGrid(s, take) {
     function cell(k, v, unsure, befund) { return '<div class="stat' + (unsure ? ' unsure' : (befund ? ' befund' : '')) + '"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
     var thr = f3Schwelle(take), f3u = f3Unter(take);
@@ -472,6 +509,7 @@
       cell('Pegel dBFS (Median / max)', fmt(s.rms && s.rms.med, 1) + ' / ' + fmt(s.rms && s.rms.max, 1)) + cell('Rauschboden · SNR', fmt(s.floorSource === 'unknown' ? NaN : s.floorDb, 1) + ' dBFS (' + esc(s.floorSource === 'calibration' ? 'kalibriert' : (s.floorSource === 'unknown' ? 'unbekannt, keine Stille im Take' : 'geschätzt')) + ') · ' + (zahl(s.snrDb) ? fmt(s.snrDb, 1) + ' dB' : 'nicht messbar') + '', s.floorSource !== 'calibration') +
       (s.floorSource === 'unknown' ? cell('Stimmschwelle', 'angenommen: ' + fmt(stimmBoden(s) + 12, 1) + ' dBFS (Boden unbekannt, kein Messwert)') : '') +
       cell('Rohrlänge (Modell)', (s.tube && s.tube.n >= 20 ? fmt(s.tubeCm, 1) + ' cm [' + fmt(s.tube.q1, 1) + '–' + fmt(s.tube.q3, 1) + ']' : '– (zu wenige Rahmen mit vier gültigen Formanten)'), !(s.tube && s.tube.n >= 20)) +
+      cell(HOCHBAND_KACHEL, hochbandText(s.hochband, take), !(s.hochband && zahl(s.hochband.hbLz))) +
       /* Korrigiert ist kein Zweifel: Teilerkontrolle und Gegenprobe liefern einen geprüften Wert. Rost nur,
          wenn die Oktave in vielen Rahmen offen ist. Früher machten schon 5 % Korrekturen die Kachel rostig. */
       cell('Grundton korrigiert · Oktave unsicher', prozentHtml(s.octaveCorrectedShare || 0) + (zahl(s.f0KorrekturShare) && s.f0KorrekturShare > 0 ? ' (Gegenprobe ' + prozentHtml(s.f0KorrekturShare) + ')' : '') + ' · ' + prozentHtml(s.octaveAmbiguousShare || 0) + ' %', s.octaveAmbiguousShare > 0.2) +
@@ -610,5 +648,5 @@
     el.querySelector('#d-del').addEventListener('click', function () { handlers.remove(take); });
   }
 
-  root.VARECHRONIK = { setMarken: setMarken, angabenAktuell: angabenAktuell, fassungText: fassungText, HALTUNGEN: HALTUNGEN, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, teiltonText: teiltonText, rauschText: rauschText, rauschZusatz: rauschZusatz, hoheLage: hoheLage, RAUSCHANTEIL_TEXT: RAUSCHANTEIL_TEXT, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, H1C_BW_TEXT: H1C_BW_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
+  root.VARECHRONIK = { setMarken: setMarken, setHochbandMarken: setHochbandMarken, hochbandLage: hochbandLage, hochbandText: hochbandText, HOCHBAND_KACHEL: HOCHBAND_KACHEL, angabenAktuell: angabenAktuell, fassungText: fassungText, HALTUNGEN: HALTUNGEN, kontextZeile: kontextZeile, lueckenText: lueckenText, WARMUP_TEXT: WARMUP_TEXT, validShareOf: validShareOf, formantSchwach: formantSchwach, formantBeleg: formantBeleg, noteText: noteText, bestSegmentText: bestSegmentText, renderRefs: renderRefs, renderList: renderList, renderDetail: renderDetail, drawLanes: drawLanes, drawFormantBars: drawFormantBars, setupCanvas: setupCanvas, refZeile: refZeile, zahl: zahl, f3Schwelle: f3Schwelle, f3Unter: f3Unter, shrBefund: shrBefund, f0GrundText: f0GrundText, f0KorrText: f0KorrText, oktavText: oktavText, shrGrundText: shrGrundText, teiltonText: teiltonText, rauschText: rauschText, rauschZusatz: rauschZusatz, hoheLage: hoheLage, RAUSCHANTEIL_TEXT: RAUSCHANTEIL_TEXT, f0Zusatz: f0Zusatz, f0Unsicher: f0Unsicher, shrZusatz: shrZusatz, shrUnsicher: shrUnsicher, formantGruende: formantGruende, BANDBREITE_TEXT: BANDBREITE_TEXT, H1C_BW_TEXT: H1C_BW_TEXT, prozent: prozent, prozentHtml: prozentHtml, hoverText: hoverText, fmt: fmt, esc: esc, dateShort: dateShort, COL: COL, MONO: MONO };
 })(typeof self !== 'undefined' ? self : this);

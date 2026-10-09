@@ -47,7 +47,15 @@ TAKE_SOLL.push(
   ['tube_cm', 'summary.tubeCm', 1], ['tube_q1', 'summary.tube.q1', 1], ['tube_q3', 'summary.tube.q3', 1], ['tube_n', 'summary.tube.n', 0],
   ['octave_corrected_share', 'summary.octaveCorrectedShare', 3], ['octave_ambiguous_share', 'summary.octaveAmbiguousShare', 3],
   ['slot_unsure_share', 'summary.slotUnsureShare', 3],
-  ['teilton_share', 'summary.teiltonShare', 3], ['teilton_hoch_share', 'summary.teiltonHochShare', 3], ['jumps_held', 'summary.spruenge.gehalten', 0], ['jumps_edge', 'summary.spruenge.kante', 0],
+  ['teilton_share', 'summary.teiltonShare', 3], ['teilton_hoch_share', 'summary.teiltonHochShare', 3],
+  // Hochband 1.0 (hochband.js, summary.hochband): Kennwerte aus lauten Kernrahmen, Verlauf und Grund als Text, Version aus der Analyse.
+  ['hb_lz_med', 'summary.hochband.hbLz', 2], ['hb_lz_ant3', 'summary.hochband.hbLzAnt3', 3], ['hb_stimme_med', 'summary.hochband.hbStimme', 2],
+  ['hb_zw_med', 'summary.hochband.hbZw', 2], ['sf_lz_med', 'summary.hochband.sfLz', 2], ['sf_stimme_med', 'summary.hochband.sfStimme', 2],
+  ['zw_lo_med', 'summary.hochband.zwLo', 2], ['hb_snr_med', 'summary.hochband.hbSnr', 2], ['hb_kamm_med', 'summary.hochband.kamm', 2],
+  ['hb_pegel_max_dbfs', 'summary.hochband.pegelMax', 2], ['hb_n_rahmen', 'summary.hochband.nRahmen', 0], ['hb_n_kern_laut', 'summary.hochband.nKernLaut', 0],
+  ['hb_f0_unsure_share', 'summary.hochband.f0UnsureShare', 3], ['hb_boden_rms_dbfs', 'summary.hochband.bodenRmsDbfs', 2],
+  ['hb_verlauf', 'summary.hochband.verlauf', 'text'], ['hb_grund', 'summary.hochband.grund', 'text'], ['hochband_version', 'analysis.hochbandVersion', 'text'],
+  ['jumps_held', 'summary.spruenge.gehalten', 0], ['jumps_edge', 'summary.spruenge.kante', 0],
   ['lambda_held_per_s', 'summary.spruenge.lambdaGehalten', 4], ['lambda_edge_per_s', 'summary.spruenge.lambdaKante', 4],
   ['voiced_share', 'summary.voicedShare', 3], ['valid_share', 'summary.validShare', 3], ['stable_share', 'summary.stableShare', 3],
   ['n_frames', 'summary.nFrames', 0], ['comment', 'comment', 'text'],
@@ -64,6 +72,7 @@ const TEXTE = {
   'sitzung.warmup': 'teilweise', deviceLabel: 'Mikro "USB"; Kanal 1, links', deviceId: 'dev; "7"', 'captureFlags.capture': 'AudioWorklet', audioFormat: 'f32', 'analysis.kernelVersion': 'kern-test',
   calibrationId: 'c-3', vowelIntent: 'ɔ', 'summary.vowel.dominant': 'ɐ', 'summary.f0.note': 'G3', 'summary.best.cls': 'ø',
   'summary.floorSource': 'estimate', comment: 'Zeile 1\r\nZeile 2; "x", y',
+  'summary.hochband.verlauf': '0-10s +4.2 | 10-20s -0.3', 'summary.hochband.grund': 'zu wenige laute Kernrahmen (7 < 30; laut 9)', 'analysis.hochbandVersion': 'hochband-test',
   'angaben.haltung': 'sitzend gerade', 'angaben.ort': 'Küche; Fenster zu', 'angaben.kette': 'Hülle "B", 12 cm', 'angaben.gefuehl': 'wach, etwas heiser',
   'angaben.biphonation': 'nein', 'angaben.periodenverdopplung': 'offen', 'angaben.zeit': '2026-09-03T10:01:30.000Z'
 };
@@ -101,6 +110,10 @@ FRAME_SOLL.push(
   ['shr_boden_db', 'feld', 'shrBoden', 2], ['fenster_pegel_db', 'feld', 'fensterPegelDb', 2], ['fenster_f0_lo_hz', 'feld', 'fensterF0Lo', 2], ['fenster_f0_hi_hz', 'feld', 'fensterF0Hi', 2],
   ['sfr_unsure', 'codebit', 'sfrGrund'], ['sfr_grund', 'grund', 'sfrGrund'], ['cpp_unsure', 'codebit', 'cppGrund'], ['cpp_grund', 'grund', 'cppGrund'],
   ['fenster_rausch_ap', 'feld', 'fensterRauschAp', 3], ['fenster_rausch_hoch_db', 'feld', 'fensterRauschHochDb', 2],
+  // Hochband 1.0 (hochband.js): Werte je Rahmen und die Gatterbits aus hbGatter (GATTER: laut 2, Kern 4, SNR 8, Grundton sicher 16, Kernrahmen 32)
+  ['hb_lz', 'feld', 'hbLz', 2], ['sf_lz', 'feld', 'sfLz', 2], ['hb_stimme', 'feld', 'hbStimme', 2], ['hb_zw', 'feld', 'hbZw', 2], ['sf_stimme', 'feld', 'sfStimme', 2],
+  ['zw_lo', 'feld', 'zwLo', 2], ['hb_kamm_db', 'feld', 'hbKamm', 2], ['hb_f0_fein_hz', 'feld', 'hbF0Fein', 2], ['hb_snr_db', 'feld', 'hbSnr', 2], ['hb_pegel_dbfs', 'feld', 'hbPegel', 2],
+  ['hb_laut', 'bit', ['hbGatter', 2]], ['hb_kern', 'bit', ['hbGatter', 4]], ['hb_snr_ok', 'bit', ['hbGatter', 8]], ['hb_f0_sicher', 'bit', ['hbGatter', 16]], ['hb_kernrahmen', 'bit', ['hbGatter', 32]],
   ['flags', 'feld', 'flags', 0]
 );
 /* Spalten, die nur für einen stimmhaften (gemessenen) Rahmen etwas aussagen: In stimmlosen Zeilen stehen sie als
@@ -108,6 +121,7 @@ FRAME_SOLL.push(
    Serie und schrieb damit fest, dass f0_unsure 0 in einer Pause „Grundton sicher“ heißt. valid1…5 gehört nicht
    dazu: 0 heißt „nicht gültig“ und stimmt auch ohne Messung. */
 const STIMMHAFT_SPALTEN = ['slot_unsure', 'n_peaks', 'octave_corrected', 'octave_ambiguous', 'h1h2_unsure', 'f0_unsure', 'f0_grund', 'f0_korrektur',
+  'hb_laut', 'hb_kern', 'hb_snr_ok', 'hb_f0_sicher', 'hb_kernrahmen',
   'octave_unter_grenze', 'shr_unsure', 'shr_grund', 'd34_grund', 'd45_grund', 'sfr_unsure', 'sfr_grund', 'cpp_unsure', 'cpp_grund'];
 for (let k = 1; k <= 5; k++) STIMMHAFT_SPALTEN.push('slot_grund' + k, 'rauschboden' + k, 'n_win' + k);
 
@@ -230,6 +244,8 @@ function buildSeries(A) {
   // Fensterzahl je Slot und Zeile: (2r + 3k) mod 5, in jeder Spalte ein anderes Muster.
   if (s.nWin) for (let r = 0; r < n; r++) { let v = 0; for (let k = 0; k < 5; k++) v |= ((2 * r + 3 * k) % 5) << (3 * k); s.nWin[r] = v; }
   [5, 4, 3, 2, 1, 0].forEach((v, r) => { s.nPeaks[r] = v; });
+  // Hochband-Gatter: in jeder Zeile gerechnet (Bit 1), die übrigen Bits in jeder Spalte mit eigenem Muster.
+  if (s.hbGatter) [1 | 2 | 4 | 8 | 16 | 32, 1 | 2 | 8, 1 | 4 | 16, 1 | 2 | 4 | 32, 1 | 16, 1 | 8 | 32].forEach((v, r) => { s.hbGatter[r] = v; });
   [1, 2, 4, 8, 16, 22].forEach((v, r) => { s.valid[r] = v; });
   [F.VOICED, F.OCTAVE | F.SCORE, F.H1H2UNSURE | F.SUBGRID, F.OCTAMBIG | F.D34VALID,
     F.VOICED | F.OCTAVE | F.H1H2UNSURE | F.OCTAMBIG | F.VOWELAMBIG | F.D45VALID, 0].forEach((v, r) => { s.flags[r] = v; });

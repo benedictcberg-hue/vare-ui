@@ -172,7 +172,7 @@ async function seiteOeffnen(sp, uhr, signal, sr) {
   };
   sb.window = sb; sb.self = sb;
   vm.createContext(sb);
-  for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+  for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'wav.js', 'calibration.js', 'korpus.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
   sb.VARESTORE = sp.api; sb.VARERECORDER = recorderNeu(signal, sr);
   vm.runInContext(quelle('app.js'), sb, { filename: 'app.js' });
   const st = () => sb.VAREAPP.state;
@@ -227,7 +227,7 @@ function chronikNeu() {
   const sb = { console: { log() { }, warn() { }, error: aufFehler }, devicePixelRatio: 1 };
   sb.self = sb; sb.window = sb;
   vm.createContext(sb);
-  for (const f of ['dsp.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
+  for (const f of ['dsp.js', 'hochband.js', 'vowel.js', 'analysis.js', 'csv.js', 'chronik.js']) vm.runInContext(quelle(f), sb, { filename: f });
   return sb;
 }
 // Zeichenfläche, die jeden Aufruf mitschreibt: [Name, Argumente].
