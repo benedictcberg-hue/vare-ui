@@ -635,7 +635,12 @@ for (const srIn of [44100, 48000, 96000]) {
     const KDIR = path.join(__dirname, 'pruefung', 'kriterien');
     const H = { check, near, r0, r1, r2, noise, tone, concat, scale, dbToLin, SR, TSR, BW5, CASES, D, V, A, C, W, glide };
     if (fs.existsSync(KDIR)) {
+      /* Zum Entwickeln: VARE_MODULE=n_ui,t2 (Komma-Liste von Dateinamen-Anfängen) lässt nur diese Module laufen.
+         Windows (PowerShell): $env:VARE_MODULE = 'n_ui'; node test_dsp.js. Verbindlich ist nur der volle Lauf. */
+      const nur = (process.env.VARE_MODULE || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (nur.length) console.log('Nur Module: ' + nur.join(', ') + ' (VARE_MODULE gesetzt — kein verbindlicher Lauf)');
       for (const f of fs.readdirSync(KDIR).filter(n => /\.js$/.test(n)).sort()) {
+        if (nur.length && !nur.some(x => f.indexOf(x) === 0)) continue;
         try { await require(path.join(KDIR, f))(H); }
         catch (e) { check('MOD', 'Kriterienmodul ' + f + ' läuft ohne Ausnahme', false, String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
       }

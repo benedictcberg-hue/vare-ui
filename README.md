@@ -9,26 +9,30 @@ Zielwerte. Vor der Verbindung zeigt sie nichts als ein Feld für den Token. Alle
 kommt zur Laufzeit aus dem privaten Repo `benedictcberg-hue/vare-tools`:
 
 - `korpus.json` — gelesen: die eigenen Marken für ΔF3–4, die Zielschwelle für F3, die Gatterschwellen
+- `data/input/` — geschrieben: je Kalibrierung eine kleine JSON-Datei mit Messwerten
+- `data/takes/<id>/` — geschrieben: je Take sein Übergabepaket ohne WAV (`take.json`, `frames.csv.gz`, `ereignisse.csv`)
 
 ```
   Mikrofon (nur gelesen)                Browser
         |                                  |
         v                                  v
   vare-tools (privat)  <---- api.github.com, Token nur im Browser ----
-    korpus.json             nur gelesen
+    korpus.json             gelesen
+    data/input/             geschrieben: Kalibrierungen (Messwerte, kein Audio)
+    data/takes/<id>/        geschrieben: Take-Paket ohne WAV (Metadaten, Rahmen, Ereignisse)
     docs/physik.md          bleibt privat, die Seite liest es nie
         |
         v
   vare-ui (diese Seite, GitHub Pages)
         |
         v
-  IndexedDB im Browser: Aufnahmen, Chronik, Kalibrierungen — nichts geht zurück
+  IndexedDB im Browser: Aufnahmen (WAV), Chronik, Kalibrierungen
 ```
 
-Es geht **nichts** an GitHub zurück. Aufnahmen, Chronik, Kalibrierungen und Export liegen
-im Browserspeicher dieses Geräts. Der einzige Netzzugriff der Seite ist das Lesen von
-`korpus.json`; die Content-Security-Policy erlaubt `connect-src` ausschließlich
-`https://api.github.com`.
+Ins private Repo gehen nur **Messwerte und Metadaten, nie Audio**. Aufnahmen, Chronik, Kalibrierungen
+und Export liegen im Browserspeicher dieses Geräts. Der einzige Netzzugriff der Seite ist
+`api.github.com` (lesen `korpus.json`, schreiben nach `data/input/` und `data/takes/`); die
+Content-Security-Policy erlaubt `connect-src` ausschließlich `https://api.github.com`.
 
 ## Token
 
@@ -39,9 +43,10 @@ Fine-grained Personal Access Token, angelegt unter
 - Permissions → Repository → **Contents: Read and write**
 - Sonst nichts.
 
-Lesend braucht die Seite das Token für `korpus.json`. Schreibend braucht sie es für genau eine
-Sache: die Ablage jeder Kalibrierung (siehe unten). Mit einem nur lesenden Token läuft alles
-andere weiter; die Kalibrierungen warten dann im Browser und die Seite sagt das sichtbar.
+Lesend braucht die Seite das Token für `korpus.json`. Schreibend braucht sie es für zwei Ablagen:
+jede Kalibrierung nach `data/input/` und jedes Take-Paket ohne WAV nach `data/takes/<id>/` (siehe
+unten). Mit einem nur lesenden Token läuft alles andere weiter; die Dateien warten dann im Browser
+und die Seite sagt das sichtbar. Ein Fine-grained Token gilt je Repo, nicht je Pfad.
 
 ### Ablage der Kalibrierung
 
@@ -52,6 +57,18 @@ und F1–F3 des /a/. Nicht darin: Gerätename, Audio, Takes. Eine vorhandene Dat
 überschrieben. Scheitert das Schreiben (offline, Token nur lesend), bleibt die Datei in einer
 Warteschlange im Browser und geht beim nächsten Verbinden raus; die Zeile unter der Kalibrierung
 nennt, was offen ist.
+
+### Ablage des Take-Pakets
+
+Nach jedem gespeicherten Take legt die Seite sein Übergabepaket ohne WAV im privaten Repo ab
+(Einstellung „Nach jedem Take sein Paket … ins private Repo legen“, Vorgabe an; im Detail auch von
+Hand über „Ins Repo“): `vare-tools/data/takes/<id>/take.json`, `frames.csv.gz` (die Rahmen-CSV im
+Dialekt chronik, gepackt über den `CompressionStream` des Browsers; fehlt er, `frames.csv` ungepackt)
+und `ereignisse.csv`. Jede Datei ist ein Commit; eine vorhandene Datei wird nie überschrieben. Das
+WAV (rund 40 MB je Take als Float32) geht nicht ins Repo, sondern wie bisher per Download oder als
+Paket (ZIP). So ist jeder Take im Repo lesbar, ohne Upload: Metadaten, Kette, Formular, Rahmen mit
+Prüfkette, Sprünge. Dieselbe Warteschlange wie bei der Kalibrierung; was offen ist, steht unter der
+Kalibrierung. `take.json` enthält den Gerätenamen (Kettenprotokoll).
 
 Das Token bleibt im Browser (localStorage, wenn „merken“ angehakt ist, sonst nur für die
 Sitzung) und geht ausschließlich an `api.github.com`.
@@ -97,7 +114,7 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
    allen Gründen, zur Fehlersuche.
 2. **Session-Recorder mit Chronik.** Take aufnehmen, Analyse im 10-ms-Raster mit Ordnungs-
    und Fensterlängensweep, Zusammenfassung und Rahmenverlauf und WAV in IndexedDB,
-   CSV-Export, JSON-Sicherung und -Import, Neu-Analyse mit neuerem Kern — einzeln oder als
+   CSV-Export, Übergabepaket (ZIP), JSON-Sicherung und -Import, Neu-Analyse mit neuerem Kern — einzeln oder als
    „Alle neu analysieren“ für jeden Take mit gespeichertem Audio (abbrechbar; Takes ohne Audio werden
    genannt und bleiben „anders gerechnet“). Verglichen und als Referenz genutzt werden nur Takes mit
    gleicher Rechenweise (Kernversion, Zusammenfassung, Gatter, Rahmenabstand, Streuungsgrenze).
@@ -114,6 +131,49 @@ Die Chronik gehört zur Adresse: unter `localhost:8000` aufgenommene Takes sind 
 
 Die Zahlen und Regeln in diesem README gelten für **Kern 4.1.0** (`dsp.js`, `VERSION`). Wo eine Messung
 mit einem früheren Kern entstand, steht es dabei.
+
+## Chronik-Standard, Stufe 1
+
+Angleichung an `vare_standard.py` und die Chronik `vare_chronik.duckdb` (Plan vom 9.10.2026). Stufe 1 ändert
+keine Messung; sie ordnet Aufnahme, Angaben und Übergabe. Regel aus These 30: **gleiche Spalte nur bei
+gleicher Formel** — was der Browser anders rechnet, heißt `_b`.
+
+- **WAV in Geräterate, Float32 (Vorgabe, bitgleich mit dem Puffer) oder 24 Bit PCM.** 16 Bit wird nicht mehr
+  angeboten; ein gemerktes 16-Bit-Format fällt auf Float32 zurück. Alte 16-Bit-Takes bleiben lesbar
+  (`wav.js` liest PCM 8/16/24/32 und Float32/64).
+- **Take-ID nach Chronik-Schema** `JJJJMMTT-hhmm-kurztitel` aus der **Startzeit** (Wanduhr) und dem Titel
+  (`csv.js` `takeId`, `kurztitel`: a–z, 0–9, Bindestrich, höchstens 24 Zeichen, Umlaute aufgelöst; ohne Titel
+  `ohne-titel`; gleiche Minute und gleicher Titel: `-2`, `-3`). Der Code A…Z bleibt Zweitschlüssel.
+  Dateinamen = ID (`<id>.wav`, `<id>.take.csv`, `<id>.rahmen.csv`, `<id>.zip`); ältere Takes mit UUID behalten
+  `vare-<Code>-<Zeitstempel>`.
+- **Start und Ende** als ISO und Wanduhr (`startedAt`/`endedAt`, `timeLocal`/`timeLocalEnd`). In der CSV nennen
+  `datetime_iso` und `time_local` den Start (wie `pause_before_s` und `warmup_min`), `end_iso` und `end_local` das
+  Ende. Ältere Takes kannten nur das Ende: ihr Start ist Ende minus Dauer, die Wanduhr über den gespeicherten
+  UTC-Abstand des Takes.
+- **Kette je Take** in der CSV: `track_sample_rate`, `device_id`, `browser_processing` (1 = Echo-, Rausch- oder
+  Pegelautomatik an, 0 = alle aus, −99 = unbekannt), `capture`, `audio_format`, dazu wie bisher `sample_rate`,
+  `device`, `calibration_id`.
+- **Stichpunkte zum Take (Formular):** Titel (Pflicht, Vorschläge aus den letzten Takes; „später“ erlaubt),
+  Haltung (stehend, sitzend gerade, sitzend, liegend, gehend, frei), Ort, Kette-Zusatz, Gefühl, Notiz, Biphonation
+  manuell und Periodenverdopplung manuell (ja/nein/offen). Haltung, Ort und Kette bleiben für den nächsten Take
+  stehen. Ein Nachtrag im Detail schreibt eine **neue Fassung mit Zeitstempel** (`angaben`, frühere in
+  `angabenVersionen`), nichts wird überschrieben. CSV: `haltung`, `ort`, `kette_zusatz`, `gefuehl`,
+  `biphonation_manuell`, `periodenverdopplung_manuell`, `angaben_stand`, `angaben_fassungen` (Zahl der früheren
+  Fassungen). Gestaltung: einspaltig, Beschriftung über dem Feld, optionale Felder markiert, Inline-Prüfung des
+  Pflichtfelds, Ziele ab 46 px, Schrift 16 px.
+- **Übergabepaket je Take** (`Paket` in Chronik und Detail, ZIP ohne Kompression, `zip.js`): `<id>.wav`,
+  `<id>.take.json` (Metadaten, Formular mit Fassungen, Kette, Kalibrier-ID, Kennwerte, Kernversion; fehlend =
+  `null`), `<id>.frames.csv` im **Dialekt chronik** (Komma, Punkt, fehlend leer statt −99, Zahlen mit gespeicherter
+  Genauigkeit — Float32 bitgleich zurücklesbar —, Wahrheitswerte 0/1) und `<id>.ereignisse.csv` (Sprünge aus
+  `detectJumps`: `t, dauer_s, von_hz, nach_hz, halbtoene, richtung, art, uebergang_ms, oktave, ap_spitze`).
+  `<id>.haltetoene.csv` folgt mit Stufe 2 (Haltetöne nach Chronik-Algorithmus).
+- **Spaltennamen im Paket** (`csv.js` `PAKET_NAMEN`): `t`, `rms`, `f0_b` (bis zum Abgleich gegen die
+  Praat-Entscheidungen der Chronik), `f0_grund`, `f0_korr`, `f1_b…f5_b` mit `valid1…5`, `d34_b`, `d45_b`,
+  `d34_stable_b`, `sfr0_b` (2400–3200 gegen 0–2000 Hz bei 12 kHz), `cpp_b` (eigene Skala), `h1h2_b`, `h1h2c_b`,
+  `h1h2_filter`, `shr_b`, `shr_raster`, `zweitpuls`. Nicht genannte Spalten behalten ihren Namen. Die Formeln
+  stehen in `vare-tools/schema.md`; der Importer dort heißt `tools/vare_import_ui.py`.
+- Nicht in Stufe 1 (Plan, Punkte 2–6): Haltetöne, SFR300, Geräteprofil, Grundton-Abgleich, Datenbankgesetz
+  (kein Löschen), Kalibrierung auf Singpegel, Korpus und Gatter.
 
 ## Was „ungültig“ heißt
 
@@ -316,7 +376,9 @@ node test_dsp.js
 ```
 
 Erst die eingebauten Kriterien T1–T27 in `test_dsp.js`, danach jedes Modul unter
-`pruefung/kriterien/` in alphabetischer Reihenfolge (Format: `pruefung/kriterien/README.md`).
+`pruefung/kriterien/` in alphabetischer Reihenfolge (Format: `pruefung/kriterien/README.md`). Zum Entwickeln
+lässt `VARE_MODULE=n_ui,t2` (Windows PowerShell: `$env:VARE_MODULE = 'n_ui'`) nur die genannten Module laufen;
+verbindlich ist allein der volle Lauf.
 Kriterien gegen synthetische Signale mit bekannter Wahrheit; wie viele, nennt die letzte Zeile des Laufs. Exit-Code 1,
 sobald eines reißt. **Reißt ein Kriterium, ist das ein Befund, keine Toleranzfrage — melden, nicht
 die Schwelle anheben.** Läuft in CI auf `ubuntu-latest` und `windows-latest` mit Node 22.
@@ -330,7 +392,7 @@ Windows länger.
 | `n_kern.js` | A1–A4 | Nachprüfung des Kerns: Feinspur mit Oktavkontrolle, Mischrahmen am Tonwechsel, Atempause im Raum und mit Brumm, digitale Stille; SHR an Rändern, Tonwechseln und bei Hauch; Formanten nach dem Teiltonabstand (hohe Lage), enge Cluster, Vokalwechsel; Grundton bei starkem Hauch (Unterton, Oktave offen); SFR/CPP neben Frikativen | 181 s |
 | `k_kern.js` | K1–K4 | Feinspur und Tonsprünge; Nummerierung, Lesarten, Verschmelzung, Rauschboden; Gegenprobe des Grundtons; SHR-Raster | 162 s |
 | `v_auswertung.js` | V1–V3 | Live-Gatter im Vokalwechsel und bei Vibrato; Grenzvokal, Referenzen, Pins; lange Takes, „stabil“, Boden ohne Stille | 30 s |
-| `u_oberflaeche.js` | U1–U3 | `app.js` in einer nachgebauten Seite: Schritt 0, Löschen, Import, Gerätewechsel, Token, Sicherung, Rost und Gold, Historie | 22 s |
+| `u_oberflaeche.js` | U1–U4 | `app.js` in einer nachgebauten Seite: Schritt 0, Löschen, Import, Gerätewechsel, Token, Sicherung, Rost und Gold, Historie; U4: Chronik-Standard Stufe 1 (Take-ID aus Startzeit und Titel, -2 in derselben Minute, Formular geleert und gemerkt, Nachtrag als neue Fassung, Paket in der Warteschlange und als PUT nach data/takes/<id>/, Einstellung aus, IDs nie wiedervergeben) | 25 s |
 | `i3_gruende.js` | I3 | Grund je Slot in Serie, CSV, Live und Hover; Live-Boden; angenommene Stimmschwelle | 18 s |
 | `t1_pruefstaerke.js` | P1 | ob jede Regel für gültig, stimmhaft und stabil wirklich entscheidet (gegen Mutanten) | 10 s |
 | `i4_rechenweise.js` | I4 | Kern-Fingerabdruck je Version, „Alle neu analysieren“, Formelschutz, Sicherung Version 3 | 10 s |
@@ -339,6 +401,7 @@ Windows länger.
 | `t2_pruefstaerke.js` | P2 | jede CSV-Spalte gegen eine eigene Solltabelle, SFR-Normierung, WAV | 4 s |
 | `i5_doku.js` | I5 | Browserdateien in ES5, Hilfetext Schritt 0 und dieses README gegen den Code | < 1 s |
 | `n_ablage.js` | AB1–AB2 | Ablage der Kalibrierung: Dateiname unter `data/input/`, nur Messwerte und Uhrzeit ohne Gerätename, PUT an die Contents-API ohne Überschreiben, verständlicher Fehler bei fehlendem Schreibrecht | < 1 s |
+| `n_paket.js` | PK1–PK5 | Chronik-Standard Stufe 1: Take-ID und Kurztitel, Zeitbezug Start (auch für ältere Takes), Kette je Take, Übergabepaket (`take.json` ohne NaN/−99, `frames.csv` im Dialekt chronik mit `_b`-Namen und bitgleichen Float32-Werten, `ereignisse.csv`), ZIP mit Prüfsumme, Ablage nach `data/takes/<id>/` mit gz als Base64, WAV 24 Bit und Float32-Vorgabe | 2 s |
 | `n_ruhig.js` | RU0–RU3 | Ruhige Live-Anzeige: voreingestellt; springende Formanten als Median auf 10 Hz, höchstens zweimal je Sekunde neu (Gegenprobe Einzeltakt), große Zahl wie Kachel; Minderheitswert als „– · Grund“ in Rost; kurze Gründe | < 5 s |
 | `n_ui.js` | B1–B3 | `app.js` mit dem echten `storage.js` auf nachgebildetem IndexedDB: Take und Verlauf in einer Transaktion, Notiz im Detail während „Alle neu analysieren“, Export/Import im Lauf gesperrt, Meldung bei vollem Speicher, Neuladen während der Analyse; Lückenerkennung in Worklet und Recorder, Naht in der Analyse, Take mit Lücke durch die Seite. B2: Take-Ergebnis wie Detail, Meldung der Neu-Analyse, Take-Codes für pandas, Größe der Sicherung, Pages-Quelle, Note ohne Grundton, Streuungsgrenze, Fensterzahl, H1*−H2*-Bandbreite, stimmlose Rahmen in der CSV. B3 (Prüfstärke): ΔF3–4 nur aus gültigem ΔF3–4 gewertet, Gültigkeit in der Zusammenfassung, H1−H2 filtergetrieben, Rost live und Chronik-Spur, Band „Oktave offen“, Zweideutig-Anteil der Referenzen | 47 s |
 | `n_zusammen.js` | C1–C3 | Kern und Oberfläche zusammen: Marken und Grundcodes passen in die Serie (auch NAHT neben neuen Kernmarken), Rahmen an einer Naht in jedem Serienfeld und jeder CSV-Spalte nicht gemessen, Feinspur und Sprungsuche je Abschnitt mit der Sprungerkennung des Kerns; jeder Grund und Beleg des Kerns 4.1 in Serie, Sicherung, Zusammenfassung, CSV, live, Hover, Detail, Liste und Ergebnis; Naht nach stehendem Kontext als Spanne, offenes Detail während „Alle neu analysieren“ | 24 s |
@@ -363,7 +426,9 @@ ohne Token: keine Marke, kein Stand, keine Notiz des Testkorpus in Quelltext, Te
 Zustand, vor und nach falschem Token, mit Gegenprobe nach der Verbindung; Meldung bei falschem Token,
 Oberfläche erst nach Verbindung), Mikrofon über das AudioWorklet, Kalibrierung, Take gegen bekannte
 Formanten, Live-Gatter über die ganze Aufnahme (gewertet nur beim wahren ΔF3–4), Chronik, CSV, Sicherung,
-Import, Detailansicht mit Hover, Neu-Analyse einzeln und „Alle neu analysieren“, Schritt 0 über
+Import, Detailansicht mit Hover, Neu-Analyse einzeln und „Alle neu analysieren“, Take-ID und Formular nach dem
+Chronik-Standard, Paket ohne WAV als drei PUTs nach data/takes/<id>/ (frames.csv.gz über den CompressionStream),
+Paket als ZIP mit Float32-WAV aus der Chronik, Schritt 0 über
 Neuladen und neue Sitzung, „Alles löschen“, Gerätewechsel, Token entfernen, Bedienelemente ab 46 px,
 Datenbank Version 1 → 2, Neuladen mitten in der Analyse mit Rückfrage und Fortsetzen, Take ohne
 vorgetäuschte Lücke und ein Aussetzer von 1,5 s als Signallücke, schwach belegte Formanten im Take-Ergebnis
@@ -372,7 +437,7 @@ Die GitHub-API wird nachgestellt — kein Netz, kein echtes Token.
 
 ## CSV
 
-Zwei Dialekte, einstellbar unter „Einstellungen“:
+Drei Dialekte; die ersten beiden einstellbar unter „Einstellungen“, der dritte gilt im Übergabepaket:
 
 - **Standard** (Komma, Dezimalpunkt, ohne BOM) — für pandas und andere Leser. Text steht unverändert da.
 - **Excel DE** (Semikolon, Dezimalkomma, mit BOM). Text, der mit `=`, `+`, `-` oder `@` beginnt, auch nach
@@ -380,7 +445,11 @@ Zwei Dialekte, einstellbar unter „Einstellungen“:
   Excel ihn als Formel aus. Excel zeigt das Apostroph mit an; der Text dahinter ist unverändert. Zahlen
   betrifft das nie: `-99,00` bleibt eine Zahl.
 
-In beiden Dialekten: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
+- **chronik** (Komma, Dezimalpunkt, ohne BOM) — nur im Übergabepaket (`frames.csv`, `ereignisse.csv`). Fehlende
+  Zahl leer (NULL), nie −99; Zahlen mit gespeicherter Genauigkeit statt der Anzeigestellen; Spaltennamen nach dem
+  Chronik-Standard (siehe oben).
+
+In Standard und Excel DE: fehlende Zahlen stehen als Sentinel `-99` (mit den Nachkommastellen der Spalte),
 fehlender Text bleibt leer — auch `f0_note`, wenn kein Grundton gemessen ist.
 
 Einlesen mit pandas, ohne dass ein Text still als fehlend gilt:
@@ -399,7 +468,10 @@ die pandas oder Excel nicht als denselben Text zurückgeben (`NA`, `NULL`, `INF`
 Lücke; −99 = nicht geprüft. In der Rahmen-CSV markiert Bit 8192 in `flags` einen Rahmen an einer Naht
 (nicht gemessen, als Pause geführt).
 
-Stand Kern 4.1.0: 111 Spalten je Take, 88 je Rahmen. Neu mit Kern 4.1.0:
+Stand Kern 4.1.0, Chronik-Standard Stufe 1: 127 Spalten je Take, 88 je Rahmen. Neu mit Stufe 1 (Take): `take_id`,
+`end_iso`, `end_local`, `track_sample_rate`, `device_id`, `browser_processing`, `capture`, `audio_format`, `haltung`,
+`ort`, `kette_zusatz`, `gefuehl`, `biphonation_manuell`, `periodenverdopplung_manuell`, `angaben_stand`,
+`angaben_fassungen`; `datetime_iso` und `time_local` nennen den Start. Neu mit Kern 4.1.0:
 
 - **Take:** `sfr_unsure_share`, `cpp_unsure_share` (SFR und CPP stehen nur aus Rahmen ohne Rauschanteil im
   Median), `teilton_share`, `teilton_hoch_share` (Teiltonabstand über 250 bzw. 375 Hz) und `f1…f5_teilton_share`
@@ -445,8 +517,8 @@ Sichern.
 
 Eine Sicherung ist höchstens 500 MB groß: Chrome und Edge halten höchstens 2^29 − 24 Zeichen in einem String,
 und der Import liest die Datei in einen. Geprüft wird vorher die ganze Datei — Takes, Rahmenverläufe (rund
-1,4 MB je Minute Take bei 10 ms Rahmenabstand, doppelt so viel bei 5 ms) und Audio (Base64, 7,7 MB je Minute
-16 Bit bei 48 kHz). Passt das Audio nicht mehr, entsteht die Sicherung ohne Audio, und die Seite sagt, wie
+1,4 MB je Minute Take bei 10 ms Rahmenabstand, doppelt so viel bei 5 ms) und Audio (Base64, 15,4 MB je Minute
+Float32 bei 48 kHz, 11,5 MB bei 24 Bit). Passt das Audio nicht mehr, entsteht die Sicherung ohne Audio, und die Seite sagt, wie
 viel Platz bliebe; passen schon die Messwerte nicht, entsteht keine Datei, und die Seite sagt es.
 
 ## Dateien
@@ -457,9 +529,10 @@ viel Platz bliebe; passen schon die Messwerte nicht, entsteht keine Datei, und d
 | `vowel.js` | Vokalklassen (Modell-Zentroide) und Stabilitätsgatter, live nachlaufend und offline zentriert | ja |
 | `analysis.js` | Analyse eines ganzen Takes, Aggregation (Quantile Typ 7), Segmente, Referenzen, Vergleichbarkeit | ja |
 | `calibration.js` | Kalibrierablauf auswerten und mit der letzten vergleichen | ja |
-| `csv.js` | CSV-Spalten, Rahmen-CSV, JSON-Sicherung | ja |
-| `wav.js` | WAV schreiben und lesen (PCM 8/16/24/32, Float32, EXTENSIBLE) | ja |
-| `korpus.js` | Lesen von `korpus.json` aus dem privaten Repo, Token-Verwaltung | Browser |
+| `csv.js` | CSV-Spalten, Rahmen-CSV, Dialekt chronik, Take-ID, Übergabepaket (`take.json`, `ereignisse.csv`), JSON-Sicherung | ja |
+| `wav.js` | WAV schreiben (Float32, 24 und 16 Bit) und lesen (PCM 8/16/24/32, Float32/64, EXTENSIBLE) | ja |
+| `zip.js` | ZIP ohne Kompression (CRC-32) für das Übergabepaket | ja |
+| `korpus.js` | Lesen von `korpus.json` aus dem privaten Repo, Ablage nach `data/input/` und `data/takes/`, Token-Verwaltung | Browser |
 | `storage.js` | IndexedDB (Version 2): takes, series, audio, calibrations, meta, pending; Take und Verlauf in einer Transaktion | Browser |
 | `recorder.js`, `recorder-worklet.js` | getUserMedia ohne Browserbearbeitung, AudioWorklet mit Rahmenzähler und Uhrzeit, Ringpuffer, Erkennung von Signallücken | Browser |
 | `chronik.js` | Liste, Referenzen, Detailansicht mit vier Zeitspuren, Gründe im Hover | Browser |

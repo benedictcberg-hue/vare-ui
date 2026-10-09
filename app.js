@@ -2,7 +2,7 @@
    Reines Browser-Skript. Rechnet im requestAnimationFrame (25 Hz), Offline-Analyse in Häppchen. */
 (function () {
   'use strict';
-  var D = window.VAREDSP, KO = window.VAREKORPUS, V = window.VAREVOWEL, A = window.VAREANALYSIS, C = window.VARECSV, W = window.VAREWAV, S = window.VARESTORE, K = window.VARECAL, R = window.VARERECORDER, CH = window.VARECHRONIK;
+  var D = window.VAREDSP, KO = window.VAREKORPUS, V = window.VAREVOWEL, A = window.VAREANALYSIS, C = window.VARECSV, W = window.VAREWAV, S = window.VARESTORE, K = window.VARECAL, R = window.VARERECORDER, CH = window.VARECHRONIK, Z = window.VAREZIP;
   var $ = function (id) { return document.getElementById(id); };
   var TSR = D.TARGET_SR, COL = CH.COL, MONO = CH.MONO;
 
@@ -11,7 +11,10 @@
       + (st.settings ? st.settings.spreadMaxHz : 130) + ' Hz, Nummer mehrdeutig, zwei Resonanzen in einem Gipfel möglich oder Formant im Rauschboden — der Grund steht neben der Zahl. Gold ohne Strich = sicher gemessen, aber Befund. '
       + 'H1−H2 ist bei F1 ≈ F0 filtergetrieben und erlaubt keine Quellaussage.';
   }
-  var SETTINGS_DEFAULT = { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500, smooth: 0.35, spreadMaxHz: 130, hopS: 0.010, storeAudio: true, audioFormat: 'i16', csvDialect: 'standard', requireCal: true, minTakeS: 1.0, ruhig: true };
+  /* audioFormat: Float32 ist bitgleich mit dem Puffer des Browsers; 24 Bit ist die Untergrenze des Chronik-Standards (TwistedWave
+     liefert 24/32 Bit, der Browser darf nicht schlechter sein). 16 Bit wird nicht mehr angeboten; alte Takes bleiben lesbar. */
+  var SETTINGS_DEFAULT = { windowS: 0.30, sdF1Max: 50, sdF2Max: 100, minValidShare: 0.80, f3MinHz: 2500, smooth: 0.35, spreadMaxHz: 130, hopS: 0.010, storeAudio: true, audioFormat: 'f32', csvDialect: 'standard', requireCal: true, minTakeS: 1.0, ablageTakes: true, ruhig: true };
+  var AUDIO_FORMATE = ['f32', 'i24'];
   var SETTING_DEFS = [
     { key: 'windowS', label: 'Gatter-Fenster (s) — Vorgabe 0,30', min: 0.15, max: 0.60, step: 0.05, dec: 2 },
     { key: 'sdF1Max', label: 'F1 darf sich im Fenster bewegen (Hz, q90−q10) — Vorgabe 50', min: 20, max: 150, step: 5 },
@@ -22,13 +25,14 @@
     { key: 'spreadMaxHz', label: 'Gültigkeitsgrenze Streuung (Hz) — Vorgabe 130, bitte nicht anheben', min: 60, max: 250, step: 10 },
     { key: 'hopS', label: 'Rahmenabstand Offline-Analyse (s) — Vorgabe 0,010', min: 0.005, max: 0.05, step: 0.005, dec: 3 },
     { key: 'storeAudio', type: 'check', label: 'Audio (WAV) mit speichern — nötig für Neu-Analyse nach Kernänderungen' },
-    { key: 'audioFormat', type: 'select', options: [['i16', '16 Bit (5,8 MB/min bei 48 kHz)'], ['f32', 'Float32 (11,5 MB/min)']], label: 'WAV-Format' },
+    { key: 'audioFormat', type: 'select', options: [['f32', 'Float32 (11,5 MB/min bei 48 kHz, bitgleich mit dem Puffer)'], ['i24', '24 Bit PCM (8,6 MB/min)']], label: 'WAV-Format — in Geräterate, nie 16 Bit' },
     { key: 'csvDialect', type: 'select', options: [['standard', 'Standard: Komma, Punkt (pandas: read_csv(…, keep_default_na=False, na_values=[-99]))'], ['excelde', 'Excel DE: Semikolon, Dezimalkomma, Text gegen Formeln geschützt (Apostroph)']], label: 'CSV-Dialekt' },
     { key: 'requireCal', type: 'check', label: 'Kalibrierung vor dem ersten Take dieser Sitzung erzwingen' },
+    { key: 'ablageTakes', type: 'check', label: 'Nach jedem Take sein Paket ohne WAV ins private Repo legen (data/takes/<id>/: take.json, frames.csv.gz, ereignisse.csv)' },
     { key: 'ruhig', type: 'check', label: 'Ruhige Live-Anzeige: Median über 1 s, zweimal pro Sekunde, auf 10 Hz (aus = jeder Einzelrahmen mit allen Gründen, zur Fehlersuche)' }
   ];
 
-  var st = { korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {}, liveBuf: [], ruhigZuletzt: 0 };
+  var st = { takeStart: null, idsVergeben: {}, korpus: null, touched: {}, lastSeen: -1, lastSeenAt: 0, noSignalWarned: false, settings: null, rec: null, gate: null, refs: {}, refsUebergangen: {}, cal: null, calSession: false, takes: [], takesGeladen: false, kontextFehler: null, audioIds: {}, rmsRing: [], hist: [], smooth: [NaN, NaN, NaN, NaN, NaN], lastValid: [false, false, false, false, false], lastCls: null, taking: false, calRunning: false, busy: false, lastTick: 0, raf: 0, timer: 0, statusEl: null, sitzung: null, ctxTimer: 0, pendingCtx: null, offen: [], inArbeit: {}, liveBuf: [], ruhigZuletzt: 0 };
 
   /* ---------- Hilfen ---------- */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -72,6 +76,8 @@
     return S.getMeta('settings', {}).then(function (saved) {
       st.settings = {}; for (var k in SETTINGS_DEFAULT) st.settings[k] = (saved && saved[k] != null) ? saved[k] : SETTINGS_DEFAULT[k];
       st.touched = (saved && saved.__touched) || {};
+      // Ein gemerktes 16-Bit-Format gilt nicht mehr (Chronik-Standard: 24 Bit oder Float32); Vorgabe statt still weiter 16 Bit.
+      if (AUDIO_FORMATE.indexOf(st.settings.audioFormat) < 0) { st.settings.audioFormat = SETTINGS_DEFAULT.audioFormat; delete st.touched.audioFormat; }
       st.gate = V.createGate(gateOpts());
     }).catch(function () { st.settings = Object.assign({}, SETTINGS_DEFAULT); st.gate = V.createGate(gateOpts()); });
   }
@@ -700,33 +706,69 @@
     var el = $('ablage-status'); if (!el) return;
     el.textContent = text || ''; el.className = 'small' + (fehler ? ' rust' : ' muted');
   }
+  // Was in der Warteschlange liegt, in Worten: „2 Kalibrierungen, Take 20261009-0101-worry (3 Dateien)“.
+  function ablageWas(liste) {
+    var kal = 0, takes = {}, reihe = [];
+    (liste || []).forEach(function (d) {
+      var m = /^data\/takes\/([^/]+)\//.exec(d.pfad || '');
+      if (m) { if (!takes[m[1]]) { takes[m[1]] = 0; reihe.push(m[1]); } takes[m[1]]++; } else kal++;
+    });
+    var t = [];
+    if (kal) t.push(kal === 1 ? '1 Kalibrierung' : kal + ' Kalibrierungen');
+    reihe.forEach(function (id) { t.push('Take ' + id + ' (' + takes[id] + (takes[id] === 1 ? ' Datei' : ' Dateien') + ')'); });
+    return t.join(', ') || 'nichts';
+  }
+  // Dateien in die Warteschlange legen (gleicher Pfad nur einmal) und abarbeiten.
+  function ablageDateien(dateien, was) {
+    return S.getMeta('ablageOffen', []).then(function (liste) {
+      liste = Array.isArray(liste) ? liste : [];
+      dateien.forEach(function (datei) { if (!liste.some(function (x) { return x.pfad === datei.pfad; })) liste.push(datei); });
+      return S.setMeta('ablageOffen', liste);
+    }).then(ablageAbarbeiten).catch(function (e) { ablageAnzeigen(was + ' nicht in die Warteschlange gelegt: ' + e.message, true); });
+  }
   function ablageEinreihen(rec) {
     var datei;
     try { datei = KO.kalibrierungsDatei(rec); } catch (e) { ablageAnzeigen('Kalibrierung nicht für die Ablage aufbereitet: ' + e.message, true); return; }
-    return S.getMeta('ablageOffen', []).then(function (liste) {
-      liste = Array.isArray(liste) ? liste : [];
-      if (!liste.some(function (x) { return x.pfad === datei.pfad; })) liste.push(datei);
-      return S.setMeta('ablageOffen', liste);
-    }).then(ablageAbarbeiten).catch(function (e) { ablageAnzeigen('Kalibrierung nicht in die Warteschlange gelegt: ' + e.message, true); });
+    return ablageDateien([datei], 'Kalibrierung');
+  }
+  /* frames.csv als gzip, über den CompressionStream des Browsers (Chrome und Edge seit Version 80). Fehlt er, liefert das
+     Promise null, und frames.csv geht ungepackt ins Repo. Ein ganzes Lied ergibt rund 10 MB CSV, gepackt ein Fünftel. */
+  function gzipBytes(text) {
+    if (typeof CompressionStream !== 'function' || typeof Response !== 'function') return Promise.resolve(null);
+    try {
+      var strom = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+      return new Response(strom).arrayBuffer().then(function (buf) { return new Uint8Array(buf); }, function () { return null; });
+    } catch (e) { return Promise.resolve(null); }
+  }
+  /* Das Übergabepaket eines Takes ohne WAV ins private Repo (Chronik-Standard 2.6): data/takes/<id>/take.json, frames.csv.gz,
+     ereignisse.csv. Derselbe Weg wie die Kalibrierung, dieselbe Warteschlange. Das WAV (rund 40 MB je Take) bleibt draußen
+     und geht wie bisher per Upload. Liefert ein Promise, scheitert nie laut: Die Chronik ist gespeichert, die Ablage ist Beigabe. */
+  function paketAblegen(take, series) {
+    var paket;
+    try { paket = C.takePaket(take, series, V); } catch (e) { ablageAnzeigen('Paket von ' + take.code + ' nicht aufbereitet: ' + fehlerText(e), true); return Promise.resolve(); }
+    var frames = paket.filter(function (f) { return /\.frames\.csv$/.test(f.name); })[0];
+    return (frames ? gzipBytes(frames.text) : Promise.resolve(null)).then(function (gz) {
+      return ablageDateien(KO.takeDateien(take.id, paket, gz), 'Paket von ' + take.code);
+    });
   }
   function ablageAbarbeiten() {
     if (st.ablageLaeuft) return Promise.resolve();
     st.ablageLaeuft = true;
-    var erledigt = 0;
+    var erledigt = 0, erledigtListe = [];
     function weiter() {
       return S.getMeta('ablageOffen', []).then(function (liste) {
         liste = Array.isArray(liste) ? liste : [];
-        if (!liste.length) { if (erledigt) ablageAnzeigen('Kalibrierung abgelegt in ' + KO.REPO + '/' + KO.ABLAGE + '.', false); return null; }
-        if (!st.token) { ablageAnzeigen(liste.length + ' Kalibrierung(en) warten auf die Ablage — sie werden nach dem Verbinden geschickt.', true); return null; }
+        if (!liste.length) { if (erledigt) ablageAnzeigen('In ' + KO.REPO + ' abgelegt: ' + ablageWas(erledigtListe) + '.', false); return null; }
+        if (!st.token) { ablageAnzeigen(ablageWas(liste) + ' warten auf die Ablage — sie werden nach dem Verbinden geschickt.', true); return null; }
         var d = liste[0];
         return KO.ablegen(st.token, d).then(function () {
           return S.getMeta('ablageOffen', []).then(function (akt) {
             akt = (Array.isArray(akt) ? akt : []).filter(function (x) { return x.pfad !== d.pfad; });
-            erledigt++;
+            erledigt++; erledigtListe.push(d);
             return S.setMeta('ablageOffen', akt);
           }).then(weiter);
         }, function (e) {
-          ablageAnzeigen('Kalibrierung nicht abgelegt: ' + e.message + ' Sie bleibt im Browser und wird beim nächsten Verbinden erneut geschickt (' + liste.length + ' offen).', true);
+          ablageAnzeigen('Nicht abgelegt (' + d.pfad + '): ' + e.message + ' Bleibt im Browser und wird beim nächsten Verbinden erneut geschickt (offen: ' + ablageWas(liste) + ').', true);
           return null;
         });
       });
@@ -887,6 +929,8 @@
       var jetzt = new Date();
       einsingPruefen(jetzt);
       st.pendingCtx = kontextJetzt(jetzt);
+      // Die Startzeit trägt die Take-ID (JJJJMMTT-hhmm-kurztitel) und ist der Zeitbezug der Zeile; das Ende steht daneben.
+      st.takeStart = jetzt;
       st.taking = true; st.rec.beginTake(); $('btn-take').textContent = 'Take beenden'; $('btn-take').className = 'danger'; $('take-result').innerHTML = '';
       st.timer = setInterval(function () { var t = Math.floor(st.rec.recordedSeconds) + ' s'; if ($('take-timer').textContent !== t) $('take-timer').textContent = t; }, 200);
       return;
@@ -897,14 +941,14 @@
        wechselt, darf damit nicht den gerade gesungenen Take umschreiben. Danach sind die Felder
        frei für den nächsten Take. */
     var feld = takeAngaben(new Date());
-    st.pendingCtx = null; $('take-label').value = ''; $('take-comment').value = '';
+    st.pendingCtx = null; st.takeStart = null; formularLeeren(feld.angaben);
     // Der Recorder schließt den Take mit kurzem Nachlauf ab (recorder.js endTake); bis dahin kein neuer Take.
     st.busy = true; updateTakeButton();
     Promise.resolve(st.rec.endTake()).then(function (take) {
       if (take.durationS < st.settings.minTakeS) {
         st.busy = false; updateTakeButton();
         status('Take zu kurz (' + take.durationS.toFixed(1) + ' s) — nicht gespeichert.', true);
-        if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
+        if (!$('take-label').value && !$('take-comment').value) formularSetzen(feld.angaben);
         return;
       }
       /* Signallücken gehören zum Take: Sie werden mit ihm gespeichert, die Analyse wertet jede Naht als Pause,
@@ -914,10 +958,48 @@
       finishTake(take.samples, take.sampleRate, feld);
     });
   }
+  /* ---------- Formular: die Stichpunkte zum Take (Chronik-Standard 2.2) ----------
+     Titel (Pflicht, „später“ erlaubt), Haltung, Ort, Kette-Zusatz, Gefühl, Notiz, Biphonation und Periodenverdopplung
+     manuell (ja/nein/offen). Gelesen beim Stopp, mit Zeitstempel; nachgetragen wird im Detail als neue Fassung. Haltung,
+     Ort und Kette bleiben nach dem Take stehen (sie ändern sich selten in einer Sitzung) und werden gemerkt; Titel, Gefühl,
+     Notiz und die manuellen Angaben werden geleert. Titel-Vorschläge: die Titel der letzten Takes (datalist). */
+  var FORMULAR = [['titel', 'take-label'], ['haltung', 'take-haltung'], ['ort', 'take-ort'], ['kette', 'take-kette'], ['gefuehl', 'take-gefuehl'], ['notiz', 'take-comment'], ['biphonation', 'take-biphonation'], ['periodenverdopplung', 'take-perioden']];
+  var FORMULAR_BLEIBT = { haltung: true, ort: true, kette: true };
+  function formularLesen(jetzt) {
+    var a = { zeit: jetzt.toISOString() };
+    FORMULAR.forEach(function (f) { var el = $(f[1]); a[f[0]] = el ? String(el.value || '').trim() : ''; });
+    if (!a.biphonation) a.biphonation = 'offen';
+    if (!a.periodenverdopplung) a.periodenverdopplung = 'offen';
+    return a;
+  }
+  function formularSetzen(a) {
+    a = a || {};
+    FORMULAR.forEach(function (f) { var el = $(f[1]); if (el) el.value = a[f[0]] == null ? '' : String(a[f[0]]); });
+    titelPruefen();
+  }
+  function formularLeeren(zuletzt) {
+    FORMULAR.forEach(function (f) { var el = $(f[1]); if (el && !FORMULAR_BLEIBT[f[0]]) el.value = (f[0] === 'biphonation' || f[0] === 'periodenverdopplung') ? 'offen' : ''; });
+    if (zuletzt) { var m = {}; for (var k in FORMULAR_BLEIBT) m[k] = zuletzt[k] || ''; S.setMeta('formularZuletzt', m).catch(function () { }); }
+    titelPruefen();
+  }
+  // Inline-Prüfung des Pflichtfelds: fehlt der Titel, steht es daneben — ohne zu sperren, denn „später“ ist erlaubt.
+  function titelPruefen() {
+    var el = $('take-label-hint'); if (!el) return;
+    var leer = !String($('take-label').value || '').trim();
+    el.textContent = leer ? 'Titel fehlt (Pflichtfeld) — der Take bekommt dann „ohne-titel“ in der ID; im Detail nachtragbar.' : '';
+    el.hidden = !leer;
+  }
+  function titelVorschlaege() {
+    var el = $('take-titel-liste'); if (!el) return;
+    var gesehen = {}, liste = [];
+    st.takes.forEach(function (t) { var l = (t.label || '').trim(); if (l && !gesehen[l] && !/^[A-Z]+ \d{1,2}\.\d{1,2}\. \d\d:\d\d$/.test(l)) { gesehen[l] = true; liste.push(l); } });
+    el.innerHTML = liste.slice(0, 30).map(function (l) { return '<option value="' + CH.esc(l) + '"></option>'; }).join('');
+  }
   function takeAngaben(jetzt) {
-    var info = (st.rec && st.rec.info) || {}, cal = st.cal, s = st.settings;
+    var info = (st.rec && st.rec.info) || {}, cal = st.cal, s = st.settings, angaben = formularLesen(jetzt);
     return {
-      ende: jetzt, label: $('take-label').value.trim(), comment: $('take-comment').value, vowelIntent: $('take-intent').value,
+      start: st.takeStart || new Date(jetzt.getTime() - Math.round((st.rec && st.rec.recordedSeconds || 0) * 1000)),
+      ende: jetzt, label: angaben.titel, comment: angaben.notiz, vowelIntent: $('take-intent').value, angaben: angaben,
       sitzung: st.pendingCtx || kontextJetzt(jetzt), calibrationId: cal ? cal.id : null,
       info: { trackSampleRate: info.trackSampleRate || null, deviceLabel: info.deviceLabel || '', deviceId: info.deviceId || '',
         echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
@@ -936,18 +1018,44 @@
      finishTake braucht, um die Analyse nach einem Neuladen genau so fortzusetzen, wie sie begonnen hätte. */
   function offenSatz(id, feld, sr, n) {
     var a = {}; for (var k in feld) a[k] = feld[k];
-    a.ende = feld.ende.toISOString();
+    a.ende = feld.ende.toISOString(); a.start = feld.start.toISOString();
     return { id: id, createdAt: a.ende, durationS: n / sr, sampleRate: sr, angaben: a };
   }
-  function angabenAus(o) { var f = {}, a = o.angaben || {}; for (var k in a) f[k] = a[k]; f.ende = new Date(a.ende || o.createdAt); return f; }
+  function angabenAus(o) {
+    var f = {}, a = o.angaben || {}; for (var k in a) f[k] = a[k];
+    f.ende = new Date(a.ende || o.createdAt);
+    // Ältere offene Aufnahmen kennen keine Startzeit: Ende minus Dauer.
+    f.start = a.start ? new Date(a.start) : new Date(f.ende.getTime() - Math.round((o.durationS || 0) * 1000));
+    return f;
+  }
+  /* Take-ID nach Chronik-Schema aus Startzeit und Titel (csv.js takeId). Vergeben ist, was in der Chronik steht, gerade
+     gerechnet wird oder als unvollendete Aufnahme wartet — dann -2, -3, … Zwei Takes in derselben Minute mit demselben
+     Titel bleiben so unterscheidbar. */
+  /* Eine ID wird nie zweimal vergeben, auch nicht nach dem Löschen eines Takes oder nach „Alles löschen“: Sonst trüge ein
+     neuer Take in derselben Minute mit demselben Titel die ID eines gelöschten, und eine Sicherung mit dem alten Take
+     ließe sich nicht mehr einspielen (Import erkennt Takes an der ID). Deshalb ein Gedächtnis aller je vergebenen IDs
+     (meta idsVergeben), geführt wie der Code-Zähler; Import und „Alles löschen“ halten es aktuell. */
+  function idsMerken(ids) {
+    var neu = false;
+    (ids || []).forEach(function (id) { if (id && !st.idsVergeben[id]) { st.idsVergeben[id] = true; neu = true; } });
+    return neu ? S.setMeta('idsVergeben', Object.keys(st.idsVergeben)).catch(function () { }) : Promise.resolve();
+  }
+  function neueTakeId(start, label) {
+    return C.takeId(start, label, function (id) {
+      if (st.inArbeit[id] || st.idsVergeben[id]) return true;
+      for (var i = 0; i < st.takes.length; i++) if (st.takes[i].id === id) return true;
+      for (var j = 0; j < (st.offen || []).length; j++) if (st.offen[j].id === id) return true;
+      return false;
+    });
+  }
   /* offen = { id }: Die Aufnahme liegt schon gesichert in IndexedDB (Fortsetzen nach dem Neuladen). */
   function finishTake(samples, sr, feld, offen) {
     feld = feld || takeAngaben(new Date());
     st.busy = true; updateTakeButton();
     var prog = $('take-progress'); prog.hidden = false; prog.innerHTML = '<div class="skeleton"></div><div class="small muted" id="take-progress-text">' + (offen ? 'Analyse …' : 'Aufnahme wird gesichert …') + '</div>';
-    var now = feld.ende, info = feld.info, wav = null, audioFehler = null, take = null, id = offen ? offen.id : uuid();
+    var now = feld.ende, start = feld.start || now, info = feld.info, wav = null, audioFehler = null, take = null, id = offen ? offen.id : neueTakeId(start, feld.label);
     var gesichert = !!offen, vorabText = null;
-    st.inArbeit[id] = true;
+    st.inArbeit[id] = true; idsMerken([id]);
     // Das WAV wird einmal erzeugt und für Sicherung, Ablage und Rettung verwendet.
     function wavBlob() { if (!wav) wav = new Blob([W.encode(samples, sr, feld.audioFormat)], { type: 'audio/wav' }); return wav; }
     /* Erst sichern, dann rechnen. Die Analyse dauert bei einem ganzen Lied Minuten; bis dahin lag die Aufnahme
@@ -971,12 +1079,18 @@
       return Promise.all([S.getMeta('nextCode', 0), S.allTakes()]).then(function (rr) {
         var n = A.nextCodeIndex(rr[1], rr[0]);
         var code = codeFromIndex(n), label = feld.label || defaultLabel(code, now);
+        /* Zeit: createdAt bleibt das Ende (Sortierung, Pause bis zum nächsten Take); startedAt/endedAt und die Wanduhrzeiten
+           stehen eigens da. Die CSV nennt als Zeitbezug den Start (csv.js). Die Angaben des Formulars (angaben) tragen den
+           Zeitstempel ihrer Eingabe; Nachträge kommen als neue Fassung dazu (angabenVersionen). */
+        var angaben = feld.angaben || { zeit: now.toISOString(), titel: feld.label, notiz: feld.comment, biphonation: 'offen', periodenverdopplung: 'offen' };
         take = {
-          id: id, schemaVersion: 1, code: code, label: label, comment: feld.comment, createdAt: now.toISOString(),
+          id: id, schemaVersion: 2, code: code, label: label, comment: feld.comment, createdAt: now.toISOString(),
+          startedAt: start.toISOString(), endedAt: now.toISOString(),
           durationS: samples.length / sr, sampleRate: sr, trackSampleRate: info.trackSampleRate,
-          deviceLabel: info.deviceLabel, deviceId: info.deviceId, channelCount: 1,
+          deviceLabel: info.deviceLabel, deviceId: info.deviceId, channelCount: 1, audioFormat: feld.storeAudio ? feld.audioFormat : null,
           captureFlags: { echoCancellation: info.echoCancellation, noiseSuppression: info.noiseSuppression, autoGainControl: info.autoGainControl, capture: info.capture },
-          timeLocal: wallClock(now), tzOffsetMin: tzOffsetMin(now),
+          timeLocal: wallClock(start), timeLocalEnd: wallClock(now), tzOffsetMin: tzOffsetMin(start),
+          angaben: angaben, angabenVersionen: [],
           sitzung: feld.sitzung,
           vowelIntent: feld.vowelIntent, calibrationId: feld.calibrationId,
           analysis: analysisMeta(res.meta, now), history: [], summary: res.summary, hasAudio: feld.storeAudio,
@@ -998,11 +1112,13 @@
         }).then(function () { zaehlerFortschreiben(take.sitzung, take.createdAt); })
           .then(function () { return S.setMeta('nextCode', n + 1); }).then(function () { return recomputeRefs(); }).then(function () {
             S.persist().catch(function () { });
-            renderTakeResult(take);
+            renderTakeResult(take); titelVorschlaege();
             if (audioFehler) {
               status('Take ' + take.code + ' gespeichert, das WAV nicht (' + fehlerText(audioFehler) + ') — eine Neu-Analyse dieses Takes ist nicht möglich. Das WAV jetzt sichern: Knopf unter dem Ergebnis.', true);
-              wavRettenKnopf($('take-result'), 'WAV dieses Takes sichern', 'vare-' + take.code + '-' + stamp(now) + '.wav', wavBlob);
+              wavRettenKnopf($('take-result'), 'WAV dieses Takes sichern', C.dateiStamm(take) + '.wav', wavBlob);
             } else if (vorabText && st.statusEl && st.statusEl.textContent === vorabText) status('');
+            // Ablage des Pakets ohne WAV ins private Repo — nach dem Speichern, nebenher; die Chronik wartet nicht darauf.
+            if (st.settings.ablageTakes) paketAblegen(take, res.series);
           });
       });
     }).catch(function (e) {
@@ -1014,10 +1130,10 @@
       else {
         status('NICHT gespeichert (' + fehlerText(e) + ') — die Aufnahme liegt nur noch im Speicher dieser Seite.', true);
         // Bezeichnung und Kommentar wurden beim Stopp geleert; stehen dort noch keine neuen, kommen sie zurück.
-        if (!$('take-label').value && !$('take-comment').value) { $('take-label').value = feld.label; $('take-comment').value = feld.comment; }
+        if (!$('take-label').value && !$('take-comment').value) formularSetzen(feld.angaben);
       }
       var box = $('take-result'); box.innerHTML = '';
-      wavRettenKnopf(box, 'Aufnahme als WAV retten', 'vare-ungespeichert-' + stamp(now) + '.wav', wavBlob);
+      wavRettenKnopf(box, 'Aufnahme als WAV retten', 'vare-ungespeichert-' + stamp(start) + '.wav', wavBlob);
     }).then(function () { delete st.inArbeit[id]; prog.hidden = true; st.busy = false; updateTakeButton(); return offeneAnzeigen(); });
   }
   /* Aufnahmen, deren Analyse nicht gespeichert ist — die Seite wurde während der Analyse neu geladen oder
@@ -1065,7 +1181,7 @@
   function renderTakeResult(take) {
     var s = take.summary, per = s.perVowel || {}, f3u = CH.f3Unter(take);
     var luecke = CH.lueckenText(take);
-    $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(String(take.label || '').indexOf(take.code + ' ') === 0 ? take.label.slice(take.code.length + 1) : take.label) + ' · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
+    $('take-result').innerHTML = '<div class="notice">Gespeichert als <strong>' + CH.esc(take.code) + '</strong> ' + CH.esc(String(take.label || '').indexOf(take.code + ' ') === 0 ? take.label.slice(take.code.length + 1) : take.label) + ' · ID <span class="mono">' + CH.esc(take.id) + '</span> · <a href="#/take/' + CH.esc(take.id) + '">Detail</a></div>' +
       (luecke ? '<div class="notice warn"><span class="rust">' + CH.esc(luecke) + '</span></div>' : '') +
       '<div class="small">' + CH.kontextZeile(take) + '</div>' +
       '<div class="grid">' +
@@ -1227,9 +1343,23 @@
     $('reanalyse-all-text').textContent += ' — wird abgebrochen';
   }
   var handlers = {
-    rowCsv: function (take) { download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.csv', new Blob([C.takesToCsv([take], st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); },
-    frameCsv: function (take, series) { if (!series) return; download('vare-' + take.code + '-rahmen.csv', new Blob([C.framesToCsv(series, st.settings.csvDialect, V)], { type: 'text/csv;charset=utf-8' })); },
-    downloadWav: function (take) { S.getAudio(take.id).then(function (a) { if (a) download('vare-' + take.code + '-' + stamp(new Date(take.createdAt)) + '.wav', a.blob); }); },
+    // Dateinamen = Take-ID (Chronik-Schema); ältere Takes mit UUID bekommen Code und Zeitstempel (csv.js dateiStamm).
+    rowCsv: function (take) { download(C.dateiStamm(take) + '.take.csv', new Blob([C.takesToCsv([take], st.settings.csvDialect)], { type: 'text/csv;charset=utf-8' })); },
+    frameCsv: function (take, series) { if (!series) return; download(C.dateiStamm(take) + '.rahmen.csv', new Blob([C.framesToCsv(series, st.settings.csvDialect, V)], { type: 'text/csv;charset=utf-8' })); },
+    downloadWav: function (take) { S.getAudio(take.id).then(function (a) { if (a) download(C.dateiStamm(take) + '.wav', a.blob); }); },
+    /* Übergabepaket als ZIP (ohne Kompression): <id>.wav, <id>.take.json, <id>.frames.csv (Dialekt chronik: fehlend leer, volle
+       Genauigkeit, Spalten nach Chronik-Standard), <id>.ereignisse.csv. Für vare_import_ui.py und den WAV-Weg per Upload. */
+    paket: function (take) {
+      Promise.all([S.getSeries(take.id), S.getAudio(take.id)]).then(function (r) {
+        var dateien = C.takePaket(take, r[0], V).map(function (f) { return { name: f.name, data: f.text }; });
+        if (!r[1]) { status('Paket von ' + take.code + ' ohne WAV: kein Audio gespeichert.', true); return dateien; }
+        return r[1].blob.arrayBuffer().then(function (buf) { dateien.unshift({ name: C.dateiStamm(take) + '.wav', data: buf }); return dateien; });
+      }).then(function (dateien) {
+        download(C.dateiStamm(take) + '.zip', new Blob([Z.encode(dateien, new Date())], { type: 'application/zip' }));
+      }).catch(function (e) { status('Paket nicht erzeugt: ' + fehlerText(e), true); });
+    },
+    // Paket ohne WAV (nochmals) ins private Repo legen — für Takes von vor der Ablage oder nach einer Neu-Analyse.
+    ablegen: function (take) { S.getSeries(take.id).then(function (series) { return paketAblegen(take, series); }); },
     reanalyse: function (take) {
       if (st.busy) { status('Gerade läuft eine Analyse — Neu-Analyse von ' + take.code + ' danach.', true); return; }
       // Wie bei jeder Analyse ist der Take-Knopf gesperrt, bis sie fertig ist (updateTakeButton verlangt !busy).
@@ -1263,9 +1393,19 @@
        JETZT gespeichert ist, mit den Notizfeldern — sonst machte eine Notiz eine inzwischen gelaufene
        Neu-Analyse rückgängig (Kern, Historie, Zusammenfassung), und der neue Rahmenverlauf stünde neben der
        alten Zusammenfassung. Lesen und Schreiben in einer Transaktion (storage.js updateTake). */
+    /* Nachträge der Stichpunkte schreiben eine neue Fassung mit Zeitstempel (angaben), die alte wandert nach angabenVersionen —
+       nichts wird überschrieben (Datenbankgesetz). Titel und Notiz bleiben zusätzlich in label/comment, wie bisher. */
     saveEdit: function (take, edit) {
       S.updateTake(take.id, function (t) {
-        t.label = edit.label || t.label; t.vowelIntent = edit.vowelIntent; t.comment = edit.comment;
+        var jetzt = new Date().toISOString(), neu = { zeit: jetzt }, alt = t.angaben || null, anders = false;
+        if (!alt) { alt = { zeit: t.createdAt || null, titel: t.label || '', notiz: t.comment || '', biphonation: 'offen', periodenverdopplung: 'offen' }; }
+        FORMULAR.forEach(function (f) {
+          var k = f[0], v = edit.angaben && edit.angaben[k] != null ? String(edit.angaben[k]).trim() : (k === 'titel' ? (edit.label || '') : k === 'notiz' ? (edit.comment || '') : (alt[k] || ''));
+          if ((k === 'biphonation' || k === 'periodenverdopplung') && !v) v = 'offen';
+          neu[k] = v; if (v !== (alt[k] == null ? '' : String(alt[k]))) anders = true;
+        });
+        if (anders || !t.angaben) { t.angabenVersionen = (t.angabenVersionen || []).concat(t.angaben ? [t.angaben] : []); t.angaben = neu; }
+        t.label = neu.titel || t.label; t.vowelIntent = edit.vowelIntent; t.comment = neu.notiz;
         /* Einsing-Status darf nachgetragen werden — er fällt beim Singen oft hinten runter.
            Die gerechneten Felder (Uhrzeit, Stelle, Pause) bleiben unberührt: die kann man
            nicht nachträglich wissen, und geraten werden sie nicht. */
@@ -1335,8 +1475,8 @@
           var gesamt = ohne.groesse + zeichen, frei = Math.max(0, C.SICHERUNG_MAX_BYTES - ohne.groesse);
           if (gesamt > C.SICHERUNG_MAX_BYTES) {
             fertig(ohne.blob, 'Audio nicht mitgesichert: Messwerte ' + bytesText(ohne.groesse) + ' und ' + auds.length + ' WAV-Dateien (' + bytesText(bytes) + ', als Base64 ' + bytesText(zeichen) + ') ergäben ' + bytesText(gesamt)
-              + '; eine Sicherung darf höchstens ' + bytesText(C.SICHERUNG_MAX_BYTES) + ' groß sein, sonst lässt sie sich nicht wieder einlesen. Platz bliebe für ' + bytesText(frei) + ' Base64, etwa ' + dauerText(frei / (48000 * 2 * 4 / 3))
-              + ' 16-Bit-Audio bei 48 kHz. Die Sicherung enthält nur die Messwerte; die WAVs einzeln über die Chronik sichern.');
+              + '; eine Sicherung darf höchstens ' + bytesText(C.SICHERUNG_MAX_BYTES) + ' groß sein, sonst lässt sie sich nicht wieder einlesen. Platz bliebe für ' + bytesText(frei) + ' Base64, etwa ' + dauerText(frei / (48000 * 4 * 4 / 3))
+              + ' Float32-Audio bei 48 kHz. Die Sicherung enthält nur die Messwerte; die WAVs einzeln über die Chronik sichern.');
             return;
           }
           if (!window.confirm('Audio mitsichern? ' + auds.length + ' WAV-Dateien, ' + bytesText(zeichen) + ' zusätzlich, Sicherung dann ' + bytesText(gesamt) + '. (Abbrechen = nur Messwerte)')) { fertig(ohne.blob); return; }
@@ -1369,7 +1509,7 @@
           chain = chain.then(function () { return S.putTakeSeries(t, b.series[t.id] || null, b.audio[t.id] ? { audio: { sampleRate: t.sampleRate, format: 'wav', blob: blobFromB64(b.audio[t.id]) } } : null); });
         });
         (b.calibrations || []).forEach(function (c) { chain = chain.then(function () { return S.putCalibration(c); }); });
-        return chain;
+        return chain.then(function () { return idsMerken(b.takes.map(function (t) { return t.id; })); });
       }).then(recomputeRefs).then(function () {
         // Angepinnte Referenzen der Sicherung NACH recomputeRefs einmischen — vorher wären sie
         // sofort wieder vom automatischen Minimum überschrieben.
@@ -1413,6 +1553,8 @@
     if (!window.confirm('Letzte Frage: alles löschen?')) return;
     Promise.all([S.allTakes(), S.getMeta('nextCode', 0), S.getMeta('settings', null)]).then(function (r) {
       var behalten = { nextCode: A.nextCodeIndex(r[0], r[1]) };
+      r[0].forEach(function (t) { st.idsVergeben[t.id] = true; });
+      behalten.idsVergeben = Object.keys(st.idsVergeben);
       if (r[2]) behalten.settings = r[2];
       if (st.sitzung) behalten.sitzung = st.sitzung;
       return S.clearAll(behalten);
@@ -1518,6 +1660,8 @@
     });
     $('btn-mic').addEventListener('click', micToggle);
     $('btn-cal').addEventListener('click', calibrate);
+    $('take-label').addEventListener('input', titelPruefen); $('take-label').addEventListener('change', titelPruefen);
+    titelPruefen();
     $('btn-cal-stop').addEventListener('click', function () { if (st.calAbbruch) st.calAbbruch(); });
     // „Alle Messwerte“ bleibt so auf- oder zugeklappt, wie man es zuletzt verlassen hat (nur dieser Browser).
     // „Alle Messwerte“ öffnet jedes Mal zu; beim Aufklappen einmal zeichnen, was im zugeklappten Zustand ausgelassen wurde.
@@ -1547,7 +1691,10 @@
       return S.allTakes().then(function (alle) {
         st.takes = alle; st.takesGeladen = true;
         $('ctx-warmup').value = si.warmup || '';
-        renderKontext(); updateTakeButton();
+        S.getMeta('idsVergeben', []).then(function (ids) { idsMerken((Array.isArray(ids) ? ids : []).concat(alle.map(function (t) { return t.id; }))); }).catch(function () { });
+        renderKontext(); updateTakeButton(); titelVorschlaege();
+        // Haltung, Ort und Kette-Zusatz vom letzten Take vorbelegen — sie ändern sich selten; alles andere beginnt leer.
+        S.getMeta('formularZuletzt', null).then(function (m) { if (m) for (var k in FORMULAR_BLEIBT) { var el = $(FORMULAR.filter(function (f) { return f[0] === k; })[0][1]); if (el && !el.value) el.value = m[k] || ''; } }).catch(function () { });
         /* Gespeicherte Referenzen können von einer früheren Fassung oder anderen Einstellungen stammen.
            Live gilt erst, was mit der jetzigen Rechenweise bestimmt ist. */
         recomputeRefs().catch(function () { });
@@ -1590,6 +1737,6 @@
     fillDevices();
     var fl0 = floorNow(); drawLevel(NaN, fl0.db, fl0.src); drawD34({ state: 'pause', score: NaN }, null); drawSpec({ voiced: false, F: [], valid: [], BW: [] }, null); drawHist();
   }
-  window.VAREAPP = { state: st, init: init, finishTake: finishTake, handlers: handlers, refreshChronik: refreshChronik, SETTINGS_DEFAULT: SETTINGS_DEFAULT };
+  window.VAREAPP = { state: st, init: init, finishTake: finishTake, handlers: handlers, refreshChronik: refreshChronik, SETTINGS_DEFAULT: SETTINGS_DEFAULT, FORMULAR: FORMULAR, paketAblegen: paketAblegen, ablageAbarbeiten: ablageAbarbeiten };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

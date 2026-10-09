@@ -212,7 +212,7 @@ async function seiteNeu(browser, liefern, sr) {
     confirm: () => true, alert() { }, crypto: { randomUUID: () => nodeCrypto.randomUUID() },
     Blob, URL: { createObjectURL: b => { downloads.push(b); return 'blob:pruefung'; }, revokeObjectURL() { } },
     btoa, atob, Date, devicePixelRatio: 1, localStorage: leer(), sessionStorage: leer(),
-    fetch: () => Promise.reject(new Error('kein Netz')), TextDecoder, indexedDB: browser.fabrik(seite)
+    fetch: () => Promise.reject(new Error('kein Netz')), TextDecoder, TextEncoder, indexedDB: browser.fabrik(seite)
   };
   sb.window = sb; sb.self = sb;
   vm.createContext(sb);
@@ -386,7 +386,7 @@ module.exports = async function (H) {
     pm.st().settings.storeAudio = false;
     const vor = mess.nutzung(); await pm.take(); const ohneWav = mess.nutzung() - vor;
     pm.schliessen();
-    const wavBytes = 44 + 2 * SIG.length;
+    const wavBytes = 44 + 4 * SIG.length;   // Vorgabe Float32 (Chronik-Standard)
     const br = idbNeu(), p = await seiteNeu(br, normal, SR);
     p.kalibriert('cal-1'); await p.mikrofon();
     br.ctl.quote = br.nutzung() + ohneWav + Math.round(0.5 * wavBytes);
@@ -482,7 +482,7 @@ module.exports = async function (H) {
     const v1 = alt.dbs.get('vare'), umgestellt = v1.version === 2 && v1.stores.has('pending') && pa.st().takes.some(x => x.id === 'v1-take');
     pa.schliessen();
     check('B1e', 'Aufnahme vor der Analyse in IndexedDB; nach dem Neuladen angeboten (fortsetzen = derselbe Take mit Angaben und Stelle, WAV sichern, verwerfen); Rückfrage beim Verlassen nur während Aufnahme und Analyse; Sicherung nennt die offene Aufnahme; Chronik der Version 1 bleibt',
-      !leerlauf && beimSingen && inAnalyse && inDerAnalyse && vor.pending === 1 && vor.audio === 1 && vor.takes === 0 && angeboten && naechste === '2' && sicherungOhne && wavDl === 44 + 2 * SIG.length && fortgesetzt && verworfen && umgestellt,
+      !leerlauf && beimSingen && inAnalyse && inDerAnalyse && vor.pending === 1 && vor.audio === 1 && vor.takes === 0 && angeboten && naechste === '2' && sicherungOhne && wavDl === 44 + 4 * SIG.length && fortgesetzt && verworfen && umgestellt,
       'Rückfrage Leerlauf/Aufnahme/Analyse ' + leerlauf + '/' + beimSingen + '/' + inDerAnalyse + ' | vor dem Neuladen pending ' + vor.pending + ', Audio ' + vor.audio + ', Takes ' + vor.takes
       + ' | angeboten=' + angeboten + ', nächste Nummer ' + naechste + ' | Sicherung ohne die offene Aufnahme, mit Hinweis=' + sicherungOhne + ' | WAV ' + wavDl + ' B'
       + ' | fortgesetzt: ' + (t ? t.code + ' „' + t.label + '“ „' + t.comment + '“ Stelle ' + (t.sitzung && t.sitzung.position) + ' Audio ' + hatAudio + ' Verlauf ' + !!serie : 'kein Take') + ', Anzeige weg=' + box().hidden

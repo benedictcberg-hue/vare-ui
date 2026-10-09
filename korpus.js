@@ -3,9 +3,11 @@
    Bestwerte für ΔF3–4, die Zielschwelle für F3, die Gatterschwellen — liegen im privaten Repo und
    werden zur Laufzeit mit einem Token des Nutzers gelesen. Das Token bleibt im Browser und geht
    ausschließlich an api.github.com; die Content-Security-Policy lässt nichts anderes zu.
-   Gelesen wird korpus.json. Geschrieben wird genau eins: nach jeder gelungenen Kalibrierung eine
-   kleine JSON-Datei mit den Messwerten nach data/input/ im privaten Repo — kein Audio, kein
-   Gerätename, keine Takes. Die Chronik selbst bleibt im Browser. */
+   Gelesen wird korpus.json. Geschrieben wird zweierlei: nach jeder gelungenen Kalibrierung eine
+   kleine JSON-Datei mit den Messwerten nach data/input/, und nach jedem gespeicherten Take sein
+   Übergabepaket ohne WAV (take.json, frames.csv.gz, ereignisse.csv) nach data/takes/<id>/ — so ist
+   der Take im Repo lesbar, ohne Upload (Chronik-Standard 2.6). Kein Audio geht ins Repo. Die Chronik
+   selbst bleibt im Browser. */
 (function (root) {
   'use strict';
 
@@ -14,6 +16,7 @@
   var ZWEIG = 'main';
   var SPEICHER = 'vare-token';
   var ABLAGE = 'data/input';
+  var ABLAGE_TAKES = 'data/takes';
 
   function b64ToText(b64) {
     var bin = atob(b64.replace(/\s+/g, '')), bytes = new Uint8Array(bin.length);
@@ -94,10 +97,26 @@
     return { pfad: ABLAGE + '/kalibrierung-' + stempel + '-' + kurz + '.json', inhalt: JSON.stringify(o, null, 2) + '\n', zeitLokal: lokal };
   }
 
-  function textZuB64(text) {
-    var bytes = new TextEncoder().encode(text), bin = '';
-    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
+  function textZuB64(text) { return bytesZuB64(new TextEncoder().encode(text)); }
+  // Base64 beliebiger Bytes (frames.csv.gz), stückweise: String.fromCharCode.apply nimmt nicht unbegrenzt viele Argumente.
+  function bytesZuB64(bytes) {
+    var u = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), s = '';
+    for (var i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, Math.min(u.length, i + 0x8000)));
+    return btoa(s);
+  }
+  /* Die Dateien des Übergabepakets eines Takes für die Ablage: [{ pfad, inhalt | inhaltB64, nachricht }] unter
+     data/takes/<id>/. paket = C.takePaket(…) ohne WAV; framesGz: Uint8Array mit frames.csv als gzip (oder null — dann
+     geht frames.csv ungepackt). Der Pfadteil ist die Take-ID; sie trägt nur a–z, 0–9 und Bindestriche (csv.js takeId),
+     ältere UUID-Kennungen ebenso. */
+  function takeDateien(id, paket, framesGz) {
+    if (!/^[A-Za-z0-9-]+$/.test(String(id))) throw new Error('Take-ID für die Ablage ungeeignet: ' + id);
+    var ordner = ABLAGE_TAKES + '/' + id + '/', out = [];
+    for (var i = 0; i < paket.length; i++) {
+      var f = paket[i], kurz = f.name.replace(/^.*?\.(take\.json|frames\.csv|ereignisse\.csv|haltetoene\.csv)$/, '$1');
+      if (kurz === 'frames.csv' && framesGz) out.push({ pfad: ordner + 'frames.csv.gz', inhaltB64: bytesZuB64(framesGz), nachricht: 'Take ' + id + ': frames.csv.gz' });
+      else out.push({ pfad: ordner + kurz, inhalt: f.text, nachricht: 'Take ' + id + ': ' + kurz });
+    }
+    return out;
   }
 
   function erklaereSchreibfehler(status, nachricht) {
@@ -116,7 +135,7 @@
     return fetch(url, {
       method: 'PUT',
       headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'Kalibrierung ' + (datei.zeitLokal || ''), content: textZuB64(datei.inhalt), branch: ZWEIG }),
+      body: JSON.stringify({ message: datei.nachricht || ('Kalibrierung ' + (datei.zeitLokal || '')), content: datei.inhaltB64 || textZuB64(datei.inhalt), branch: ZWEIG }),
       cache: 'no-store', referrerPolicy: 'no-referrer'
     }).catch(function () { throw new Error(erklaereSchreibfehler(0)); }).then(function (r) {
       if (r.status === 201 || r.status === 200) return 'neu';
@@ -143,6 +162,6 @@
     try { root.localStorage.removeItem(SPEICHER); root.sessionStorage.removeItem(SPEICHER); } catch (e) { }
   }
 
-  root.VAREKORPUS = { REPO: REPO, DATEI: DATEI, ABLAGE: ABLAGE, laden: laden, kalibrierungsDatei: kalibrierungsDatei, ablegen: ablegen, erklaereSchreibfehler: erklaereSchreibfehler, pruefeKorpus: pruefeKorpus, erklaereFehler: erklaereFehler,
+  root.VAREKORPUS = { REPO: REPO, DATEI: DATEI, ABLAGE: ABLAGE, ABLAGE_TAKES: ABLAGE_TAKES, laden: laden, kalibrierungsDatei: kalibrierungsDatei, takeDateien: takeDateien, bytesZuB64: bytesZuB64, ablegen: ablegen, erklaereSchreibfehler: erklaereSchreibfehler, pruefeKorpus: pruefeKorpus, erklaereFehler: erklaereFehler,
     tokenLesen: tokenLesen, tokenGemerkt: tokenGemerkt, tokenSchreiben: tokenSchreiben, tokenLoeschen: tokenLoeschen };
 })(typeof self !== 'undefined' ? self : this);

@@ -280,6 +280,26 @@ const WAV = path.join(SP, 'fake.wav');
     check('Take ohne Aussetzer: keine Signallücke erkannt (Rahmenzähler und Uhrzeit aus dem AudioWorklet)', Array.isArray(takes[0].signalLuecken) && takes[0].signalLuecken.length === 0 && takes[0].signalLueckeS === 0,
       JSON.stringify({ luecken: takes[0].signalLuecken, summe: takes[0].signalLueckeS }));
     await page.screenshot({ path: path.join(SP, 'shot-result.png'), fullPage: true });
+    // Chronik-Standard Stufe 1: Take-ID aus Startzeit und Titel, Start und Ende, Formular, Paket ohne WAV nach data/takes/<id>/.
+    {
+      const t = takes[0], zlib = require('zlib');
+      check('Take-ID nach Chronik-Schema aus Startzeit und Titel, Start vor Ende, Formular mit Zeitstempel',
+        /^\d{8}-\d{4}-e2e-a-g3$/.test(t.id) && Date.parse(t.startedAt) < Date.parse(t.endedAt) && t.endedAt === t.createdAt && t.audioFormat === 'f32' && t.angaben && t.angaben.titel === 'E2E /a/ G3' && t.angaben.notiz === 'automatischer Durchlauf' && t.angaben.zeit === t.endedAt && Array.isArray(t.angabenVersionen),
+        t.id + ' ' + t.startedAt + ' → ' + t.endedAt + ' ' + JSON.stringify(t.angaben));
+      await page.waitForFunction(() => /abgelegt/.test((document.getElementById('ablage-status') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+      const paketPuts = ablagePuts.filter(x => x.url.indexOf('/contents/data/takes/' + t.id + '/') > 0);
+      const datei = n => paketPuts.find(x => new RegExp('/' + n + '$').test(x.url));
+      let tj = null, frames = '';
+      try { tj = JSON.parse(Buffer.from(JSON.parse(datei('take.json').body).content, 'base64').toString('utf8')); } catch (e) { }
+      try { frames = zlib.gunzipSync(Buffer.from(JSON.parse(datei('frames.csv.gz').body).content, 'base64')).toString('utf8'); } catch (e) { }
+      check('Paket ohne WAV nach data/takes/<id>/: take.json, frames.csv.gz (gzip über CompressionStream), ereignisse.csv — drei PUTs, keine vierte Datei, kein WAV',
+        paketPuts.length === 3 && !!datei('take.json') && !!datei('frames.csv.gz') && !!datei('ereignisse.csv') && !ablagePuts.some(x => /\.wav$/.test(x.url)), paketPuts.map(x => x.url.split('/contents/')[1]).join(' | '));
+      check('take.json im Repo: ID, Kette mit Gerätename und Raten, Formular, Kennwerte, kein NaN', !!tj && tj.id === t.id && tj.kette && typeof tj.kette.geraet === 'string' && tj.kette.kontextrate_hz === t.sampleRate && tj.angaben.titel === 'E2E /a/ G3' && typeof tj.kennwerte.voicedShare === 'number' && !/NaN/.test(JSON.stringify(tj)),
+        tj ? Object.keys(tj).join(',') : 'nicht lesbar');
+      const fz = frames.split('\r\n').filter(Boolean);
+      check('frames.csv.gz: Dialekt chronik (t,voiced,…,f0_b, f1_b), eine Zeile je Rahmen, fehlend leer statt −99', /^t,voiced,gate,vowel,f0_b,ap,rms,f1_b,/.test(frames) && fz.length - 1 === t.summary.nFrames && !/(^|,)-99(\.0+)?(,|$)/m.test(frames), fz.length - 1 + ' Rahmen, Kopf ' + (fz[0] || '').slice(0, 60));
+      // Paket als ZIP aus der Chronik-Liste: WAV, take.json, frames.csv, ereignisse.csv, alle mit der ID als Namen.
+    }
     // Prüfsignal
     await page.evaluate(() => { document.getElementById('live-mehr').open = true; });   // Prüfsignal liegt unter „Alle Messwerte“
     await page.click('#btn-pruef');
@@ -294,7 +314,17 @@ const WAV = path.join(SP, 'fake.wav');
     check('Speicherangabe sichtbar', /Takes/.test(await page.textContent('#chronik-storage')), await page.textContent('#chronik-storage'));
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-csv')]);
     const csv = fs.readFileSync(await dl.path(), 'utf8');
-    check('CSV-Export: Kopf mit code,label und eine Zeile', /^code,label/.test(csv) && csv.trim().split('\n').length === 2, csv.split('\n')[1].slice(0, 120));
+    check('CSV-Export: Kopf mit code,take_id,label und eine Zeile', /^code,take_id,label/.test(csv) && csv.trim().split('\n').length === 2, csv.split('\n')[1].slice(0, 120));
+    {
+      const Z = require(path.join(ROOT, 'zip.js'));
+      const [dlz] = await Promise.all([page.waitForEvent('download'), page.click('#takes-list button[data-act="paket"]')]);
+      const zipBuf = fs.readFileSync(await dlz.path()), eintraege = Z.decode(zipBuf.buffer.slice(zipBuf.byteOffset, zipBuf.byteOffset + zipBuf.byteLength));
+      const namen = eintraege.map(e => e.name), id = takes[0].id, wav = eintraege.find(e => e.name === id + '.wav');
+      let dec = null; try { dec = W.decode(wav.data.buffer.slice(wav.data.byteOffset, wav.data.byteOffset + wav.data.byteLength)); } catch (e) { }
+      check('Paket (ZIP) aus der Chronik: <id>.wav als Float32 in Geräterate, <id>.take.json, <id>.frames.csv, <id>.ereignisse.csv; Dateiname = ID',
+        dlz.suggestedFilename() === id + '.zip' && namen.join(',') === [id + '.wav', id + '.take.json', id + '.frames.csv', id + '.ereignisse.csv'].join(',') && !!dec && dec.format === 'f32' && dec.sampleRate === takes[0].sampleRate && Math.abs(dec.samples.length / dec.sampleRate - takes[0].durationS) < 0.01,
+        dlz.suggestedFilename() + ': ' + namen.join(', ') + (dec ? ' · WAV ' + dec.format + ' ' + dec.sampleRate + ' Hz ' + dec.bitsPerSample + ' Bit' : ' · WAV nicht lesbar'));
+    }
     const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-json')]);
     const json = fs.readFileSync(await dl2.path(), 'utf8');
     check('JSON-Sicherung: format vare-backup mit Serie', /"format":"vare-backup"/.test(json) && /"series":\{/.test(json), (json.length / 1000).toFixed(0) + ' kB');

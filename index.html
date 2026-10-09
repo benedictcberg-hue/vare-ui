@@ -31,8 +31,8 @@
     </p>
     <p class="small muted">
       Aufnahmen, Chronik und Export bleiben auf diesem Gerät im Browserspeicher. Zurück ins private
-      Repo geht nur eins: nach jeder Kalibrierung eine kleine Datei mit ihren Messwerten
-      (data/input/, ohne Gerätename, ohne Audio).
+      Repo gehen nur Messwerte ohne Audio: nach jeder Kalibrierung eine kleine Datei (data/input/)
+      und nach jedem Take sein Paket (data/takes/&lt;id&gt;/: Metadaten, Rahmen, Ereignisse).
     </p>
     <label for="token">GitHub-Token
       <input type="password" id="token" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
@@ -52,8 +52,8 @@
         <li>Token hier einfügen und „Verbinden“.</li>
       </ol>
       <p class="small muted">
-        Geschrieben wird nur die Ablage der Kalibrierung nach data/input/. Mit „Read-only“ läuft alles
-        andere weiter; die Kalibrierungen warten dann im Browser. Gib dem Token kein weiteres Repo
+        Geschrieben werden nur die Ablagen nach data/input/ (Kalibrierung) und data/takes/ (Take-Paket ohne
+        WAV). Mit „Read-only“ läuft alles andere weiter; die Dateien warten dann im Browser. Gib dem Token kein weiteres Repo
         und keine weitere Berechtigung.
       </p>
     </details>
@@ -148,13 +148,44 @@
     <div class="panel">
       <h2>Take</h2>
       <div class="row">
-        <label>Bezeichnung <input type="text" id="take-label" size="22"></label>
-        <label class="inline">Vokalabsicht <select id="take-intent"></select></label>
         <button id="btn-take" class="primary" disabled>Take starten</button>
         <span id="take-timer" class="mono">0 s</span>
+        <label class="inline">Vokalabsicht <select id="take-intent"></select></label>
       </div>
-      <label>Kommentar <textarea id="take-comment"></textarea></label>
       <div id="take-hint" class="small muted"></div>
+      <details class="erklaerung"><summary>Stichpunkte zum Take — wozu und wann?</summary>
+      <p class="small muted">Vor dem Start oder gleich danach; was fehlt, lässt sich im Detail nachtragen
+        (als neue Fassung mit Zeitstempel, nichts wird überschrieben). Die Take-ID entsteht aus Startzeit und Titel:
+        <span class="mono">JJJJMMTT-hhmm-kurztitel</span>. Haltung, Ort und Kette bleiben für den nächsten Take stehen.</p>
+      </details>
+      <div class="formular">
+        <label for="take-label">Titel <span class="pflicht">Pflicht</span></label>
+        <input type="text" id="take-label" list="take-titel-liste" autocomplete="off" placeholder="z. B. Stand by Me, Einsingen, Worry">
+        <datalist id="take-titel-liste"></datalist>
+        <div id="take-label-hint" class="small rust" role="status" hidden></div>
+        <label for="take-haltung">Haltung <span class="optional">optional</span></label>
+        <select id="take-haltung">
+          <option value="">– nicht angegeben</option>
+          <option value="stehend">stehend</option>
+          <option value="sitzend gerade">sitzend gerade</option>
+          <option value="sitzend">sitzend</option>
+          <option value="liegend">liegend</option>
+          <option value="gehend">gehend</option>
+          <option value="frei">frei</option>
+        </select>
+        <label for="take-ort">Ort <span class="optional">optional</span></label>
+        <input type="text" id="take-ort" autocomplete="off">
+        <label for="take-kette">Kette-Zusatz <span class="optional">optional</span></label>
+        <input type="text" id="take-kette" autocomplete="off" placeholder="Hülle, Kabel, Abstand, Mikro">
+        <label for="take-gefuehl">Gefühl <span class="optional">optional</span></label>
+        <input type="text" id="take-gefuehl" autocomplete="off">
+        <label for="take-comment">Notiz <span class="optional">optional</span></label>
+        <textarea id="take-comment"></textarea>
+        <label for="take-biphonation">Biphonation manuell <span class="optional">optional</span></label>
+        <select id="take-biphonation"><option value="offen">offen</option><option value="ja">ja</option><option value="nein">nein</option></select>
+        <label for="take-perioden">Periodenverdopplung manuell <span class="optional">optional</span></label>
+        <select id="take-perioden"><option value="offen">offen</option><option value="ja">ja</option><option value="nein">nein</option></select>
+      </div>
       <div id="take-progress" hidden></div>
       <div id="take-result"></div>
     </div>
@@ -251,6 +282,7 @@
 <script src="./vowel.js"></script>
 <script src="./wav.js"></script>
 <script src="./csv.js"></script>
+<script src="./zip.js"></script>
 <script src="./storage.js"></script>
 <script src="./analysis.js"></script>
 <script src="./calibration.js"></script>

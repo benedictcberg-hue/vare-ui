@@ -95,6 +95,17 @@ th.spalte-breit { min-width: 180px; }
 .anmeldung li { margin-bottom: .35rem; }
 .leer-hinweis { color: var(--muted); font-size: .9rem; }
 
+/* Formular „Stichpunkte zum Take“ nach dem 13-Regeln-Rahmen: einspaltig, persistente Beschriftung über dem Feld
+   (kein Platzhalter als Beschriftung), optionale Felder markiert (nicht die Pflichtfelder), Inline-Prüfung unter dem
+   Feld, Ziele mindestens 46 px, Schrift 16 px (body). */
+.formular { display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem 0; max-width: 620px; }
+.formular label { margin-top: .6rem; }
+.formular input[type="text"], .formular select, .formular textarea { width: 100%; font-size: 1rem; }
+.formular textarea { min-height: 70px; }
+.optional { color: var(--muted); font-size: .8rem; margin-left: .4rem; }
+.pflicht { color: var(--gold); font-size: .8rem; margin-left: .4rem; }
+.fassungen { margin: .25rem 0 0; padding-left: 1.1rem; }
+
 /* Kalibrierung: große Ansage, damit man beim Singen nicht kleine Schrift lesen muss. */
 .cal-ansage { margin-top: .75rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px; text-align: center; }
 .cal-schritte { list-style: none; padding: 0; margin: 0 0 .75rem; display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; font-size: .85rem; color: var(--muted); }
