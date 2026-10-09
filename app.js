@@ -228,7 +228,8 @@
     st.liveBuf.push({ t: t, fr: fr, score: gs.score, state: gs.state, reason: gs.reason });
     while (st.liveBuf.length && st.liveBuf[0].t < t - RUHIG_FENSTER_S) st.liveBuf.shift();
     drawLevel(fr.rmsDb, fl.db, fl.src); drawHist();
-    if (now - st.ruhigZuletzt >= RUHIG_TAKT_MS) { st.ruhigZuletzt = now; renderRuhig(gs, fl); }
+    var zustand = gs.state === 'pause' ? 'pause' : 'stimme';
+    if (now - st.ruhigZuletzt >= RUHIG_TAKT_MS || zustand !== st.ruhigZustand) { st.ruhigZuletzt = now; st.ruhigZustand = zustand; renderRuhig(gs, fl); }
   }
   var STAT_KEYS = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'd34', 'd45', 'sfr', 'shr', 'cpp', 'h1h2', 'tube', 'floor'];
   /* Alles, was eine Messung zeigt, sichtbar einfrieren — in einem Zug, damit es nicht wieder
@@ -250,7 +251,7 @@
   function setGateWord(state, cls, reason) {
     var el = $('gate-state'); el.className = state;
     el.textContent = state === 'pause' ? 'Pause' : state === 'uebergang' ? 'Übergang' : 'stabil /' + cls + '/';
-    $('gate-reason').textContent = reason || '';
+    $('gate-reason').textContent = reason || ''; $('gate-reason').title = reason || '';
   }
   /* Drei Zustände, nicht zwei: Rost und gestrichelt heißt „Messwert trägt nicht“. Ein Befund, der
      sicher gemessen ist und trotzdem Aufmerksamkeit braucht — F3 unter dem Zielwert, SHR über der
@@ -287,7 +288,7 @@
   /* Kurzwort für den häufigsten Grund — die langen Begründungen stehen in der Einzelrahmen-Ansicht. */
   function kurzGrund(t) {
     t = String(t || '');
-    if (/^Pause$/.test(t)) return '';
+    if (/^Pause$|stimmlos/.test(t)) return '';
     if (/F3 zu tief|F3 unter/i.test(t)) return 'F3 zu tief';
     if (/F3\/F4/.test(t)) return 'F3/F4 unsicher';
     if (/Teilton/i.test(t)) return 'Teilton';
@@ -323,25 +324,28 @@
     else setStat('floor', fmt(fl.db, 0) + ' dBFS (' + (fl.src === 'geschätzt' ? 'geschätzt aus Stille' : fl.src) + ')', fl.src !== 'kalibriert');
     var buf = st.liveBuf, V = buf.filter(function (e) { return e.fr.voiced && !e.fr.tonalButAperiodic; });
     var letzter = buf.length ? buf[buf.length - 1] : null;
-    if (V.length < Math.max(2, buf.length * 0.5)) {
+    /* Pause, sobald das Gatter Pause meldet oder kaum Stimmhaftes im Puffer liegt: eine Atempause ist ein
+       Wechsel, ohne rostrotes „Übergang“ dazwischen. Beim Einsatz reichen zwei stimmhafte Rahmen. */
+    if (gs.state === 'pause' || V.length < 2) {
       var aperiodisch = buf.filter(function (e) { return e.fr.tonalButAperiodic; }).length > buf.length / 2;
-      // Gatterwort aus demselben Puffer wie die Zahl: sonst stünde „Übergang“ über einer großen Pause.
-      if (aperiodisch) setGateWord('uebergang', null, 'kein Periodenbezug'); else setGateWord('pause', null, '');
+      /* Ton ohne Periodenbezug heißt „Übergang“ — außer mit nur angenommenem Boden und Gatter auf Pause:
+         dann ist Stille von Raumrauschen nicht zu trennen, und es bleibt bei „Pause“ (wie renderLive). */
+      var wort = aperiodisch && !(fl.src === 'angenommen' && gs.state === 'pause') ? 'uebergang' : 'pause';
+      setGateWord(wort, null, '');
+      aperiodisch = wort === 'uebergang';
       st.f0Gezeigt = null;
       STAT_KEYS.forEach(function (k) { if (k !== 'floor') setStat(k, aperiodisch ? '– · kein Periodenbezug' : 'Pause', aperiodisch, !aperiodisch); });
       drawD34({ state: gs.state === 'stabil' ? 'uebergang' : gs.state, score: NaN, reason: aperiodisch ? 'kein Periodenbezug' : 'Pause' }, null);
       if (letzter) drawSpec(letzter.fr, null);
-      $('live-ref').textContent = '';
-      return;
+      return;   // Referenzzeile bleibt stehen, bis wieder ein Vokal steht
     }
     var neu = V[V.length - 1].fr;
-    // Im Pausen-Takt des Gatters, aber mit stimmhaftem Puffer (gerade abgesetzt): noch „Übergang“, nicht „Pause“ über Zahlen.
-    setGateWord(gs.state === 'pause' ? 'uebergang' : gs.state, gs.cls, gs.state === 'stabil' || !gs.reason ? '' : kurzGrund(gs.reason));
+    setGateWord(gs.state, gs.cls, gs.state === 'stabil' || !gs.reason ? '' : kurzGrund(gs.reason));
     var f0 = ueberFenster(V, function (fr) { return fr.f0; }, function (fr) { return !fr.f0Unsure && !fr.octaveAmbiguous; }, function () { return 'Grundton unsicher'; });
     if (f0.traegt) {
       var no = D.hzToNote(f0.wert), alt = st.f0Gezeigt;
       if (alt && Math.abs(alt.hz - f0.wert) < 3 && alt.note === no) f0.wert = alt.hz; else st.f0Gezeigt = { hz: f0.wert, note: no };
-      setStat('f0', fmt(f0.wert, 0) + ' Hz' + (no && no !== '--' ? ' ' + no : ''));
+      setStat('f0', fmt(f0.wert, 0) + ' Hz' + (no && no !== '--' ? ' · Ton ' + no : ''));
     }
     else setStat('f0', '– · Grundton unsicher', true);
     var F = [0, 1, 2, 3, 4].map(function (k) { return ueberFenster(V, function (fr) { return fr.F[k]; }, function (fr) { return !!fr.valid[k]; }, function (fr) { return formantGrundKurz(fr, k); }); });
@@ -376,7 +380,7 @@
     setStat('tube', tube.traegt ? fmt(tube.wert, 1) + ' cm' : '– (zu wenig stabile Formanten)', !tube.traegt);
     $('live-hints').textContent = hintText();
     var cls = gs.state === 'stabil' ? gs.cls : null, ref = cls ? st.refs[cls] : null;
-    $('live-ref').textContent = CH.refZeile(cls, ref, aggScore, cls ? (st.refsUebergangen[cls] || 0) : 0);
+    if (cls) { var rz = CH.refZeile(cls, ref, aggScore, st.refsUebergangen[cls] || 0); $('live-ref').textContent = rz; $('live-ref').title = rz; }
     drawD34({ state: gs.state, score: aggScore, reason: kurzGrund(gs.reason), cls: gs.cls }, ref);
     drawSpec(neu, null);
   }
@@ -493,7 +497,9 @@
     var jetzt = performance.now(), ruhig = st.settings && st.settings.ruhig;
     if (!ruhig || !isFinite(rms) || st.pegelText == null || jetzt - st.pegelZeit >= 500) { st.pegelText = isFinite(rms) ? fmt(rms, ruhig ? 0 : 1) + ' dBFS' : ''; st.pegelZeit = jetzt; }
     var links = ang ? 'Boden unbekannt · Stimmschwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS' : 'Boden ' + fmt(floor, 0) + ' · Stimmschwelle +12 dB';
-    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'left'; ctx.fillText(links, 4, 10);
+    ctx.fillStyle = COL.muted; ctx.font = MONO; ctx.textAlign = 'left';
+    if (ang && ctx.measureText && ctx.measureText(links).width > w - 8) links = 'Schwelle angenommen ' + fmt(floor + 12, 0) + ' dBFS';
+    ctx.fillText(links, 4, 10);
     var mL = ctx.measureText ? ctx.measureText(links) : null, mR = ctx.measureText ? ctx.measureText(st.pegelText) : null;
     if (st.pegelText && !(mL && mR && mL.width + mR.width + 16 > w)) { ctx.textAlign = 'right'; ctx.fillText(st.pegelText, w - 4, 10); ctx.textAlign = 'left'; }
   }
@@ -625,7 +631,9 @@
     st.calStatusVorher = $('cal-status').innerHTML; $('cal-status').textContent = 'Kalibrierung läuft …';
     calAnsage(K.phaseAt(0));
     // Die Ansage in die Bildmitte holen — im Vorlauf, bevor es ernst wird. Sonst läge sie auf dem Telefon unter dem Rand.
-    if ($('cal-ansage').scrollIntoView) $('cal-ansage').scrollIntoView({ block: 'center', behavior: 'smooth' });
+    var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if ($('cal-ansage').scrollIntoView) $('cal-ansage').scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+    if ($('btn-cal-stop').focus) $('btn-cal-stop').focus({ preventScroll: true });
     var iv = setInterval(function () {
       var el = (performance.now() - t0) / 1000;
       if (!st.rec || !st.rec.active) {
@@ -882,7 +890,7 @@
       st.timer = setInterval(function () { var t = Math.floor(st.rec.recordedSeconds) + ' s'; if ($('take-timer').textContent !== t) $('take-timer').textContent = t; }, 200);
       return;
     }
-    clearInterval(st.timer); st.taking = false; $('btn-take').textContent = 'Take starten'; $('btn-take').className = 'primary';
+    clearInterval(st.timer); st.taking = false; $('btn-take').textContent = 'Take starten'; $('btn-take').className = 'primary'; $('take-timer').textContent = '0 s';
     /* Alles, was zu diesem Take gehört, wird JETZT festgehalten. Die Analyse dauert Sekunden; wer
        währenddessen schon den nächsten Take beschriftet, eine neue Sitzung beginnt oder das Gerät
        wechselt, darf damit nicht den gerade gesungenen Take umschreiben. Danach sind die Felder
@@ -1512,7 +1520,7 @@
     $('btn-cal-stop').addEventListener('click', function () { if (st.calAbbruch) st.calAbbruch(); });
     // „Alle Messwerte“ bleibt so auf- oder zugeklappt, wie man es zuletzt verlassen hat (nur dieser Browser).
     // „Alle Messwerte“ öffnet jedes Mal zu; beim Aufklappen einmal zeichnen, was im zugeklappten Zustand ausgelassen wurde.
-    $('live-mehr').addEventListener('toggle', function () { if ($('live-mehr').open) drawHist(); });
+    $('live-mehr').addEventListener('toggle', function () { if ($('live-mehr').open) { drawHist(); drawD34({ state: 'pause', score: NaN }, null); drawSpec({ voiced: false, F: [], valid: [], BW: [] }, null); } });
     $('btn-take').addEventListener('click', takeToggle);
     $('btn-neue-sitzung').addEventListener('click', neueSitzung);
     /* Einsing-Status und -Dauer gelten für die ganze Sitzung, nicht nur für den nächsten Take —
