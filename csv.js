@@ -202,6 +202,12 @@
       { key: 'hb_n_rahmen', get: g('summary.hochband.nRahmen'), dec: 0 },
       { key: 'hb_n_kern_laut', get: g('summary.hochband.nKernLaut'), dec: 0 },
       { key: 'hb_f0_unsure_share', get: g('summary.hochband.f0UnsureShare'), dec: 3 },
+      /* Hochband 1.1: Anteil der gerechneten Rahmen, deren Grundton der Kamm auf f0/2 bzw. 2·f0 setzte (Oktavfehler des Kerns), und der
+         geprüfte Grundton der Kernrahmen (Median, 95. Perzentil) — der Grundton, mit dem das Hochband wirklich gerechnet wurde. */
+      { key: 'hb_oktav_halb_share', get: g('summary.hochband.oktavHalbShare'), dec: 3 },
+      { key: 'hb_oktav_doppelt_share', get: g('summary.hochband.oktavDoppeltShare'), dec: 3 },
+      { key: 'hb_f0_gepr_med_hz', get: g('summary.hochband.f0GeprMed'), dec: 1 },
+      { key: 'hb_f0_gepr_p95_hz', get: g('summary.hochband.f0GeprP95'), dec: 1 },
       { key: 'hb_boden_rms_dbfs', get: g('summary.hochband.bodenRmsDbfs'), dec: 2 },
       { key: 'hb_verlauf', get: g('summary.hochband.verlauf') },
       { key: 'hb_grund', get: g('summary.hochband.grund') },
@@ -332,6 +338,8 @@
     ['hb_lz', 'hbLz', 2], ['sf_lz', 'sfLz', 2], ['hb_stimme', 'hbStimme', 2], ['hb_zw', 'hbZw', 2], ['sf_stimme', 'sfStimme', 2], ['zw_lo', 'zwLo', 2],
     ['hb_kamm_db', 'hbKamm', 2], ['hb_f0_fein_hz', 'hbF0Fein', 2], ['hb_snr_db', 'hbSnr', 2], ['hb_pegel_dbfs', 'hbPegel', 2],
     ['hb_laut', hbBit(2), 0], ['hb_kern', hbBit(4), 0], ['hb_snr_ok', hbBit(8), 0], ['hb_f0_sicher', hbBit(16), 0], ['hb_kernrahmen', hbBit(32), 0],
+    // Hochband 1.1: Kandidat im Kamm (0 = Grundton des Kerns, 1 = f0/2, 2 = 2·f0), nur in gerechneten Rahmen; ältere Serien −99.
+    ['hb_oktav', function (s, i) { return (s.hbOktav && s.hbGatter && (s.flags[i] & 1) && (s.hbGatter[i] & 1)) ? s.hbOktav[i] : null; }, 0],
     ['flags', 'flags', 0]
   ];
 
@@ -377,7 +385,7 @@
        (Fenstermitte, 20 ms) und mit dem Grundton des Kerns (f0_b) statt der Chronik-Entscheidung — darum _b, bis der Grundton
        abgeglichen ist (Reihenfolge, Punkt 3). Die Gatterbits haben in der Chronik keine Spalte und behalten ihren Namen. */
     hb_lz: 'hb_lz_b', sf_lz: 'sf_lz_b', hb_stimme: 'hb_stimme_b', hb_zw: 'hb_zw_b', sf_stimme: 'sf_stimme_b', zw_lo: 'zw_lo_b',
-    hb_kamm_db: 'kamm_b', hb_f0_fein_hz: 'f0_fein_b', hb_snr_db: 'hb_snr_b', hb_pegel_dbfs: 'hb_pegel_b' };
+    hb_kamm_db: 'kamm_b', hb_f0_fein_hz: 'f0_fein_b', hb_snr_db: 'hb_snr_b', hb_pegel_dbfs: 'hb_pegel_b', hb_oktav: 'oktav_b' };
   function paketName(key) { return Object.prototype.hasOwnProperty.call(PAKET_NAMEN, key) ? PAKET_NAMEN[key] : key; }
   function framesToCsv(series, dialectName, VOWEL) {
     var d = DIALECTS[dialectName] || DIALECTS.standard;
