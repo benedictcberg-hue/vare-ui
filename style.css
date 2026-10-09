@@ -1,8 +1,9 @@
-/* VARE — Gestaltung: Forest Green und Gold. Rost ausschließlich für unsichere Messwerte. */
+/* VARE — Gestaltung: Forest Green und Gold. Rost ausschließlich für unsichere Messwerte.
+   Rost #C8774F: 4,9:1 auf dem Kasten, auch für kleine Schrift lesbar (#A85A3C hatte nur 3,4:1). */
 :root {
-  --bg: #0C1410; --panel: #14201A; --line: #24352C; --ink: #E8EDE7; --muted: #8FA396; --gold: #C9A227; --rust: #A85A3C;
+  --bg: #0C1410; --panel: #14201A; --line: #24352C; --ink: #E8EDE7; --muted: #8FA396; --gold: #C9A227; --rust: #C8774F;
   --serif: Georgia, "Times New Roman", "Noto Serif", serif;
-  --mono: Consolas, "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono", monospace;
+  --mono: ui-monospace, Menlo, Consolas, "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono", monospace;
   --sans: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Sans", sans-serif;
 }
 * { box-sizing: border-box; }
@@ -125,7 +126,10 @@ th.spalte-breit { min-width: 180px; }
 .hero-zahl.befund { color: var(--gold); }
 .hero-zahl.frozen { color: var(--muted); }
 .hero-f0 { display: block; color: var(--muted); font-size: 1.1rem; line-height: 1.45; min-height: 1.45em; }
-#live-ref { min-height: 2.9em; line-height: 1.45; }
+/* Referenzzeile einzeilig: ganz im Tooltip, kein Umbruch, kein Springen. */
+#live-ref { min-height: 1.45em; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Gleich breit als „Take starten“ und „Take beenden“: der Knopf bleibt unter dem Finger. */
+#btn-take { min-width: 10em; }
 .live-mehr { margin-top: .75rem; }
 .hero-rest { display: block; font-size: 1.1rem; line-height: 1.45; min-height: 1.45em; color: var(--muted); }
 /* Nur für Bildschirmleser: die große Ansage zeigt dasselbe sichtbar. */

@@ -522,7 +522,7 @@ const WAV = path.join(SP, 'fake.wav');
     // ---------- Live: Grundton- und SHR-Unsicherheit in Rost, Korrektur ohne Rost (Farben aus dem Browser) ----------
     // Das Mikrofon läuft noch. analyseAt liefert für die Dauer der Prüfung einen echten Rahmen eines sauberen
     // /a/ bei 196 Hz, in dem nur die Felder gesetzt sind, wie der Kern sie meldet (null steht für NaN).
-    const ROST_L = 'rgb(168, 90, 60)', GOLD_L = 'rgb(201, 162, 39)';
+    const ROST_L = 'rgb(200, 119, 79)', GOLD_L = 'rgb(201, 162, 39)';
     const liveFall = a => page.evaluate(async a => {
       const D = window.VAREDSP;
       if (!window.__echteAnalyse) window.__echteAnalyse = D.analyseAt;
@@ -545,10 +545,10 @@ const WAV = path.join(SP, 'fake.wav');
     check('Live im Browser: unsicherer Grundton in Rost mit Grund (auch SHR und H1−H2), F1/F0 als Teil in Rost neben schwarzem F1; korrigierter Grundton ohne Rost',
       lU.f0.farbe === ROST_L && /Grundton unsicher: Cepstrum zeigt 98\.0 Hz/.test(lU.f0.text) && lU.shr.farbe === ROST_L && lU.h1h2.farbe === ROST_L
       && !!lU.f1.teil && lU.f1.teil.farbe === ROST_L && lU.f1.farbe !== ROST_L && lK.f0.farbe !== ROST_L && /korrigiert aus 98\.0 Hz, Teiltonreihe/.test(lK.f0.text),
-      JSON.stringify({ unsicher: lU.f0, f1: lU.f1, korrigiert: lK.f0 }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+      JSON.stringify({ unsicher: lU.f0, f1: lU.f1, korrigiert: lK.f0 }).replace(/rgb\(200, 119, 79\)/g, 'ROST'));
     check('Live im Browser: SHR-Raster zweifelhaft → beide Werte mit Raster in Rost, keine Warnung; sicheres SHR −10 dB in Gold',
       lS.shr.farbe === ROST_L && !/befund/.test(lS.shr.klasse) && /-10\.0 dB \(Raster 392 Hz\) · -48\.7 dB \(Raster 196 Hz\)/.test(lS.shr.text) && lW.shr.farbe === GOLD_L,
-      JSON.stringify({ zweifel: lS.shr, sicher: lW.shr }).replace(/rgb\(168, 90, 60\)/g, 'ROST').replace(/rgb\(201, 162, 39\)/g, 'GOLD'));
+      JSON.stringify({ zweifel: lS.shr, sicher: lW.shr }).replace(/rgb\(200, 119, 79\)/g, 'ROST').replace(/rgb\(201, 162, 39\)/g, 'GOLD'));
 
     // ---------- Token: „merken“ und „Token entfernen“ in einem frischen Browserprofil ----------
     const ctx2 = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1000, height: 1400 }, locale: 'de-DE' });
@@ -698,9 +698,9 @@ const WAV = path.join(SP, 'fake.wav');
       }
       const eineNaht = !!lk && Array.isArray(lk.luecken) && lk.luecken.length === 1 && lk.luecken[0].art === 'naht' && lk.luecken[0].dauerS > 1.3 && lk.luecken[0].dauerS < 1.8;
       neuladenCheck(3,
-        eineNaht && Math.abs(Number(lk.csv) - lk.summe) < 0.006 && !!lk.ergebnis && lk.ergebnis.farbe === 'rgb(168, 90, 60)' && /Signal unterbrochen/.test(lk.ergebnis.text)
-        && !!detailZeile && detailZeile.farbe === 'rgb(168, 90, 60)' && /Signal unterbrochen/.test(detailZeile.text),
-        JSON.stringify({ luecken: lk && lk.luecken, csv: lk && lk.csv, ergebnis: lk && lk.ergebnis, detail: detailZeile }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+        eineNaht && Math.abs(Number(lk.csv) - lk.summe) < 0.006 && !!lk.ergebnis && lk.ergebnis.farbe === 'rgb(200, 119, 79)' && /Signal unterbrochen/.test(lk.ergebnis.text)
+        && !!detailZeile && detailZeile.farbe === 'rgb(200, 119, 79)' && /Signal unterbrochen/.test(detailZeile.text),
+        JSON.stringify({ luecken: lk && lk.luecken, csv: lk && lk.csv, ergebnis: lk && lk.ergebnis, detail: detailZeile }).replace(/rgb\(200, 119, 79\)/g, 'ROST'));
     } catch (e) { NEULADEN_NAMEN.forEach((n, k) => { if (neuladenErledigt.indexOf(k) < 0) check(n, false, 'Ausnahme: ' + String(e && e.message || e).split('\n')[0]); }); }
     if (ctx4) await ctx4.close();
 
@@ -747,8 +747,8 @@ const WAV = path.join(SP, 'fake.wav');
       await p5.evaluate(id => { location.hash = '#/take/' + id; }, r8.id);
       await p5.waitForFunction(() => document.querySelector('#take-detail .grid'), null, { timeout: 10000 });
       const detailSchwach = await p5.evaluate(() => Array.from(document.querySelectorAll('#take-detail .stat')).map(e => [(e.querySelector('.k') || {}).textContent, e.className]).filter(z => /^F[1-5]$/.test(z[0]) && /\bunsure\b/.test(z[1])).map(z => +z[0].slice(1) - 1));
-      b2Check(0, schwach.length > 0 && schwach.length < 5 && r8.rost.length === schwach.length && r8.rost.every(e => e.farbe === 'rgb(168, 90, 60)' && /gültig in/.test(e.text)) && detailSchwach.join() === schwach.join(),
-        JSON.stringify({ schwach: schwach.map(k => 'F' + (k + 1)), text: r8.text, rost: r8.rost, detail: detailSchwach.map(k => 'F' + (k + 1)) }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+      b2Check(0, schwach.length > 0 && schwach.length < 5 && r8.rost.length === schwach.length && r8.rost.every(e => e.farbe === 'rgb(200, 119, 79)' && /gültig in/.test(e.text)) && detailSchwach.join() === schwach.join(),
+        JSON.stringify({ schwach: schwach.map(k => 'F' + (k + 1)), text: r8.text, rost: r8.rost, detail: detailSchwach.map(k => 'F' + (k + 1)) }).replace(/rgb\(200, 119, 79\)/g, 'ROST'));
       // Regler so bewegen, wie es die Hand tut, dann „Neu analysieren“ im Detail; mitten in der Neu-Analyse anhalten.
       for (const [id, v] of [['#s-windowS', '0.6'], ['#s-sdF2Max', '40'], ['#s-minValidShare', '1']]) await p5.$eval(id, (el, w) => { el.value = w; el.dispatchEvent(new Event('input', { bubbles: true })); }, v);
       await p5.waitForSelector('#d-re', { timeout: 10000 });
@@ -795,7 +795,7 @@ const WAV = path.join(SP, 'fake.wav');
     check('Sicherung → Import: nie gemessene Werte bleiben NaN in IndexedDB (nicht null)', imp.f4NaN && imp.snrNaN, JSON.stringify({ F4: imp.f4, snrNaN: imp.snrNaN }));
     check('Import: angepinnte Referenz ohne ihren Take wird nicht ungeprüft Zielmarke', /angepinnte Referenz/.test(imp.meldung) && /(nicht übernommen|verwaist)/.test(imp.meldung), imp.meldung);
     await p3.waitForSelector('#takes-list tr[data-id="e2e-befund"]', { timeout: 10000 });
-    const GOLD = 'rgb(201, 162, 39)', ROST = 'rgb(168, 90, 60)';
+    const GOLD = 'rgb(201, 162, 39)', ROST = 'rgb(200, 119, 79)';
     const zeile = await p3.$eval('#takes-list tr[data-id="e2e-befund"]', tr => { const td = tr.querySelectorAll('td'); const farbe = i => { const sp = td[i].querySelector('span'); return sp ? { klasse: sp.className, farbe: getComputedStyle(sp).color, text: sp.textContent } : null; }; return { f3: farbe(5), shr: farbe(7), rost: tr.querySelectorAll('.rust').length }; });
     check('Chronik-Liste im Browser: F3 unter dem Mindestwert und SHR über −15 dB in Gold (Befund), kein Rost in der Zeile',
       zeile.f3 && zeile.f3.klasse === 'befund' && zeile.f3.farbe === GOLD && zeile.shr && zeile.shr.farbe === GOLD && zeile.rost === 0, JSON.stringify(zeile));
@@ -857,7 +857,7 @@ const WAV = path.join(SP, 'fake.wav');
       !!f0Kachel && /^196 \[196–196\]/.test(f0Kachel.v) && /Grundton unsicher in 17 %/.test(f0Kachel.v) && f0Kachel.rost === ROST
       && hU.rost.some(r => /^F0 196\.0 \(Grundton unsicher: Cepstrum zeigt 98\.0 Hz\)$/.test(r.text) && r.farbe === ROST) && hU.rost.some(r => /^SHR -30\.0 .*unsicher: Grundton unsicher$/.test(r.text))
       && /F0 196\.0 \(korrigiert aus 98\.0 Hz, Teiltonreihe\)/.test(hK.text) && !hK.rost.length,
-      JSON.stringify({ f0Kachel, unsicher: hU.rost, korrigiert: hK.text.slice(0, 120) }).replace(/rgb\(168, 90, 60\)/g, 'ROST'));
+      JSON.stringify({ f0Kachel, unsicher: hU.rost, korrigiert: hK.text.slice(0, 120) }).replace(/rgb\(200, 119, 79\)/g, 'ROST'));
     await ctx3.close();
   } catch (e) { fails.push('AUSNAHME ' + (e && e.stack || e)); console.log('AUSNAHME', e); }
   check('Keine JavaScript-Fehler auf der Seite', errors.length === 0, errors.join(' | '));
