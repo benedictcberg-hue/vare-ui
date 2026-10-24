@@ -31,7 +31,12 @@
   'use strict';
   var D = (typeof module !== 'undefined' && module.exports) ? require('./dsp.js') : root.VAREDSP;
 
-  var VERSION = '1.0';
+  /* 1.1 (9.10.2026): Oktavprüfung im Kamm. Der Kamm wird bei f0, f0/2 und 2·f0 gerechnet; ein Nachbar gewinnt nur mit mehr als OKTAV_DB
+     Kontrast. Ohne sie fällt Linie−Zwischenraum bei einem Grundton eine Oktave zu hoch (H2 als Grundton gelesen) auf ≈ 0, weil jede
+     zweite Linie zum Zwischenraum wird — in der Chronik stand so ein scheinbarer Einbruch über 350 Hz (These 37, Artefakt). Gleiche
+     Regel wie vare_hochband.py 1.1; jeder Rahmen trägt, welcher Kandidat gewann (oktav 0 = f0, 1 = f0/2, 2 = 2·f0). */
+  var VERSION = '1.1';
+  var OKTAV_DB = 6;
   var FENSTER_S = 0.08;                                   // 3840 Abtastwerte bei 48 kHz
   var BAENDER = { lo: [300, 2000], sf: [2400, 3200], hb: [4000, 6500], hb2: [6500, 8000] };
   var F0_MIN_HZ = 60, F0_MAX_HZ = 600;                    // Rahmen der Chronik: f0 BETWEEN 60 AND 600
@@ -155,13 +160,28 @@
   /* Ein Rahmen aus den Abtastwerten x (bei sr): 80 ms ab start, Grundton f0 des Kerns, Hochband-Boden bodenHb (roh, aus boden().hb
      oder bodenAusBloecken; NaN erlaubt → snr NaN). Liefert null, wenn f0 außerhalb 60–600 Hz liegt oder das Fenster nicht in x passt.
      Sonst { f0Fein, kamm, pegel (dBFS), hbLz, sfLz, hbStimme, hbZw, sfStimme, zwLo, hbGes, snr }. */
+  /* Oktavprüfung: Kamm bei f0, f0/2 (wenn ≥ 60 Hz) und 2·f0 (wenn ≤ 600 Hz); ein Nachbar gewinnt nur, wenn sein Kammkontrast um mehr als
+     OKTAV_DB über dem des Kerngrundtons liegt. Liefert das Ergebnis von teiltonRahmen mit oktav (0, 1, 2) oder null. */
+  function teiltonOktav(P, f0, sr, N) {
+    var best = teiltonRahmen(P, f0, sr, N), oktav = 0;
+    if (!best) return null;
+    var kand = [[1, f0 / 2 >= F0_MIN_HZ ? f0 / 2 : NaN], [2, 2 * f0 <= F0_MAX_HZ ? 2 * f0 : NaN]];
+    for (var i = 0; i < kand.length; i++) {
+      if (!isFinite(kand[i][1])) continue;
+      var r = teiltonRahmen(P, kand[i][1], sr, N);
+      if (r && r.kamm > best.kamm + OKTAV_DB) { best = r; oktav = kand[i][0]; }
+    }
+    best.oktav = oktav;
+    return best;
+  }
+
   function rahmen(x, sr, start, f0, bodenHb) {
     var W = fensterLaenge(sr), N = nfftTeilton(sr);
     if (!(f0 >= F0_MIN_HZ && f0 <= F0_MAX_HZ) || !(start >= 0) || start + W > x.length) return null;
-    var t = teiltonRahmen(leistung(x, start, W, N), f0, sr, N);
+    var t = teiltonOktav(leistung(x, start, W, N), f0, sr, N);
     if (!t) return null;
     var hbGes = 10 * Math.log10(Math.pow(10, t.hbLin / 10) + Math.pow(10, t.hbZw / 10));
-    return { f0Fein: t.f0Fein, kamm: t.kamm, pegel: rmsDbfs(x, start, W),
+    return { f0Fein: t.f0Fein, kamm: t.kamm, oktav: t.oktav, pegel: rmsDbfs(x, start, W),
       hbLz: t.hbLin - t.hbZw, sfLz: t.sfLin - t.sfZw, hbStimme: t.hbLin - t.loLin, hbZw: t.hbZw - t.loLin, sfStimme: t.sfLin - t.loLin, zwLo: t.loZw - t.loLin,
       hbGes: hbGes, snr: isFinite(bodenHb) ? hbGes - bodenHb : NaN };
   }
@@ -171,12 +191,12 @@
   function leer() {
     return { version: VERSION, nRahmen: 0, nKernLaut: 0, nLaut: 0, nKern: 0, nSnr: 0, nSicher: 0,
       hbLz: NaN, hbLzAnt3: NaN, hbStimme: NaN, hbZw: NaN, sfLz: NaN, sfStimme: NaN, zwLo: NaN, hbSnr: NaN, kamm: NaN, pegelMax: NaN,
-      f0UnsureShare: NaN, verlauf: '', verlaufListe: [], grund: '' };
+      f0UnsureShare: NaN, oktavHalbShare: NaN, oktavDoppeltShare: NaN, f0GeprMed: NaN, f0GeprP95: NaN, verlauf: '', verlaufListe: [], grund: '' };
   }
   function vorz(v) { return (v >= 0 ? '+' : '') + v.toFixed(1); }
   function spalte(R, feld, K) { var out = []; for (var i = 0; i < K.length; i++) out.push(R[K[i]][feld]); return out; }
 
-  /* R: gerechnete Rahmen in Zeitfolge, je { t, pegel, hbLz, sfLz, hbStimme, hbZw, sfStimme, zwLo, kamm, snr, sicher }.
+  /* R: gerechnete Rahmen in Zeitfolge, je { t, pegel, hbLz, sfLz, hbStimme, hbZw, sfStimme, zwLo, kamm, snr, sicher, f0Fein, oktav }.
      Liefert { kennwerte, gatter } — gatter: Uint8Array je Eintrag von R mit den Bits GATTER. */
   function kennwerte(R) {
     var n = R.length, out = leer(), gatter = new Uint8Array(n), i, a, b;
@@ -214,6 +234,10 @@
       out.grund = 'zu wenige laute Kernrahmen (' + K.length + ' < ' + MIN_KERN + '; laut ' + out.nLaut + ', Kern ' + out.nKern + ', über dem Boden ' + out.nSnr + ', Grundton sicher ' + out.nSicher + ' von ' + n + ')';
       return { kennwerte: out, gatter: gatter };
     }
+    var nHalb = 0, nDoppelt = 0;
+    for (i = 0; i < n; i++) { if (R[i].oktav === 1) nHalb++; else if (R[i].oktav === 2) nDoppelt++; }
+    out.oktavHalbShare = nHalb / n; out.oktavDoppeltShare = nDoppelt / n;
+    var f0g = spalte(R, 'f0Fein', K); out.f0GeprMed = D.median(f0g); out.f0GeprP95 = D.quantile(f0g, 0.95);
     var lz = spalte(R, 'hbLz', K), ueber = 0;
     for (i = 0; i < lz.length; i++) if (lz[i] > LZ_SCHWELLE_DB) ueber++;
     out.hbLz = D.median(lz); out.hbLzAnt3 = ueber / lz.length;
@@ -238,6 +262,8 @@
     if (!k || !isFinite(k.hbLz)) return 'Hochband: ' + (k && k.grund ? k.grund : 'nicht gerechnet');
     return 'Hochband F6/F7 Linie−Zw ' + vorz(k.hbLz) + ' dB (' + Math.round(100 * k.hbLzAnt3) + ' % über 3 dB) | Stimme ' + vorz(k.hbStimme) + ' | Zisch ' + vorz(k.hbZw)
       + ' | SF-Band Linie−Zw ' + vorz(k.sfLz) + ', Stimme ' + vorz(k.sfStimme) + ' | Quellrauschen ' + vorz(k.zwLo) + ' | laute Kernrahmen ' + k.nKernLaut + '/' + k.nRahmen
+      + (isFinite(k.oktavHalbShare) ? ' | Oktave korrigiert ' + (100 * k.oktavHalbShare).toFixed(1) + ' % (halb) ' + (100 * k.oktavDoppeltShare).toFixed(1) + ' % (doppelt)' : '')
+      + (isFinite(k.f0GeprMed) ? ' | geprüfter Grundton Median ' + Math.round(k.f0GeprMed) + ' Hz, p95 ' + Math.round(k.f0GeprP95) + ' Hz' : '')
       + (k.verlauf ? ' | Verlauf ' + k.verlauf : '');
   }
 
@@ -246,7 +272,7 @@
     BODEN_ANTEIL: BODEN_ANTEIL, BODEN_MIN_BLOECKE: BODEN_MIN_BLOECKE, MIN_RAHMEN: MIN_RAHMEN, MIN_KERN: MIN_KERN, LZ_SCHWELLE_DB: LZ_SCHWELLE_DB,
     KAMM_SCHRITT: KAMM_SCHRITT, KAMM_WEITE: KAMM_WEITE, LINIE: LINIE, ZWISCHENRAUM: ZWISCHENRAUM, TEILTON_MAX_HZ: TEILTON_MAX_HZ,
     fensterLaenge: fensterLaenge, nfftBoden: nfftBoden, nfftTeilton: nfftTeilton, leistung: leistung, bandDb: bandDb, rint: rint,
-    boden: boden, bodenAusBloecken: bodenAusBloecken, block: block, teiltonRahmen: teiltonRahmen, rahmen: rahmen, kennwerte: kennwerte, leer: leer, zeile: zeile };
+    boden: boden, bodenAusBloecken: bodenAusBloecken, block: block, teiltonRahmen: teiltonRahmen, teiltonOktav: teiltonOktav, OKTAV_DB: OKTAV_DB, rahmen: rahmen, kennwerte: kennwerte, leer: leer, zeile: zeile };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VAREHOCHBAND = api;
 })(typeof self !== 'undefined' ? self : this);
