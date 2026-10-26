@@ -377,6 +377,7 @@
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
+    "Schritt 3: auch der längste Ton ist auf dem Prüfsignal um 0,13 s zu lang (geglättete Kontur reicht in die Pause).",
     "Befund 3: ab 0,20 s statt 0,35 s; Dauer um einen Rahmen zu kurz; stimmlose Rahmen auf der geglätteten Kontur zählen mit. 50 % aller Haltetöne der Chronik sind < 0,35 s. Längster Ton bleibt richtig. Schritt 4 Fix 3.",
     "Vibrato mit großem Hub zerschneidet Plateaus."
    ],
@@ -583,7 +584,8 @@
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
-    "Pipeline-f0 (Oktavfehler). Lagenabhängig."
+    "Pipeline-f0 (Oktavfehler). Lagenabhängig.",
+    "N4 (Schritt 3): die ersten 80 ms ab Haltetonbeginn enthalten bis zu 65 ms Pause."
    ],
    "pruefsignal": [
     "h1h2_bekannt"
@@ -628,6 +630,9 @@
    "implementierung": "vare.pipeline.hnr_ac",
    "version": "1",
    "status": "gültig",
+   "fallen": [
+    "N4 (Schritt 3): misst die ersten 80 ms ab Haltetonbeginn, der 65 ms vor dem Toneinsatz liegt; auf Prüfsignalen sinkt die HNR mit sinkendem Rauschen."
+   ],
    "pruefsignal": [
     "rauschen_bekannt"
    ],
@@ -648,7 +653,8 @@
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 19: FFT nur über die ersten 5,12 s eines Laufs, Hub über den ganzen Lauf."
+    "Befund 19: FFT nur über die ersten 5,12 s eines Laufs, Hub über den ganzen Lauf.",
+    "N2 (Schritt 3): Hub 66–71 statt 54 Cent auf Prüfsignalen 60–196 Hz (Mittelwert-Abzug mit Oktavsprung-Ausreißern). N3: bei 60 Hz Vibratorate verdoppelt."
    ],
    "pruefsignal": [
     "grundton_vibrato"
@@ -955,7 +961,8 @@
    "version": "1.1",
    "status": "gültig",
    "fallen": [
-    "Nur ±2 % um das Pipeline-f0; der grobe Fehler kommt von YIN, der Kamm korrigiert nur Oktaven."
+    "Nur ±2 % um das Pipeline-f0; der grobe Fehler kommt von YIN, der Kamm korrigiert nur Oktaven.",
+    "N3 (Schritt 3): bei 60 Hz mit Vibrato ±55 Cent Median +42 Cent."
    ],
    "pruefsignal": [
     "grundton_60hz",
@@ -1004,7 +1011,8 @@
    "status": "Vorsicht",
    "fallen": [
     "Befund 25.10.: halbiert in H2-dominanten Rahmen gelegentlich falsch (Sadnecessary 7 Rahmen). Schritt 4 Fix 4: Halbieren nur, wenn bei f0/2 ein Teilton ≥ 6 dB über dem Boden steht.",
-    "Befund 25: f0 > 600 Hz kommt nicht hinein; Teilung durch 3 fehlt."
+    "Befund 25: f0 > 600 Hz kommt nicht hinein; Teilung durch 3 fehlt.",
+    "N5 (Schritt 3): halbiert bei echter Periodenverdopplung (Amplitude ±3 dB) alle Rahmen."
    ],
    "pruefsignal": [
     "h2_dominanz",
@@ -1740,7 +1748,8 @@
    "version": "2",
    "status": "gültig",
    "fallen": [
-    "Vibrato zählt als Jitter, wenn die Periode kurz ist."
+    "Vibrato zählt als Jitter, wenn die Periode kurz ist.",
+    "N1 (Schritt 3): Auf Pulszügen mit bekannter Periodenstreuung 0,3/1,0/2,0 % misst Praat 65–75 % des wahren Werts; Reihenfolge stimmt."
    ],
    "pruefsignal": [
     "jitter_bekannt"
@@ -1811,7 +1820,8 @@
    "version": "1",
    "status": "gültig",
    "fallen": [
-    "Erkennt nur strenge Periodenverdopplung; Fry (unregelmäßige Pulse) bleibt unsichtbar (Befund 29)."
+    "Erkennt nur strenge Periodenverdopplung; Fry (unregelmäßige Pulse) bleibt unsichtbar (Befund 29).",
+    "N5/N6 (Schritt 3): prüft nach Halbierung durch die Oktavprüfung am falschen Grundton (0 Treffer); am richtigen Grundton 74 % statt 100 % (Prüfstand A6)."
    ],
    "pruefsignal": [
     "periodenverdopplung"
@@ -2354,20 +2364,21 @@
    "id": "teilton_vibrato",
    "name_de": "Teilton-Prüfung über Vibrato-Kopplung",
    "gruppe": "rekon",
-   "formel_text": "Spezifikation docs/VARE_Teilton-Pruefung_Vibrato-Kopplung_2026-10-26.md mit Review-Änderungen: Spuren ohne f0 bilden (J = min(40; 0,8·600·log2((n+1)/n)) Cent), Vibrato-Rate per Autokorrelation 3–8 Hz, Prüffenster 2 Zyklen, je Spur R = Median f_k/f0, s_R, Kopplung r/β/ε, Versatz τ, r_min = min(0,9; 0,8·r_erw); Klassen TEILTON, SUBHARMONISCH, F0_VERDACHT (nur wenn halbzahlige Pegel ≥ ganzzahlige − 6 dB), ZWEITQUELLE, STATISCH, RAUSCHEN, NICHT_PRÜFBAR. Bezugs-f0 im selben Raster und Fenster wie die Spuren (Review Punkte 1–2). Noch nicht gebaut.",
+   "formel_text": "Spezifikation docs/VARE_Teilton-Pruefung_Vibrato-Kopplung_2026-10-26.md mit Review-Änderungen: Spuren ohne f0 bilden (J = min(40; 0,8·600·log2((n+1)/n)) Cent), Vibrato-Rate per Autokorrelation 3–8 Hz, Prüffenster 2 Zyklen, je Spur R = Median f_k/f0, s_R, Kopplung r/β/ε, Versatz τ, r_min = min(0,9; 0,8·r_erw); Klassen TEILTON, SUBHARMONISCH, F0_VERDACHT (nur wenn halbzahlige Pegel ≥ ganzzahlige − 6 dB), ZWEITQUELLE, STATISCH, RAUSCHEN, NICHT_PRÜFBAR. Bezugs-f0 im selben Raster und Fenster wie die Spuren (Review Punkte 1–2). Gebaut: Schritt A und B (Spitzen, Spuren ohne f0); Referenz, C, D, E folgen.",
    "formel_latex": "r_{\\text{erw}} = \\Big[\\big(1 + \\tfrac{\\sigma_k^2}{s_0^2}\\big)\\big(1 + \\tfrac{\\sigma_0^2}{s_0^2}\\big)\\Big]^{-1/2},\\qquad r_{\\min} = \\min(0{,}9;\\ 0{,}8\\,r_{\\text{erw}})",
    "einheit": "Klasse je Spur und Fenster",
    "eingaben": [
     "f0_fein",
     "normierung_48k"
    ],
-   "implementierung": "—",
+   "implementierung": "vare.teilton.spuren_aus_signal",
    "version": "0",
    "status": "Entwurf",
    "fallen": [
     "Schwelle r > 0,9 ungeeicht; Tabelle teilton_pruefung_alle mit lauf_id (Chronik-Gesetz)."
    ],
    "pruefsignal": [
+    "teilton_s1_s20",
     "teilton_vibrato_s1",
     "teilton_vibrato_s2",
     "teilton_vibrato_s3",
