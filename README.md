@@ -647,3 +647,10 @@ A/B-Vergleich zweier Takes (`chronik.drawLanes` nimmt eine zweite Serie), Rast-A
 Teiltöne, Periodenverdopplungs-Warner über Zyklusalternation (`recorder.onChunk` liefert
 rohes PCM, `alternation` rechnet das Kriterium), WAV-Auswertung per Drag-and-drop
 (`wav.decode` plus `analysis.analyseTake` sind quellenunabhängig).
+
+## Kennzahl-Register (`register_ui.json`)
+
+`register_ui.json` ist die öffentliche Kopie des Kennzahl-Registers aus `vare-tools/vare/register.yaml`:
+jede Formel genau einmal, mit Version und Status (gültig, Vorsicht, Entwurf, ungültig), Einheit, Fenster,
+Gates und bekannten Fallen. **Keine Messwerte, keine Korpus-Marken.** Die Datei wird in `vare-tools` mit
+`py -m vare register` erzeugt und hierher kopiert; von Hand wird sie nicht geändert.
