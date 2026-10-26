@@ -32,7 +32,7 @@
    "eingaben": [
     "wav"
    ],
-   "implementierung": "vare.kern.lade_wav",
+   "implementierung": "vare.kern.lade_mono",
    "version": "2",
    "status": "gültig",
    "fallen": [
@@ -54,7 +54,7 @@
    "eingaben": [
     "kanalmittel"
    ],
-   "implementierung": "vare.abend.originalpegel",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -73,7 +73,7 @@
    "eingaben": [
     "kanalmittel"
    ],
-   "implementierung": "vare.abend.originalpegel",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "fallen": [
@@ -93,7 +93,7 @@
    "eingaben": [
     "kanalmittel"
    ],
-   "implementierung": "vare.abend.normieren",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -115,7 +115,7 @@
    "eingaben": [
     "normierung_48k"
    ],
-   "implementierung": "vare.abend.geraeteprofil",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -134,7 +134,7 @@
    "eingaben": [
     "normierung_48k"
    ],
-   "implementierung": "vare.abend.einigkeit",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -152,7 +152,7 @@
    "eingaben": [
     "chronik"
    ],
-   "implementierung": "vare.abend.dubletten",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -172,7 +172,7 @@
    "eingaben": [
     "wav"
    ],
-   "implementierung": "vare.abend.datei_hash",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -222,7 +222,7 @@
    "eingaben": [
     "f0_yin"
    ],
-   "implementierung": "vare.pipeline.rahmen_zeit",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -245,7 +245,7 @@
    "eingaben": [
     "normierung_48k"
    ],
-   "implementierung": "vare.pipeline.rahmenwerte",
+   "implementierung": "vare.pipeline._frames_worker",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -263,7 +263,7 @@
    "eingaben": [
     "rahmenpegel"
    ],
-   "implementierung": "vare.pipeline.stimmhaft",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -283,7 +283,7 @@
     "f0_yin",
     "boden_dbfs"
    ],
-   "implementierung": "vare.pipeline.stimmhaft",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "fallen": [
@@ -307,7 +307,7 @@
     "stimmhaft_gate",
     "boden_dbfs"
    ],
-   "implementierung": "vare.pipeline.bloecke",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -326,7 +326,7 @@
    "eingaben": [
     "block_klasse"
    ],
-   "implementierung": "vare.pipeline.bloecke",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -347,7 +347,7 @@
     "f0_yin",
     "stimmhaft_gate"
    ],
-   "implementierung": "vare.pipeline.lage",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -373,7 +373,7 @@
     "stimmhaft_gate",
     "oktavpruefung_ladder"
    ],
-   "implementierung": "vare.pipeline.haltetoene",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -397,7 +397,7 @@
     "halteton",
     "stimmhaft_gate"
    ],
-   "implementierung": "vare.pipeline.haltetoene",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -445,7 +445,7 @@
     "normierung_48k",
     "stimmhaft_gate"
    ],
-   "implementierung": "vare.kern.formanten",
+   "implementierung": "vare.kern.formants",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -467,7 +467,7 @@
    "eingaben": [
     "formanten_lpc"
    ],
-   "implementierung": "vare.pipeline.take_formanten",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -489,7 +489,7 @@
    "eingaben": [
     "formanten_lpc"
    ],
-   "implementierung": "vare.pipeline.take_formanten",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -513,7 +513,7 @@
    "eingaben": [
     "rahmenpegel"
    ],
-   "implementierung": "vare.pipeline.rahmenwerte",
+   "implementierung": "vare.pipeline._frames_worker",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -536,7 +536,7 @@
    "eingaben": [
     "rahmenpegel"
    ],
-   "implementierung": "vare.pipeline.rahmenwerte",
+   "implementierung": "vare.pipeline._frames_worker",
    "version": "1",
    "status": "Vorsicht",
    "pruefsignal": [
@@ -579,7 +579,7 @@
    "eingaben": [
     "halteton"
    ],
-   "implementierung": "vare.pipeline.h1h2_halteton",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -602,7 +602,7 @@
     "h1h2_halteton_80ms",
     "formanten_lpc"
    ],
-   "implementierung": "vare.pipeline.h1h2_halteton",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -644,7 +644,7 @@
    "eingaben": [
     "halteton"
    ],
-   "implementierung": "vare.pipeline.bewegung",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -664,7 +664,7 @@
    "eingaben": [
     "vibrato"
    ],
-   "implementierung": "vare.pipeline.bewegung",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -683,7 +683,7 @@
    "eingaben": [
     "halteton"
    ],
-   "implementierung": "vare.pipeline.bewegung",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -700,7 +700,7 @@
    "eingaben": [
     "halteton"
    ],
-   "implementierung": "vare.pipeline.bewegung",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -720,7 +720,7 @@
     "f0_yin",
     "stimmhaft_gate"
    ],
-   "implementierung": "vare.pipeline.bewegung",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -742,7 +742,7 @@
    "eingaben": [
     "normierung_48k"
    ],
-   "implementierung": "vare.pipeline.kette",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -760,7 +760,7 @@
    "eingaben": [
     "normierung_48k"
    ],
-   "implementierung": "vare.pipeline.kette",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -782,7 +782,7 @@
    "eingaben": [
     "normierung_48k"
    ],
-   "implementierung": "vare.pipeline.kette",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -799,7 +799,7 @@
    "eingaben": [
     "formanten_lpc"
    ],
-   "implementierung": "vare.pipeline.vokal",
+   "implementierung": "vare.pipeline.vowel",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -822,7 +822,7 @@
     "sfr300",
     "formanten_lpc"
    ],
-   "implementierung": "vare.pipeline.vokal_statistik",
+   "implementierung": "vare.pipeline.schritt_1",
    "version": "1",
    "status": "Vorsicht",
    "pruefsignal": [
@@ -842,7 +842,7 @@
     "f0_yin",
     "oktavpruefung_ladder"
    ],
-   "implementierung": "vare.pipeline.subharm_pipeline",
+   "implementierung": "vare.pipeline.subharm",
    "version": "1",
    "status": "ungültig",
    "fallen": [
@@ -863,7 +863,7 @@
    "eingaben": [
     "chronik"
    ],
-   "implementierung": "vare.pipeline.kontext",
+   "implementierung": "vare.pipeline.schritt_2_3",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -886,7 +886,7 @@
     "normierung_48k",
     "f0_yin"
    ],
-   "implementierung": "vare.hochband.rahmenspektrum",
+   "implementierung": "vare.hochband.teilton",
    "version": "1.1",
    "status": "Vorsicht",
    "fallen": [
@@ -1670,7 +1670,7 @@
     "halteton",
     "normierung_48k"
    ],
-   "implementierung": "vare.abend.haltetoene_spektrum",
+   "implementierung": "vare.abend.abend",
    "version": "2",
    "status": "Vorsicht",
    "fallen": [
@@ -1695,7 +1695,7 @@
    "eingaben": [
     "h1h2_halteton_ganz"
    ],
-   "implementierung": "vare.abend.schlussgrad",
+   "implementierung": "vare.abend.abend",
    "version": "2",
    "status": "Vorsicht",
    "fallen": [
@@ -1716,7 +1716,7 @@
    "eingaben": [
     "h1h2_halteton_ganz"
    ],
-   "implementierung": "vare.abend.dach",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
@@ -1736,7 +1736,7 @@
     "halteton",
     "normierung_48k"
    ],
-   "implementierung": "vare.abend.jitter",
+   "implementierung": "vare.abend.abend",
    "version": "2",
    "status": "gültig",
    "fallen": [
@@ -1760,7 +1760,7 @@
     "halteton",
     "normierung_48k"
    ],
-   "implementierung": "vare.abend.teilton_rausch",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "gültig",
    "fallen": [
@@ -1782,7 +1782,7 @@
     "cpp",
     "rahmenpegel"
    ],
-   "implementierung": "vare.abend.sfr_cpp",
+   "implementierung": "vare.abend.abend",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -1922,7 +1922,7 @@
    "eingaben": [
     "pfeife_rahmen"
    ],
-   "implementierung": "vare.pfeife.strecken",
+   "implementierung": "vare.pfeife.auswerten",
    "version": "1",
    "status": "gültig",
    "fallen": [
@@ -1945,7 +1945,7 @@
    "eingaben": [
     "pfeife_rahmen"
    ],
-   "implementierung": "vare.pfeife.strecken",
+   "implementierung": "vare.pfeife.auswerten",
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
@@ -2338,7 +2338,7 @@
    "eingaben": [
     "wav"
    ],
-   "implementierung": "vare.auswertung.wellen_suche",
+   "implementierung": "vare.auswertung.wellen_kandidaten",
    "version": "1",
    "status": "Entwurf",
    "fallen": [
@@ -2499,7 +2499,7 @@
    "formel_text": "Vorhersage mit Zeitstempel VOR dem Lauf, keine Wenn-dann-Punkte; Bilanz ✓/✗ angehängt; ein Punkt mit mehreren Teilen nur ✓, wenn alle Teile stimmen; nur Kennzahlen aus gesicherten Dateien gehen in eine Bilanz (Regel 25.10.). Ab Schritt 5: Tabellen vorhersage und bilanz mit text_sha256 und notiert_um.",
    "einheit": "—",
    "eingaben": [],
-   "implementierung": "vare.chronik.vorhersage",
+   "implementierung": "— (Schritt 5)",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
