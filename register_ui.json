@@ -2741,18 +2741,25 @@
    "id": "teilton_vibrato",
    "name_de": "Teilton-Prüfung über Vibrato-Kopplung",
    "gruppe": "rekon",
-   "formel_text": "Spezifikation docs/VARE_Teilton-Pruefung_Vibrato-Kopplung_2026-10-26.md mit Review-Änderungen: Spuren ohne f0 bilden (J = min(40; 0,8·600·log2((n+1)/n)) Cent), Vibrato-Rate per Autokorrelation 3–8 Hz, Prüffenster 2 Zyklen, je Spur R = Median f_k/f0, s_R, Kopplung r/β/ε, Versatz τ, r_min = min(0,9; 0,8·r_erw); Klassen TEILTON, SUBHARMONISCH, F0_VERDACHT (nur wenn halbzahlige Pegel ≥ ganzzahlige − 6 dB), ZWEITQUELLE, STATISCH, RAUSCHEN, NICHT_PRÜFBAR. Bezugs-f0 im selben Raster und Fenster wie die Spuren (Review Punkte 1–2). Gebaut: Schritt A und B (Spitzen, Spuren ohne f0); Referenz, C, D, E folgen.",
-   "formel_latex": "r_{\\text{erw}} = \\Big[\\big(1 + \\tfrac{\\sigma_k^2}{s_0^2}\\big)\\big(1 + \\tfrac{\\sigma_0^2}{s_0^2}\\big)\\Big]^{-1/2},\\qquad r_{\\min} = \\min(0{,}9;\\ 0{,}8\\,r_{\\text{erw}})",
-   "einheit": "Klasse je Spur und Fenster",
+   "formel_text": "tp-1.0 nach Auftrag 26.10. (docs/teilton/), Startwerte vare/teilton_param.yaml. A: Spektrum je 10-ms-Rahmen (Hann T = min(max(3/f̄0, 25 ms), 60 ms), Fenstermitte, 4× Zero-Padding), Spitzen ≥ 6 dB über dem Boden (Rechenweg 3.5), Nebenkeulen- und Flanken-Maske, Auflösungs-Gate 2/T, Messung auch in 2T. B: Spuren ohne f0 (Greedy, J = min(40; 0,8·600·log2((n+1)/n)) Cent zur linearen Fortsetzung der Spur). Referenz: Oktavanker f0_fein (oktav = f0, Nachbarregel), Bewegungsreferenz aus Teiltönen 1–3 im selben Fenster T (1/σ²-gewichtet); Zweitreferenz Periodenmarken. C: Vibrato (Rate per FFT 2,5–9 Hz, Autokorrelation ≥ 0,3, Ausschlag ≥ 15 Cent; Fenster 2·P_v, Vorschub P_v/2, gleitendes Mittel über P_v) oder Bewegung (500/250 ms, linearer Trend, std ≥ 10 Cent). D: R, δ ganz/halb/drittel, s_R, r, β (Deming, Intervall), ε, τ, eigene Rate und Ausschlag, M, r_erw, r_min = max(0,6; min(0,9; 0,8·r_erw)), N_eff, r_krit, Nulltest (P_v/2-Versatz, Blockpermutation, 95-%-Quantil), Sinus-Fit, Fensterkonsistenz T/2T. E: Klassen nach PSEUDOCODE in vare/teilton.py; Segmentflags siehe teilton_segmentflags.",
+   "formel_latex": "r_{\\text{erw}} = \\Big[\\big(1 + \\tfrac{\\sigma_k^2}{s_0^2}\\big)\\big(1 + \\tfrac{\\sigma_0^2}{s_0^2}\\big)\\Big]^{-1/2},\\qquad r_{\\min} = \\max\\big(0{,}6;\\ \\min(0{,}9;\\ 0{,}8\\,r_{\\text{erw}})\\big)",
+   "einheit": "Klasse je Spur und Prüffenster",
+   "raster": "10 ms",
+   "fenster": "Hann T = 3/f̄0 (25–60 ms) und 2T",
    "eingaben": [
     "f0_fein",
+    "oktavpruefung_kamm_11",
+    "kernrahmen",
     "normierung_48k"
    ],
-   "implementierung": "vare.teilton.spuren_aus_signal",
-   "version": "0",
+   "implementierung": "vare.teilton.pruefen_block",
+   "version": "tp-1.0",
    "status": "Entwurf",
    "fallen": [
-    "Schwelle r > 0,9 ungeeicht; Tabelle teilton_pruefung_alle mit lauf_id (Chronik-Gesetz)."
+    "Registriert und klassifiziert, deutet nicht: TEILTON heißt „verhält sich wie ein Teilton“.",
+    "Bei T = 3/f̄0 liegen halb- und drittelzahlige Linien (Periodenverdopplung/-verdreifachung) nur 2,45 bzw. 1,6 Hauptkeulen von starken Nachbarn; ihre Spitzen werden um 20–40 Cent verschoben oder verschwinden (S4, S18, S21). In 2T (50 ms) liegen sie auf 1,5–6,5 Cent. Befund T1, Entscheidung Ben.",
+    "Zweite Quelle mit dichtem Spektrum (S3): Teiltöne beider Quellen kommen sich mit Vibrato oft näher als 2/T; Spuren zerfallen, BIPHONATION_VERDACHT nicht erreichbar (Befund T2).",
+    "Nur registrierend auf Takes, nach Bens Vorhersage unter rekon/ (Vorab-Beleg in teilton_lauf.vorab_beleg)."
    ],
    "pruefsignal": [
     "teilton_s1_s20",
@@ -2765,7 +2772,37 @@
     "teilton_vibrato_s7",
     "teilton_vibrato_s8"
    ],
-   "datum": "2026-10-26"
+   "datum": "2026-10-27",
+   "historie": [
+    {
+     "version": "0",
+     "regelwerk": "v3",
+     "bis": "2026-10-27",
+     "formel_text": "Spezifikation docs/VARE_Teilton-Pruefung_Vibrato-Kopplung_2026-10-26.md mit Review-Änderungen: Spuren ohne f0 bilden (J = min(40; 0,8·600·log2((n+1)/n)) Cent), Vibrato-Rate per Autokorrelation 3–8 Hz, Prüffenster 2 Zyklen, je Spur R = Median f_k/f0, s_R, Kopplung r/β/ε, Versatz τ, r_min = min(0,9; 0,8·r_erw); Klassen TEILTON, SUBHARMONISCH, F0_VERDACHT (nur wenn halbzahlige Pegel ≥ ganzzahlige − 6 dB), ZWEITQUELLE, STATISCH, RAUSCHEN, NICHT_PRÜFBAR. Bezugs-f0 im selben Raster und Fenster wie die Spuren (Review Punkte 1–2). Gebaut: Schritt A und B (Spitzen, Spuren ohne f0); Referenz, C, D, E folgen.",
+     "grund": "Referenz, Schritte C–E, Chronik und Lauf gebaut (Meilensteine 3–6, 8)."
+    }
+   ]
+  },
+  {
+   "id": "teilton_segmentflags",
+   "name_de": "Teilton-Prüfung, Segmentflags",
+   "gruppe": "rekon",
+   "formel_text": "Je Block, eindeutige Spuren über die Fenster: F0_HALB_VERDACHT (≥ 4 TEILTON-Spuren, alle gerade n); F0_DOPPELT_VERDACHT (> 40 % der gekoppelten Spuren SUBHARMONISCH Ordnung 2 und Median-Pegel halbzahlig ≥ ganzzahlig − 6 dB); PERIODENVERDOPPLUNG_VERDACHT (≥ 2 SUBHARMONISCH Ordnung 2, Pegel halbzahlig < ganzzahlig − 6 dB, Alternation nach Rechenweg 6.3 in mind. einem Fenster); PERIODENVERDREIFACHUNG_VERDACHT (≥ 2 SUBHARMONISCH Ordnung 3, Pegel wie oben); BIPHONATION_VERDACHT (≥ 1 Familie aus > 1 ZWEITQUELLE-Spur mit ganzzahligem Verhältnis über ≥ 3 eigene Zyklen oder ≥ 0,8 s, nicht überlappende Fenster). Verdachtsflags mit Evidenzzahlen, keine Spurklasse.",
+   "einheit": "Flag je Block",
+   "eingaben": [
+    "teilton_vibrato",
+    "periodenverdopplung_geprueft"
+   ],
+   "implementierung": "vare.teilton.segmentflags",
+   "version": "tp-1.0",
+   "status": "Entwurf",
+   "fallen": [
+    "Verdacht, keine Deutung. PERIODENVERDOPPLUNG_VERDACHT und BIPHONATION_VERDACHT erreichen die Prüfsignale S4, S18 und S3 heute nicht (Befunde T1, T2)."
+   ],
+   "pruefsignal": [
+    "teilton_s1_s20"
+   ],
+   "datum": "2026-10-27"
   },
   {
    "id": "sprechen_lage",
