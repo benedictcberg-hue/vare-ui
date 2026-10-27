@@ -2759,7 +2759,8 @@
     "Registriert und klassifiziert, deutet nicht: TEILTON heißt „verhält sich wie ein Teilton“.",
     "Bei T = 3/f̄0 liegen halb- und drittelzahlige Linien (Periodenverdopplung/-verdreifachung) nur 2,45 bzw. 1,6 Hauptkeulen von starken Nachbarn; ihre Spitzen werden um 20–40 Cent verschoben oder verschwinden (S4, S18, S21). In 2T (50 ms) liegen sie auf 1,5–6,5 Cent. Befund T1, Entscheidung Ben.",
     "Zweite Quelle mit dichtem Spektrum (S3): Teiltöne beider Quellen kommen sich mit Vibrato oft näher als 2/T; Spuren zerfallen, BIPHONATION_VERDACHT nicht erreichbar (Befund T2).",
-    "Nur registrierend auf Takes, nach Bens Vorhersage unter rekon/ (Vorab-Beleg in teilton_lauf.vorab_beleg)."
+    "Nur registrierend auf Takes, nach Bens Vorhersage unter rekon/ (Vorab-Beleg in teilton_lauf.vorab_beleg).",
+    "tp-2.0 (Kalman-Spuren, nur Schritt B anders) läuft parallel in dieselben Tabellen; auf S2, S12, S16, S19 teilt die Kreuzungsregel schwache Linien an Rauschspuren ähnlichen Pegels (Befund K1). Standard bleibt tp-1.0."
    ],
    "pruefsignal": [
     "teilton_s1_s20",
