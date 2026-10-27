@@ -185,21 +185,20 @@
    "name_de": "Grundton (YIN, Pipeline)",
    "ben_wort": "Ton, Tonhöhe",
    "gruppe": "pipeline",
-   "formel_text": "YIN je 10-ms-Rahmen, Fenster 50 ms rechteckig, 55–1000 Hz, Schwelle 0,15. Differenzfunktion d(τ) = e0 + e_τ − 2 r(τ) mit r = Autokorrelation (FFT), e_τ = Energie ab Lag τ; kumulative Normierung d'(τ) = d(τ)·τ / Σ_{j≤τ} d(j); erstes τ mit d' < 0,15, dann bis zum lokalen Minimum, parabolische Feinlage; f0 = fs/τ.",
-   "formel_latex": "d(\\tau) = e_0 + e_\\tau - 2\\,r(\\tau),\\qquad d'(\\tau) = \\frac{d(\\tau)\\,\\tau}{\\sum_{j=1}^{\\tau} d(j)},\\qquad f_0 = f_s/\\tau",
+   "formel_text": "YIN je 10-ms-Rahmen, Fenster 50 ms rechteckig, 55–1000 Hz, Schwelle 0,15. Differenzfunktion d(τ) = Σ_{j<N−τ}(x_j − x_{j+τ})² = Σ_{j<N−τ} x_j² + Σ_{j≥τ} x_j² − 2 r(τ) mit r = lineare Autokorrelation (FFT); kumulative Normierung d'(τ) = d(τ)·τ / Σ_{j≤τ} d(j); erstes τ mit d' < 0,15, dann bis zum lokalen Minimum, parabolische Feinlage; f0 = fs/τ. Zeitstempel = Fenstermitte.",
+   "formel_latex": "d(\\tau) = \\sum_{j=0}^{N-1-\\tau} (x_j - x_{j+\\tau})^2,\\qquad d'(\\tau) = \\frac{d(\\tau)\\,\\tau}{\\sum_{j=1}^{\\tau} d(j)},\\qquad f_0 = f_s/\\tau",
    "einheit": "Hz",
    "raster": "10 ms",
-   "fenster": "50 ms rechteckig; Zeitstempel = Fensteranfang (Befund 4)",
+   "fenster": "50 ms rechteckig; Zeitstempel = Fenstermitte",
    "eingaben": [
     "normierung_48k"
    ],
    "implementierung": "vare.kern.yin_f0",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 7: e0 ist die Energie des ganzen Fensters statt von x[0:N−τ] → d(τ) um τ/N·e0 zu groß; tiefe Lagen benachteiligt, unter ~72 Hz greift die Schwellenregel nicht. Richtig: d(τ) = Σ_{j<N−τ}(x_j − x_{j+τ})². Schritt 4 Fix 1.",
-    "Verdoppelt, wenn H2 dominiert. Für Lagen-Aussagen gilt der geprüfte Grundton (f0_fein).",
-    "Befund 4: frames.t ist der Fensteranfang, plateaus.t0 die Fenstermitte."
+    "Befund 7 behoben (Schritt 4 Fix 1). Schwelle 0,15 auf den Prüfsignalen neu geprüft: 0,10 verliert 1,8 % der Rahmen bei Jitter 2 %, ab 0,20 Oktavfehler bei 196 Hz; 0,15 bleibt (docs/BEFUNDE_SCHRITT4_2026-10-26.md).",
+    "N9: verdoppelt auch mit korrigierter Formel, wenn H2 dominiert (d′ bei T/2 ≈ 0); in d′ nicht von Periodenverdopplung zu trennen, darum keine andere Kandidatenwahl. Für Lagen-Aussagen gilt der geprüfte Grundton (f0_fein)."
    ],
    "pruefsignal": [
     "grundton_60hz",
@@ -210,28 +209,46 @@
     "h2_dominanz",
     "zeitbezug_sweep"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "YIN je 10-ms-Rahmen, Fenster 50 ms rechteckig, 55–1000 Hz, Schwelle 0,15. Differenzfunktion d(τ) = e0 + e_τ − 2 r(τ) mit r = Autokorrelation (FFT), e_τ = Energie ab Lag τ; kumulative Normierung d'(τ) = d(τ)·τ / Σ_{j≤τ} d(j); erstes τ mit d' < 0,15, dann bis zum lokalen Minimum, parabolische Feinlage; f0 = fs/τ.",
+     "grund": "Befund 7: e0 des ganzen Fensters statt Σ_{j<N−τ} x_j²; tiefe Lagen benachteiligt."
+    }
+   ]
   },
   {
    "id": "zeitstempel_rahmen",
    "name_de": "Zeitbezug der Rahmen",
    "gruppe": "pipeline",
-   "formel_text": "frames.t = i · 10 ms = Fensteranfang des 50-ms-YIN-Fensters und des 80-ms-Rahmenfensters. plateaus.t0 = t der Kontur (vc.f0_track liefert Fenstermitte t + 25 ms, vare_standard nutzt für frames aber i·0,01). Uneinheitlich (Befund 4).",
+   "formel_text": "Alle Rahmenzeiten sind Fenstermitten: frames.t = i·10 ms + 25 ms (Mitte des 50-ms-YIN-Fensters). Das 80-ms-Rahmenfenster (Formanten, CPP, SFR, Hochband-Spektrum, Bänder) liegt mittig um t (t ± 40 ms). plateaus.t0 = t des ersten Rahmens. Der Zeitbezug steht je Lauf in laeufe_regelwerk.zeitbezug.",
    "einheit": "s",
    "raster": "10 ms",
    "eingaben": [
     "f0_yin"
    ],
    "implementierung": "vare.pipeline.schritt_1",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Schritt 4 Fix 2: einheitlich Fenstermitte, Spalte `zeitbezug` je Lauf in laeufe."
+    "Befund 4 behoben (Schritt 4 Fix 2). Läufe mit Regelwerk v1 (zeitbezug = fensteranfang) haben frames.t = Fensteranfang; Vergleiche über Läufe hinweg nur mit gleichem Zeitbezug."
    ],
    "pruefsignal": [
     "zeitbezug_sweep"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "frames.t = i · 10 ms = Fensteranfang des 50-ms-YIN-Fensters und des 80-ms-Rahmenfensters. plateaus.t0 = t der Kontur (vc.f0_track liefert Fenstermitte t + 25 ms, vare_standard nutzt für frames aber i·0,01). Uneinheitlich (Befund 4).",
+     "grund": "Befund 4: frames.t war der Fensteranfang, plateaus.t0 die Fenstermitte."
+    }
+   ]
   },
   {
    "id": "rahmenpegel",
@@ -364,7 +381,7 @@
    "name_de": "Halteton (Plateau)",
    "ben_wort": "gehaltener Ton",
    "gruppe": "pipeline",
-   "formel_text": "Cent-Kontur c = 1200·log2(f0/55) der stimmhaften Rahmen, gleitender Median über 27 Rahmen (mind. 9 gültig). Ein Plateau wächst, solange die Spannweite der geglätteten Kontur < 100 Cent bleibt; gezählt ab 20 Rahmen = 0,20 s (Definition sagt 0,35 s, Befund 3). Dauer = (j − i)·0,01 s; f0 = 55·2^(Median/1200); Pegel = max der Rahmenpegel.",
+   "formel_text": "Cent-Kontur c = 1200·log2(f0/55) der stimmhaften Rahmen; gleitender Median über 27 Rahmen (mind. 9 gültig), nur auf stimmhaften Rahmen. Ein Plateau wächst, solange die Spannweite der geglätteten Kontur < 100 Cent bleibt. Randrahmen, deren Pegel mehr als 3 dB unter dem Median des Plateaus liegt (Fenstermitte außerhalb des Tons), zählen nicht. Dauer = Rahmenzahl · 10 ms; gezählt ab 0,35 s. f0 = 55·2^(Median/1200); Pegel = max der Rahmenpegel.",
    "formel_latex": "c_i = 1200\\log_2(f_{0,i}/55),\\quad \\tilde c = \\operatorname{med}_{27}(c),\\quad \\max(\\tilde c_{i..j}) - \\min(\\tilde c_{i..j}) < 100,\\ j - i \\ge 20",
    "einheit": "s, Hz",
    "raster": "10 ms",
@@ -374,24 +391,33 @@
     "oktavpruefung_ladder"
    ],
    "implementierung": "vare.pipeline.schritt_1",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Schritt 3: auch der längste Ton ist auf dem Prüfsignal um 0,13 s zu lang (geglättete Kontur reicht in die Pause).",
-    "Befund 3: ab 0,20 s statt 0,35 s; Dauer um einen Rahmen zu kurz; stimmlose Rahmen auf der geglätteten Kontur zählen mit. 50 % aller Haltetöne der Chronik sind < 0,35 s. Längster Ton bleibt richtig. Schritt 4 Fix 3.",
+    "Befund 3 behoben (Schritt 4 Fix 3): ab 0,35 s, nur stimmhaft, Dauer nicht mehr einen Rahmen zu kurz; der längste Ton stimmt auf dem Prüfsignal auf ±0,03 s.",
+    "Die 3-dB-Randregel ist eine Setzung aus der Fenstergeometrie (halb bedecktes Fenster = −3 dB); bei weichen Einsätzen kann sie den Anfang um einige Rahmen kürzen.",
     "Vibrato mit großem Hub zerschneidet Plateaus."
    ],
    "pruefsignal": [
     "halteton_030_040",
     "phrase_synthetisch"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Cent-Kontur c = 1200·log2(f0/55) der stimmhaften Rahmen, gleitender Median über 27 Rahmen (mind. 9 gültig). Ein Plateau wächst, solange die Spannweite der geglätteten Kontur < 100 Cent bleibt; gezählt ab 20 Rahmen = 0,20 s (Definition sagt 0,35 s, Befund 3). Dauer = (j − i)·0,01 s; f0 = 55·2^(Median/1200); Pegel = max der Rahmenpegel.",
+     "grund": "Befund 3: ab 0,20 s, Dauer einen Rahmen zu kurz, stimmlose Rahmen auf der geglätteten Kontur zählten mit."
+    }
+   ]
   },
   {
    "id": "haltezeit_anteil",
    "name_de": "Haltezeit-Anteil",
    "gruppe": "pipeline",
-   "formel_text": "Summe der Plateaudauern / stimmhafte Dauer (V·0,01 s).",
+   "formel_text": "Summe der Plateaudauern (halteton, Version 2) / stimmhafte Dauer (V·0,01 s).",
    "formel_latex": "\\text{haltezeit} = \\frac{\\sum \\text{dauer}}{0{,}01\\,\\sum V}",
    "einheit": "Anteil",
    "eingaben": [
@@ -399,45 +425,63 @@
     "stimmhaft_gate"
    ],
    "implementierung": "vare.pipeline.schritt_1",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Bei 2 Takes > 1 (Befund 3), weil stimmlose Rahmen mitzählen."
+    "Mit Befund 3 behoben: Plateaus nur aus stimmhaften Rahmen, Anteil ≤ 1."
    ],
    "pruefsignal": [
     "halteton_030_040",
     "phrase_synthetisch"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Summe der Plateaudauern / stimmhafte Dauer (V·0,01 s).",
+     "grund": "Befund 3: Anteil > 1 bei 2 Takes, weil stimmlose Rahmen mitzählten."
+    }
+   ]
   },
   {
    "id": "oktavpruefung_ladder",
    "name_de": "Oktav-/Drittelprüfung der Haltetöne (ladder)",
    "gruppe": "pipeline",
-   "formel_text": "Spektrum über max. 0,3 s des Plateaus, FFT 65536. Ab 200 Hz Halbierung, wenn die ungeraden Teiltöne von f/2 (1, 3, 5) alle > Rauschen + 8 dB und max > −12 dB rel. H1(f) liegen; Rauschen = Median der Zwischenräume. Unter 110 Hz Verdreifachung, wenn pk(3f) > Rauschen + 6 und pk(2f) < Rauschen + 3. Tag korr ∈ {oktav, drittel}.",
+   "formel_text": "Spektrum über max. 0,3 s des Plateaus, FFT 65536. Ab 200 Hz Halbierung, wenn die ungeraden Teiltöne von f/2 (1, 3, 5) alle > Rauschen + 8 dB und max > −12 dB rel. H1(f) liegen; Rauschen = Median der Zwischenräume. Sonst ab 180 Hz Drittelung, wenn die Teiltöne 1, 2, 4, 5 von f/3 alle > Rauschen + 8 dB und max > −12 dB liegen (Befund 25). Unter 110 Hz Verdreifachung, wenn pk(3f) > Rauschen + 6 und pk(2f) < Rauschen + 3. Tag korr ∈ {oktav, drittel, drittel_ab}.",
    "einheit": "Tag",
    "fenster": "≤ 300 ms Hann, FFT 65536",
    "eingaben": [
     "halteton"
    ],
    "implementierung": "vare.pipeline.ladder",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 25: prüft nur ×3 nach oben, nicht ÷3 nach unten; Schritt 4 Fix 7."
+    "Befund 25 behoben (Schritt 4 Fix 7): ÷3 wird geprüft."
    ],
    "pruefsignal": [
     "h2_dominanz",
     "grundton_ueber_600"
    ],
-   "datum": "2026-10-13"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Spektrum über max. 0,3 s des Plateaus, FFT 65536. Ab 200 Hz Halbierung, wenn die ungeraden Teiltöne von f/2 (1, 3, 5) alle > Rauschen + 8 dB und max > −12 dB rel. H1(f) liegen; Rauschen = Median der Zwischenräume. Unter 110 Hz Verdreifachung, wenn pk(3f) > Rauschen + 6 und pk(2f) < Rauschen + 3. Tag korr ∈ {oktav, drittel}.",
+     "grund": "Befund 25: prüfte nur ×3 nach oben, nicht ÷3 nach unten."
+    }
+   ]
   },
   {
    "id": "formanten_lpc",
    "name_de": "Formanten F1–F7 je Rahmen (Burg-LPC)",
    "ben_wort": "Rohr, Vokal",
    "gruppe": "pipeline",
-   "formel_text": "80-ms-Rahmen, Umtastung auf 17 kHz, Vorverstärkung 0,97, Hann, Burg-LPC Ordnung 2 + 17 = 19; Pole mit 90 Hz < F < 8300 Hz und Bandbreite B < 700 Hz, aufsteigend die ersten 7. B = −0,5·(fs/2π)·ln|z| (Befund 24: Faktor 4 zu klein; richtig B = −(fs/π)·ln|z|).",
+   "formel_text": "80-ms-Rahmen, Umtastung auf 17 kHz, Vorverstärkung 0,97, Hann, Burg-LPC Ordnung 2 + 17 = 19; Pole mit 90 Hz < F < 8300 Hz und Bandbreite B < 700 Hz, aufsteigend die ersten 7. B = −(fs/π)·ln|z|.",
    "formel_latex": "F = \\frac{\\arg z\\, f_s}{2\\pi},\\qquad B_{\\text{heute}} = -\\tfrac{1}{2}\\tfrac{f_s}{2\\pi}\\ln|z|,\\qquad B_{\\text{richtig}} = -\\tfrac{f_s}{\\pi}\\ln|z|",
    "einheit": "Hz",
    "raster": "10 ms",
@@ -447,17 +491,27 @@
     "stimmhaft_gate"
    ],
    "implementierung": "vare.kern.formants",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 24: Bandbreite Faktor 4 zu klein → Filter bw < 700 lässt zu viel durch, h1h2_korr verschoben. Schritt 4 Fix 6.",
+    "Befund 24 behoben (Schritt 4 Fix 6). Der Filter B < 700 Hz wirkt jetzt auf die richtige Bandbreite (in Version 1 tatsächlich B < 2800 Hz); es fallen mehr breite Pole weg.",
+    "N8 (Schritt 4): Die Vorverstärkung 0,97 setzt eine Quelle mit −6 dB/Oktave voraus. Bei flacher Quelle (weißes Rauschen durch drei Pole) liegen die Bandbreiten 35 % zu tief bis 20 % zu hoch; mit Quellneigung innerhalb ±25 %.",
     "Ab ~180 Hz rastet F1 auf Teiltöne ein (formantpruefung meldet es)."
    ],
    "pruefsignal": [
     "formant_bandbreite",
     "phrase_synthetisch"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "80-ms-Rahmen, Umtastung auf 17 kHz, Vorverstärkung 0,97, Hann, Burg-LPC Ordnung 2 + 17 = 19; Pole mit 90 Hz < F < 8300 Hz und Bandbreite B < 700 Hz, aufsteigend die ersten 7. B = −0,5·(fs/2π)·ln|z| (Befund 24: Faktor 4 zu klein; richtig B = −(fs/π)·ln|z|).",
+     "grund": "Befund 24: B = −0,5·(fs/2π)·ln|z|, Faktor 4 zu klein."
+    }
+   ]
   },
   {
    "id": "formant_mediane",
@@ -573,7 +627,7 @@
    "id": "h1h2_halteton_80ms",
    "name_de": "H1−H2 (Halteton, erste 80 ms)",
    "gruppe": "pipeline",
-   "formel_text": "40 lauteste unkorrigierte Plateaus, erste 80 ms, harmonic_amps: Spitze ±4 % um k·f0, Hann, 4-fach aufgefüllt; H1 − H2 in dB; Take = Median.",
+   "formel_text": "40 lauteste unkorrigierte Plateaus (halteton, Version 2), erste 80 ms ab Haltetonbeginn (= Mitte des ersten stimmhaften Rahmens im Ton), harmonic_amps: Spitze ±4 % um k·f0, Hann, 4-fach aufgefüllt; H1 − H2 in dB; Take = Median.",
    "formel_latex": "H_1 - H_2 = 20\\log_{10}\\max_{|f - f_0| \\le 0{,}04 f_0}|X| - 20\\log_{10}\\max_{|f - 2f_0| \\le 0{,}08 f_0}|X|",
    "einheit": "dB",
    "fenster": "80 ms Hann, 4× Zero-Padding",
@@ -581,23 +635,32 @@
     "halteton"
    ],
    "implementierung": "vare.pipeline.schritt_1",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
     "Pipeline-f0 (Oktavfehler). Lagenabhängig.",
-    "N4 (Schritt 3): die ersten 80 ms ab Haltetonbeginn enthalten bis zu 65 ms Pause."
+    "N4 behoben mit Befund 3: der Haltetonbeginn liegt am Toneinsatz."
    ],
    "pruefsignal": [
     "h1h2_bekannt"
    ],
    "datum": "2026-10-26",
-   "kanon": "Variante; Kanon = h1h2_rahmen_60ms"
+   "kanon": "Variante; Kanon = h1h2_rahmen_60ms",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "40 lauteste unkorrigierte Plateaus, erste 80 ms, harmonic_amps: Spitze ±4 % um k·f0, Hann, 4-fach aufgefüllt; H1 − H2 in dB; Take = Median.",
+     "grund": "N4: die ersten 80 ms ab Haltetonbeginn enthielten bis zu 65 ms Pause."
+    }
+   ]
   },
   {
    "id": "h1h2_korr",
    "name_de": "H1*−H2* (formantkorrigiert)",
    "gruppe": "pipeline",
-   "formel_text": "Wie h1h2_halteton_80ms, abzüglich der Übertragungsfunktion eines Polpaars je Formant F1–F3 (12-kHz-LPC, Bandbreite auf 40–400 Hz geklemmt).",
+   "formel_text": "Wie h1h2_halteton_80ms (Version 2), abzüglich der Übertragungsfunktion eines Polpaars je Formant F1–F3 (12-kHz-LPC mit Bandbreite B = −(fs/π)·ln|z|, auf 40–400 Hz geklemmt).",
    "formel_latex": "H_k^* = H_k - \\sum_{i=1}^{3} 20\\log_{10}\\frac{|T_i(k f_0)|}{|T_i(0)|},\\quad T_i(\\omega)=\\frac{1}{(1-r_i e^{j\\theta_i}e^{-j\\omega})(1-r_i e^{-j\\theta_i}e^{-j\\omega})},\\ r_i = e^{-\\pi B_i/f_s}",
    "einheit": "dB",
    "eingaben": [
@@ -605,22 +668,31 @@
     "formanten_lpc"
    ],
    "implementierung": "vare.pipeline.schritt_1",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 24: Bandbreite Faktor 4 zu klein (7–11 % der Rahmen > 3 dB verschoben). Einzelwerte streuen stark; nur Mediane."
+    "Befund 24 behoben; Einzelwerte streuen stark, nur Mediane."
    ],
    "pruefsignal": [
     "h1h2_bekannt",
     "formant_bandbreite"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Wie h1h2_halteton_80ms, abzüglich der Übertragungsfunktion eines Polpaars je Formant F1–F3 (12-kHz-LPC, Bandbreite auf 40–400 Hz geklemmt).",
+     "grund": "Befund 24: Bandbreite der Korrektur Faktor 4 zu klein; N4: Fenster begann vor dem Toneinsatz."
+    }
+   ]
   },
   {
    "id": "hnr",
    "name_de": "HNR (Autokorrelation)",
    "gruppe": "pipeline",
-   "formel_text": "Normierte Autokorrelation des 80-ms-Halteton-Anfangs, r_max im Lag 1/500–1/60 s, HNR = 10·log10(r_max / (1 − r_max)); Take = Median über die 40 lautesten Plateaus.",
+   "formel_text": "Normierte Autokorrelation (Hann) der ersten 80 ms ab Haltetonbeginn (halteton, Version 2), r_max im Lag 1/500–1/60 s, HNR = 10·log10(r_max / (1 − r_max)); Take = Median über die 40 lautesten Plateaus.",
    "formel_latex": "\\text{HNR} = 10\\log_{10}\\frac{r_{\\max}}{1 - r_{\\max}}",
    "einheit": "dB",
    "fenster": "80 ms Hann",
@@ -628,15 +700,25 @@
     "halteton"
    ],
    "implementierung": "vare.pipeline.hnr_ac",
-   "version": "1",
+   "version": "2",
    "status": "gültig",
    "fallen": [
-    "N4 (Schritt 3): misst die ersten 80 ms ab Haltetonbeginn, der 65 ms vor dem Toneinsatz liegt; auf Prüfsignalen sinkt die HNR mit sinkendem Rauschen."
+    "N4 behoben mit Befund 3: misst jetzt den Ton, nicht die Pause davor; steigt auf den Prüfsignalen mit sinkendem Rauschen.",
+    "N7 (Schritt 4): ohne Teilung durch die Autokorrelation des Hann-Fensters (Boersma 1993) ist r_max < 1 auch ohne Rauschen; die HNR ist auf ≈ 13,3 dB begrenzt (Prüfsignal 20 / 30 / 40 dB → 12,4 / 13,2 / 13,3 dB)."
    ],
    "pruefsignal": [
     "rauschen_bekannt"
    ],
-   "datum": "2026-10-13"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Normierte Autokorrelation des 80-ms-Halteton-Anfangs, r_max im Lag 1/500–1/60 s, HNR = 10·log10(r_max / (1 − r_max)); Take = Median über die 40 lautesten Plateaus.",
+     "grund": "N4: die ersten 80 ms ab Haltetonbeginn enthielten bis zu 65 ms Pause."
+    }
+   ]
   },
   {
    "id": "vibrato",
@@ -654,10 +736,13 @@
    "status": "Vorsicht",
    "fallen": [
     "Befund 19: FFT nur über die ersten 5,12 s eines Laufs, Hub über den ganzen Lauf.",
-    "N2 (Schritt 3): Hub 66–71 statt 54 Cent auf Prüfsignalen 60–196 Hz (Mittelwert-Abzug mit Oktavsprung-Ausreißern). N3: bei 60 Hz Vibratorate verdoppelt."
+    "N2 (Schritt 3): Hub 66–71 statt 54 Cent auf Prüfsignalen 60–196 Hz (Mittelwert-Abzug mit Oktavsprung-Ausreißern). N3: bei 60 Hz Vibratorate verdoppelt.",
+    "N11 (Schritt 4, zweites Review): Der Hub hängt an der Rate, weil der Trend ein gleitender Median über 27 Rahmen (270 ms) ist. Prüfsignal 400 Hz ±55 Cent (wahr 54 Cent): Rate 3 / 4,3 / 5,5 / 6,6 / 8 Hz → Hub 37 / 62 / 66 / 54 / 36 Cent.",
+    "N12 (Schritt 4, zweites Review): Die Rate kommt aus einer FFT mit 512 Punkten bei 100 Hz Rahmenrate (Raster 0,195 Hz); auf den Prüfsignalen bis 0,07 Hz daneben."
    ],
    "pruefsignal": [
-    "grundton_vibrato"
+    "grundton_vibrato",
+    "vibrato_rate"
    ],
    "datum": "2026-10-13"
   },
@@ -760,22 +845,31 @@
    "id": "neigung",
    "name_de": "Spektrale Neigung (Langzeit)",
    "gruppe": "pipeline",
-   "formel_text": "Langzeitspektrum über 4096-Blöcke mit Pegel > −40 dBFS, relativ zum Mittel 300–500 Hz; Mittel in 100–300, 1000–2000, 2000–3000, 5000–6000 Hz.",
+   "formel_text": "Langzeitspektrum über 4096-Blöcke mit Pegel > p95(Blockpegel) − 30 dB, relativ zum Mittel 300–500 Hz; Mittel in 100–300, 1000–2000, 2000–3000, 5000–6000 Hz.",
    "einheit": "dB",
    "fenster": "4096 Hann",
    "eingaben": [
     "normierung_48k"
    ],
    "implementierung": "vare.pipeline.schritt_1",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Absolute Schwelle −40 dBFS (Befund 8)."
+    "Befund 8 behoben (Schritt 4 Fix 8): Schwelle relativ zum 95. Perzentil. Der Abstand 30 dB ist eine Setzung."
    ],
    "pruefsignal": [
     "kette_profil"
    ],
-   "datum": "2026-10-13"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Langzeitspektrum über 4096-Blöcke mit Pegel > −40 dBFS, relativ zum Mittel 300–500 Hz; Mittel in 100–300, 1000–2000, 2000–3000, 5000–6000 Hz.",
+     "grund": "Befund 8: absolute Schwelle −40 dBFS nach Spitzennormierung."
+    }
+   ]
   },
   {
    "id": "ausklang",
@@ -884,7 +978,7 @@
    "id": "spektrum_rahmen_hochband",
    "name_de": "Rahmenspektrum Hochband",
    "gruppe": "hochband",
-   "formel_text": "Je stimmhaftem Pipeline-Rahmen mit 60 ≤ f0 ≤ 600 Hz: 80 ms Hann ab t (Fensteranfang), FFT 8192 (Teilton) bzw. 4096 (Bänder), Leistungsspektrum P(f).",
+   "formel_text": "Je stimmhaftem Pipeline-Rahmen mit 60 ≤ f0 ≤ 1000 Hz: 80 ms Hann mittig um t (t ± 40 ms), FFT 8192 (Teilton) bzw. 4096 (Bänder), Leistungsspektrum P(f).",
    "einheit": "—",
    "raster": "10 ms (bei älteren Takes jeder 3.)",
    "fenster": "80 ms Hann, FFT 8192 / 4096",
@@ -893,23 +987,32 @@
     "f0_yin"
    ],
    "implementierung": "vare.hochband.teilton",
-   "version": "1.1",
+   "version": "1.2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 25: Rahmen mit f0 > 600 Hz kommen nie in die Oktavprüfung (SQL f0 BETWEEN 60 AND 600). Schritt 4 Fix 7.",
+    "Befunde 4 und 25 behoben (Schritt 4 Fix 2 und 7).",
     "Befund 23: FFT-Längen 4096/8192 und Linienabdeckung heben sich im SNR-Gate um ±3 dB auf."
    ],
    "pruefsignal": [
     "zeitbezug_sweep",
     "grundton_ueber_600"
    ],
-   "datum": "2026-10-09"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1.1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Je stimmhaftem Pipeline-Rahmen mit 60 ≤ f0 ≤ 600 Hz: 80 ms Hann ab t (Fensteranfang), FFT 8192 (Teilton) bzw. 4096 (Bänder), Leistungsspektrum P(f).",
+     "grund": "Befund 4: Fenster ab t (Fensteranfang); Befund 25: nur f0 ≤ 600 Hz."
+    }
+   ]
   },
   {
    "id": "frames_baender",
    "name_de": "Bandpegel je Rahmen",
    "gruppe": "hochband",
-   "formel_text": "Summe von P(f) in 300–2000, 2400–3200, 4000–6500, 6500–8000 Hz, in dB (FFT 4096).",
+   "formel_text": "Summe von P(f) in 300–2000, 2400–3200, 4000–6500, 6500–8000 Hz, in dB (FFT 4096); Fenster mittig um t.",
    "formel_latex": "E_b = 10\\log_{10}\\sum_{f\\in b} P(f)",
    "einheit": "dB",
    "raster": "10 ms",
@@ -918,12 +1021,21 @@
     "spektrum_rahmen_hochband"
    ],
    "implementierung": "vare.hochband.baender",
-   "version": "1.0",
+   "version": "1.2",
    "status": "gültig",
    "pruefsignal": [
     "troete_quellrauschen"
    ],
-   "datum": "2026-10-09"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1.0",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Summe von P(f) in 300–2000, 2400–3200, 4000–6500, 6500–8000 Hz, in dB (FFT 4096).",
+     "grund": "Befund 4: Fenster ab t (Fensteranfang)."
+    }
+   ]
   },
   {
    "id": "boden_baender",
@@ -948,7 +1060,7 @@
    "name_de": "Geprüfter Grundton (Kamm)",
    "ben_wort": "Ton",
    "gruppe": "hochband",
-   "formel_text": "Kandidaten c = f0·(1 + 0,001·m), m = −20…20. Bewertung S(c) = mittlerer Log-Pegel (3 Bins um k·c) der Teiltöne k ≥ 2 in 500–3000 Hz; bestes c = f0_fein. Nach Oktavprüfung (oktavpruefung_kamm_11) ggf. f0/2 oder 2·f0.",
+   "formel_text": "Kandidaten c = f0·(1 + 0,001·m), m = −20…20. Bewertung S(c) = mittlerer Log-Pegel (3 Bins um k·c) der Teiltöne k ≥ 2 in 500–3000 Hz, über 750 Hz bis zum 4. Teilton; bestes c = f0_fein. Nach Oktavprüfung (oktavpruefung_kamm_11) ggf. f0/2, f0/3 oder 2·f0.",
    "formel_latex": "S(c) = \\frac{1}{K}\\sum_k \\ln\\big(P_{kc-\\Delta} + P_{kc} + P_{kc+\\Delta}\\big),\\qquad f_0^{\\text{fein}} = \\arg\\max_c S(c)",
    "einheit": "Hz",
    "raster": "10 ms",
@@ -958,11 +1070,11 @@
     "f0_yin"
    ],
    "implementierung": "vare.hochband.teilton_rahmen",
-   "version": "1.1",
+   "version": "1.2",
    "status": "gültig",
    "fallen": [
-    "Nur ±2 % um das Pipeline-f0; der grobe Fehler kommt von YIN, der Kamm korrigiert nur Oktaven.",
-    "N3 (Schritt 3): bei 60 Hz mit Vibrato ±55 Cent Median +42 Cent."
+    "Nur ±2 % um das Pipeline-f0; der grobe Fehler kommt von YIN, der Kamm korrigiert nur Oktaven und Drittel.",
+    "N3 (Schritt 3): bei 60 Hz mit Vibrato ±55 Cent Median +39 Cent (Regelwerk v2; v1 +42 Cent)."
    ],
    "pruefsignal": [
     "grundton_60hz",
@@ -972,7 +1084,16 @@
     "grundton_vibrato",
     "h2_dominanz"
    ],
-   "datum": "2026-10-09"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1.1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Kandidaten c = f0·(1 + 0,001·m), m = −20…20. Bewertung S(c) = mittlerer Log-Pegel (3 Bins um k·c) der Teiltöne k ≥ 2 in 500–3000 Hz; bestes c = f0_fein. Nach Oktavprüfung (oktavpruefung_kamm_11) ggf. f0/2 oder 2·f0.",
+     "grund": "Befund 25: über 750 Hz weniger als drei Kammzähne bis 3000 Hz."
+    }
+   ]
   },
   {
    "id": "kammkontrast",
@@ -998,7 +1119,7 @@
    "id": "oktavpruefung_kamm_11",
    "name_de": "Oktavprüfung im Kamm (1.1)",
    "gruppe": "hochband",
-   "formel_text": "Kamm zusätzlich bei f0/2 (wenn ≥ 60 Hz) und 2·f0 (wenn ≤ 600 Hz); ein Nachbar gewinnt mit > 6 dB mehr Kammkontrast. oktav ∈ {f0, f0/2, 2f0}.",
+   "formel_text": "Kamm zusätzlich bei f0/2 (wenn ≥ 60 Hz), f0/3 (wenn ≥ 60 Hz) und 2·f0 (wenn ≤ 600 Hz), für alle Rahmen mit 60 ≤ f0 ≤ 1000 Hz; ein Nachbar gewinnt mit > 6 dB mehr Kammkontrast. f0/2 und f0/3 nur, wenn dort ein Teilton ≥ 6 dB über dem Boden zwischen den Teiltönen steht (Spitze ±12 % um f gegen den Median der Bins mit ≥ 30 % Abstand zu jedem Vielfachen von f, 0,5·f–8,5·f). oktav ∈ {f0, f0/2, f0/3, 2f0}.",
    "formel_latex": "\\text{oktav} = \\arg\\max\\{\\text{kamm}(f_0),\\ \\text{kamm}(f_0/2) - 6,\\ \\text{kamm}(2f_0) - 6\\}",
    "einheit": "Tag",
    "raster": "10 ms",
@@ -1007,18 +1128,26 @@
     "kammkontrast"
    ],
    "implementierung": "vare.hochband.teilton_oktav",
-   "version": "1.1",
+   "version": "1.2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 25.10.: halbiert in H2-dominanten Rahmen gelegentlich falsch (Sadnecessary 7 Rahmen). Schritt 4 Fix 4: Halbieren nur, wenn bei f0/2 ein Teilton ≥ 6 dB über dem Boden steht.",
-    "Befund 25: f0 > 600 Hz kommt nicht hinein; Teilung durch 3 fehlt.",
-    "N5 (Schritt 3): halbiert bei echter Periodenverdopplung (Amplitude ±3 dB) alle Rahmen."
+    "Entscheidungslog 25.10. und Befund 25 behoben (Schritt 4 Fix 4 und 7).",
+    "N5 (Schritt 3): halbiert bei echter Periodenverdopplung (Amplitude ±3 dB) weiter alle Rahmen, weil die f0/2-Linie dort echt ist; die Bodenregel verhindert das nicht."
    ],
    "pruefsignal": [
     "h2_dominanz",
     "grundton_ueber_600"
    ],
-   "datum": "2026-10-25"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1.1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Kamm zusätzlich bei f0/2 (wenn ≥ 60 Hz) und 2·f0 (wenn ≤ 600 Hz); ein Nachbar gewinnt mit > 6 dB mehr Kammkontrast. oktav ∈ {f0, f0/2, 2f0}.",
+     "grund": "Entscheidungslog 25.10.: halbierte ohne Teilton bei f0/2; Befund 25: f0 > 600 Hz nicht geprüft, keine Teilung durch 3."
+    }
+   ]
   },
   {
    "id": "linie_zwischenraum",
@@ -1062,10 +1191,12 @@
    "status": "gültig",
    "fallen": [
     "Steigt 5–6 dB je Oktave bei gleicher Quelle → nur über Ränge je Lage vergleichen.",
-    "Kettenabhängiger als angenommen (links/rechts 1,5–2,8 dB, Befund 9)."
+    "Kettenabhängiger als angenommen (links/rechts 1,5–2,8 dB, Befund 9).",
+    "N10 (Schritt 4, zweites Review): Im Vibrato verschmieren die hohen Teiltöne über das 80-ms-Fenster weit über die Linienbreite ±0,12·f0. Prüfsignal 200 Hz: Tröte ohne Vibrato 40 dB, mit 5,5 Hz ±55 Cent 6,9 dB, bei gleichem Rauschanteil."
    ],
    "pruefsignal": [
-    "troete_quellrauschen"
+    "troete_quellrauschen",
+    "troete_vibrato"
    ],
    "datum": "2026-10-26",
    "kanon": "Kanon (Befund 11)"
@@ -1376,20 +1507,29 @@
    "id": "kernrahmen_rand60",
    "name_de": "Kernrahmen mit Randabzug (Hochband-Kennwert)",
    "gruppe": "gates",
-   "formel_text": "laut ∧ snr ∧ nicht in den ersten/letzten 60 ms eines Laufs (Lücke > 45 ms trennt); mind. 30 Rahmen, sonst kein Kennwert. Variante zu kernrahmen (Befund 11).",
+   "formel_text": "laut ∧ snr ∧ nicht in den ersten/letzten 60 ms eines Laufs (Lücke > 45 ms trennt); mind. 0,30 s Kernzeit (Rahmenzahl · Rahmenabstand), sonst kein Kennwert; Verlauf je 10 s ab 0,10 s. Variante zu kernrahmen (Befund 11).",
    "einheit": "0/1",
    "eingaben": [
     "gate_laut",
     "gate_snr"
    ],
    "implementierung": "vare.hochband.kennwerte",
-   "version": "1.1",
+   "version": "1.2",
    "status": "Vorsicht",
    "pruefsignal": [
     "phrase_synthetisch"
    ],
    "datum": "2026-10-26",
-   "kanon": "Variante; Kanon = kernrahmen"
+   "kanon": "Variante; Kanon = kernrahmen",
+   "historie": [
+    {
+     "version": "1.1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "laut ∧ snr ∧ nicht in den ersten/letzten 60 ms eines Laufs (Lücke > 45 ms trennt); mind. 30 Rahmen, sonst kein Kennwert. Variante zu kernrahmen (Befund 11).",
+     "grund": "Befund 17: Mindestmengen in Rahmen statt Sekunden (30 Rahmen, Verlauf 10 Rahmen, Take 50 Rahmen)."
+    }
+   ]
   },
   {
    "id": "lauf_60ms",
@@ -1404,10 +1544,12 @@
    "version": "1",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 17: Schwellen in Rahmen statt Sekunden; Takes mit jedem 3. Rahmen brechen anders. Schritt 4 Fix 9."
+    "Befund 17: Schwellen in Rahmen statt Sekunden; Takes mit jedem 3. Rahmen brechen anders. Schritt 4 Fix 9.",
+    "N14 (Schritt 4, zweites Review): Drei Laufregeln für dasselbe: Zusatz trennt an Lücken ≥ 60 ms, Hochband an Lücken > 45 ms, Ansatz an Lücken ≥ 1,5 × Rahmenabstand. Eine Lücke von 50 ms trennt im Hochband, in der Zusatzauswertung nicht."
    ],
    "pruefsignal": [
-    "phrase_synthetisch"
+    "phrase_synthetisch",
+    "laufregeln"
    ],
    "datum": "2026-10-20"
   },
@@ -1498,7 +1640,7 @@
    "id": "laeufe_kern",
    "name_de": "Läufe (Kernrahmen, ab 0,3 s)",
    "gruppe": "lagen",
-   "formel_text": "Je Lauf (lauf_60ms) über Kernrahmen: t0, t1, Dauer, Mediane; nur n ≥ 15 und Dauer ≥ 0,3 s; Note; lage_grob hoch ≥ 200, mitte 165–200, tief < 165 Hz; Vorgänger-Lage. Bestläufe (nach Tröte, nach Quellrauschen) sind Schaufenster.",
+   "formel_text": "Je Lauf (lauf_60ms) über Kernrahmen: t0, t1, Dauer, Mediane; nur Kernzeit ≥ 0,15 s (Rahmenzahl · Rahmenabstand) und Dauer ≥ 0,3 s; Note; lage_grob hoch ≥ 200, mitte 165–200, tief < 165 Hz; Vorgänger-Lage. Bestläufe (nach Tröte, nach Quellrauschen) sind Schaufenster.",
    "einheit": "gemischt",
    "eingaben": [
     "lauf_60ms",
@@ -1508,23 +1650,32 @@
     "kernrahmen"
    ],
    "implementierung": "vare.auswertung.laeufe",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 17: n ≥ 15 Rahmen statt Sekunden.",
+    "Befund 17 behoben (Schritt 4 Fix 9).",
     "Bestläufe: Selektionseffekt r = −0,48 (Falle 9)."
    ],
    "pruefsignal": [
     "phrase_synthetisch"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Je Lauf (lauf_60ms) über Kernrahmen: t0, t1, Dauer, Mediane; nur n ≥ 15 und Dauer ≥ 0,3 s; Note; lage_grob hoch ≥ 200, mitte 165–200, tief < 165 Hz; Vorgänger-Lage. Bestläufe (nach Tröte, nach Quellrauschen) sind Schaufenster.",
+     "grund": "Befund 17: n ≥ 15 Rahmen statt Sekunden."
+    }
+   ]
   },
   {
    "id": "korpusrang",
    "name_de": "Ränge je Lage gegen die Korpusreferenz",
    "ben_wort": "Rang, besser als",
    "gruppe": "lagen",
-   "formel_text": "Referenz referenz/korpus_lage.csv (Median je Take und Lage, ≥ 150 Kernrahmen; Stand 13.10., 182 Takes), eigener Take ausgeschlossen, ≥ 5 Vergleichstakes, Lage mit ≥ 150 Kernrahmen. Tröte-Rang = Anteil Korpus-Takes mit kleinerer Tröte; SF-Rang ebenso; Sauberkeits-Rang = Anteil mit höherem (schmutzigerem) Quellrauschen.",
+   "formel_text": "Referenz korpus_lage_v2.csv (korpusreferenz Version v2; fehlt sie, die alte korpus_lage.csv mit Vermerk in kennwerte.referenz_version). Eigener Take ausgeschlossen, nach ID und nach Datei-Hash; ≥ 5 Vergleichstakes; Lage mit ≥ 1,5 s Kernzeit. Tröte-Rang = Anteil Korpus-Takes mit kleinerer Tröte; SF-Rang ebenso; Sauberkeits-Rang = Anteil mit höherem (schmutzigerem) Quellrauschen.",
    "formel_latex": "\\text{Rang}_{T} = 100\\cdot\\overline{[T_{korpus} < T]},\\qquad \\text{Rang}_{S} = 100\\cdot\\overline{[Q_{korpus} > Q]}",
    "einheit": "%",
    "eingaben": [
@@ -1532,43 +1683,62 @@
     "korpusreferenz"
    ],
    "implementierung": "vare.auswertung.korpusrang",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 9: Referenz enthält Dubletten, Sprech- und Mechanik-Takes; Takes bis 13.10. sind in ihrer eigenen Referenz. Schritt 4 Fix 10.",
+    "Befunde 9 und 17 behoben (Schritt 4 Fix 9 und 10).",
     "Rangunterschiede von 1–2 dB liegen in der Streuung (p10–p90 je Lage ≈ 7 dB)."
    ],
    "pruefsignal": [
     "chronik_dreitakes"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Referenz referenz/korpus_lage.csv (Median je Take und Lage, ≥ 150 Kernrahmen; Stand 13.10., 182 Takes), eigener Take ausgeschlossen, ≥ 5 Vergleichstakes, Lage mit ≥ 150 Kernrahmen. Tröte-Rang = Anteil Korpus-Takes mit kleinerer Tröte; SF-Rang ebenso; Sauberkeits-Rang = Anteil mit höherem (schmutzigerem) Quellrauschen.",
+     "grund": "Befund 9: Referenz mit Dubletten; Befund 17: 150 Rahmen statt Sekunden."
+    }
+   ]
   },
   {
    "id": "korpusreferenz",
    "name_de": "Korpusreferenz (korpus_lage.csv)",
    "gruppe": "lagen",
-   "formel_text": "Aus der Chronik: je Take mit ≥ 200 Kernrahmen, je Lage mit ≥ 150 Kernrahmen die Mediane f0, Tröte, SF-Band, Quellrauschen, CPP; dazu korpus_pegel_oktave.csv. Unversioniert (Befund 9/16).",
+   "formel_text": "Aus der Chronik, nur Takes, deren jüngster Lauf mit Regelwerk v2 gerechnet ist; ohne Sprech-Takes (takes_sprechen, „sprech“ in ID/Titel), Mechanik-Takes („mechanik“), inhaltsgleiche Dubletten (Datei-Hash oder Kennwerte gleich) und Doppelaufnahmen (gleiche Minute in der ID, Dauer < 1 s verschieden; einer bleibt, Wahl über referenz/bevorzugt.txt), ohne IDs aus referenz/ausschluss.csv. Je Take mit ≥ 2 s Kernzeit, je Lage mit ≥ 1,5 s Kernzeit die Mediane f0, Tröte, SF-Band, Quellrauschen, CPP und der Datei-Hash; dazu korpus_pegel_oktave_v2.csv. Versioniert: korpus_referenz_v2.json mit Stand, Takes, Ausschlüssen mit Grund und SHA-256 der Dateien; Kopie unter referenz/archiv/<Stand>/.",
    "einheit": "Datei",
    "eingaben": [
     "lagen_tabelle",
     "chronik"
    ],
    "implementierung": "vare.referenz.bauen",
-   "version": "2026-10-13",
+   "version": "v2",
    "status": "Vorsicht",
    "fallen": [
-    "Dubletten 20260921-fuckmeup = 20260921-sodown-2; 20261001-1901-upload/-twistedwave; 20261001-1925-links/-rechts; drei Sprechen-Takes und mechanik enthalten."
+    "Befund 9 behoben (Schritt 4 Fix 10). Bis zum Neulauf aller Takes gibt es keine v2-Referenz; bis dahin nimmt der Korpusrang die alte korpus_lage.csv und vermerkt das in kennwerte.referenz_version.",
+    "Welcher Take einer Doppelaufnahme (links/rechts, upload/twistedwave) in die Referenz geht, entscheidet Ben über referenz/bevorzugt.txt; ohne Eintrag der erste nach ID."
    ],
    "pruefsignal": [
     "chronik_dreitakes"
    ],
-   "datum": "2026-10-13"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "2026-10-13",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Aus der Chronik: je Take mit ≥ 200 Kernrahmen, je Lage mit ≥ 150 Kernrahmen die Mediane f0, Tröte, SF-Band, Quellrauschen, CPP; dazu korpus_pegel_oktave.csv. Unversioniert (Befund 9/16).",
+     "grund": "Befund 9: Dubletten, Sprech- und Mechanik-Takes in der Referenz, unversioniert."
+    }
+   ]
   },
   {
    "id": "pegel_pro_oktave",
    "name_de": "Pegel und Tröte pro Oktave",
    "gruppe": "lagen",
-   "formel_text": "Rahmen mit snr, Pegel > p95 − 20, 110 < f0 < 330 Hz, mind. 500: Steigung der Regression Pegel über log2(f0) (dB/Oktave); ebenso Tröte; Mediane der Pegel unter 165 Hz und ab 220 Hz.",
+   "formel_text": "Rahmen mit snr, Pegel > p95 − 20, 110 < f0 < 330 Hz, mind. 5 s Kernzeit (Rahmenzahl · Rahmenabstand): Steigung der Regression Pegel über log2(f0) (dB/Oktave); ebenso Tröte; Mediane der Pegel unter 165 Hz und ab 220 Hz.",
    "formel_latex": "L \\approx a + b\\,\\log_2 f_0,\\qquad \\text{db\\_pro\\_oktave} = b",
    "einheit": "dB/Oktave",
    "eingaben": [
@@ -1580,22 +1750,31 @@
     "gate_snr"
    ],
    "implementierung": "vare.auswertung.pegel_pro_oktave",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 17: Mindestzahl 500 Rahmen statt Sekunden."
+    "Befund 17 behoben (Schritt 4 Fix 9)."
    ],
    "pruefsignal": [
     "phrase_synthetisch"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Rahmen mit snr, Pegel > p95 − 20, 110 < f0 < 330 Hz, mind. 500: Steigung der Regression Pegel über log2(f0) (dB/Oktave); ebenso Tröte; Mediane der Pegel unter 165 Hz und ab 220 Hz.",
+     "grund": "Befund 17: Mindestzahl 500 Rahmen statt Sekunden."
+    }
+   ]
   },
   {
    "id": "h1h2_rahmen_60ms",
    "name_de": "H1−H2 je Rahmen (60 ms, geprüfter Grundton)",
    "ben_wort": "H2-Stimme, H1-Stimme",
    "gruppe": "quelle_rohr",
-   "formel_text": "Jeder 5. laute Rahmen mit f0_fein > 60: Fenster [t − 30 ms, t + 30 ms] Hann, FFT 32 768, S(f) = 20·log10|X|; H1 − H2 = max S in |f − f0| < 0,15·f0 minus max S in |f − 2f0| < 0,15·f0.",
+   "formel_text": "Jeder 5. laute Rahmen mit f0_fein > 60: Fenster [t − 30 ms, t + 30 ms] Hann (t = Fenstermitte), FFT 32 768, S(f) = 20·log10|X|; H1 − H2 = max S in |f − f0| < 0,15·f0 minus max S in |f − 2f0| < 0,15·f0. Ohne Wert (Spalte gate) bleiben Rahmen mit Oktavfehler (f0 / Median der Nachbarn ±150 ms < 0,6 oder > 1,7) und Rahmen, in denen H1 weniger als 6 dB über dem Boden zwischen den Teiltönen liegt.",
    "formel_latex": "H_1 - H_2 = \\max_{|f - f_0| < 0{,}15 f_0} S(f) - \\max_{|f - 2f_0| < 0{,}15 f_0} S(f)",
    "einheit": "dB",
    "raster": "50 ms (jeder 5. laute Rahmen)",
@@ -1608,11 +1787,10 @@
     "gate_laut"
    ],
    "implementierung": "vare.auswertung.h1h2_rahmen",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 4: t ist der Fensteranfang des f0-Fensters, das 60-ms-Fenster ist um t zentriert → Überlappung nur 30 von 80 ms.",
-    "Zählt Oktavfehler-Rahmen mit (halbierter Grundton → bis −54 dB). Schritt 4 Fix 5.",
+    "Befund 4 und Entscheidungslog 25.10. behoben (Schritt 4 Fix 2 und 5).",
     "Lagenabhängig: unter 150 Hz Median ≈ +6 dB, darüber ≈ −5 dB."
    ],
    "pruefsignal": [
@@ -1620,30 +1798,48 @@
     "zeitbezug_sweep"
    ],
    "datum": "2026-10-26",
-   "kanon": "Kanon für H1−H2 als Zahl (Befund 12)"
+   "kanon": "Kanon für H1−H2 als Zahl (Befund 12)",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Jeder 5. laute Rahmen mit f0_fein > 60: Fenster [t − 30 ms, t + 30 ms] Hann, FFT 32 768, S(f) = 20·log10|X|; H1 − H2 = max S in |f − f0| < 0,15·f0 minus max S in |f − 2f0| < 0,15·f0.",
+     "grund": "Befund 4: t war Fensteranfang; Entscheidungslog 25.10.: Oktavfehler-Rahmen zählten mit."
+    }
+   ]
   },
   {
    "id": "h2_konfiguration",
    "name_de": "H2-Konfiguration",
    "ben_wort": "H2-Stimme",
    "gruppe": "quelle_rohr",
-   "formel_text": "Anteil der H1−H2-Rahmen (h1h2_rahmen_60ms) mit H1 − H2 < −15 dB, in %. Vergleichsbänder getrennt: 170–215 Hz und 215–300 Hz (nur in Bilanzen, keine Spalte).",
+   "formel_text": "Anteil der H1−H2-Rahmen mit Wert (h1h2_rahmen_60ms, Version 2: ohne Oktavfehler, H1 ≥ 6 dB über dem Boden) mit H1 − H2 < −15 dB, in %. Vergleichsbänder getrennt: 170–215 Hz und 215–300 Hz (nur in Bilanzen, keine Spalte).",
    "formel_latex": "\\text{h2\\_dominanz} = 100\\cdot\\overline{[H_1 - H_2 < -15]}",
    "einheit": "%",
    "eingaben": [
     "h1h2_rahmen_60ms"
    ],
    "implementierung": "vare.auswertung.take_auswerten",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 25.10.: zählt Oktavfehler mit; Nachbarregel (f0/Median ±150 ms < 0,6 oder > 1,7 verwerfen) und H1 ≥ 6 dB über Boden kommen in Schritt 4 Fix 5."
+    "Entscheidungslog 25.10. behoben (Schritt 4 Fix 5)."
    ],
    "pruefsignal": [
     "h2_dominanz",
     "h1h2_bekannt"
    ],
-   "datum": "2026-10-25"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Anteil der H1−H2-Rahmen (h1h2_rahmen_60ms) mit H1 − H2 < −15 dB, in %. Vergleichsbänder getrennt: 170–215 Hz und 215–300 Hz (nur in Bilanzen, keine Spalte).",
+     "grund": "Entscheidungslog 25.10.: zählte Oktavfehler-Rahmen mit."
+    }
+   ]
   },
   {
    "id": "oktavfehler_nachbarregel",
@@ -1746,10 +1942,11 @@
    ],
    "implementierung": "vare.abend.abend",
    "version": "2",
-   "status": "gültig",
+   "status": "Vorsicht",
    "fallen": [
     "Vibrato zählt als Jitter, wenn die Periode kurz ist.",
-    "N1 (Schritt 3): Auf Pulszügen mit bekannter Periodenstreuung 0,3/1,0/2,0 % misst Praat 65–75 % des wahren Werts; Reihenfolge stimmt."
+    "N1 (Schritt 3): Auf Pulszügen mit bekannter Periodenstreuung 0,3/1,0/2,0 % misst Praat 65–75 % des wahren Werts; Reihenfolge stimmt.",
+    "Status Vorsicht seit 27.10.2026 (Freigabe Ben) wegen N1; vorher gültig."
    ],
    "pruefsignal": [
     "jitter_bekannt"
@@ -1784,7 +1981,7 @@
    "id": "sfr_cpp_pegelklassen",
    "name_de": "SFR und CPP nach Pegelklasse",
    "gruppe": "quelle_rohr",
-   "formel_text": "Mediane von sfr300 und CPP der stimmhaften Rahmen in den Klassen −30…−24, −24…−18, −18…−12 dBFS (absolute Klassen, Befund 8).",
+   "formel_text": "Mediane von sfr300 und CPP der stimmhaften Rahmen in den Klassen p95 − 18 … p95 − 12, p95 − 12 … p95 − 6, p95 − 6 … p95 + 6 dB (p95 = 95. Perzentil der Rahmenpegel des Takes).",
    "einheit": "dB",
    "eingaben": [
     "sfr300",
@@ -1792,15 +1989,24 @@
     "rahmenpegel"
    ],
    "implementierung": "vare.abend.abend",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Absolute dBFS-Klassen nach Spitzen-Normierung. Schritt 4 Fix 8: relativ zu p95."
+    "Befund 8 behoben (Schritt 4 Fix 8). Die Klassengrenzen relativ zu p95 sind eine Setzung."
    ],
    "pruefsignal": [
     "rauschen_bekannt"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Mediane von sfr300 und CPP der stimmhaften Rahmen in den Klassen −30…−24, −24…−18, −18…−12 dBFS (absolute Klassen, Befund 8).",
+     "grund": "Befund 8: absolute dBFS-Klassen nach Spitzennormierung."
+    }
+   ]
   },
   {
    "id": "periodenverdopplung_geprueft",
@@ -1818,10 +2024,11 @@
    ],
    "implementierung": "vare.auswertung.periodenverdopplung",
    "version": "1",
-   "status": "gültig",
+   "status": "Vorsicht",
    "fallen": [
     "Erkennt nur strenge Periodenverdopplung; Fry (unregelmäßige Pulse) bleibt unsichtbar (Befund 29).",
-    "N5/N6 (Schritt 3): prüft nach Halbierung durch die Oktavprüfung am falschen Grundton (0 Treffer); am richtigen Grundton 74 % statt 100 % (Prüfstand A6)."
+    "N5/N6 (Schritt 3): prüft nach Halbierung durch die Oktavprüfung am falschen Grundton (0 Treffer); am richtigen Grundton 74 % statt 100 % (Prüfstand A6).",
+    "Status Vorsicht seit 27.10.2026 (Freigabe Ben) wegen N5/N6; vorher gültig."
    ],
    "pruefsignal": [
     "periodenverdopplung"
@@ -1880,29 +2087,38 @@
    "name_de": "Tonansatz",
    "ben_wort": "Einsatz, von oben / von unten",
    "gruppe": "quelle_rohr",
-   "formel_text": "Läufe des geprüften Grundtons (Lücke ≥ 30 ms trennt, alle Rahmen mit f0_fein > 60), Dauer ≥ 0,4 s: Ansatz = 1200·log2(Median f0 in 0–60 ms / Median f0 in 150–400 ms); von oben > +50, von unten < −50 Cent; Zusammenfassung alle / tief < 140 / hoch ≥ 180 Hz (je ≥ 5 Läufe).",
+   "formel_text": "Läufe des geprüften Grundtons (Lücke ≥ 1,5 × Rahmenabstand trennt, alle Rahmen mit f0_fein > 60), Dauer ≥ 0,4 s: Ansatz = 1200·log2(Median f0 in 0–60 ms / Median f0 in 150–400 ms); von oben > +50, von unten < −50 Cent; Zusammenfassung alle / tief < 140 / hoch ≥ 180 Hz (je ≥ 5 Läufe).",
    "formel_latex": "\\text{Ansatz} = 1200\\log_2\\frac{\\operatorname{med}_{0\\text{–}60\\,ms} f_0}{\\operatorname{med}_{150\\text{–}400\\,ms} f_0}",
    "einheit": "Cent",
    "eingaben": [
     "f0_fein"
    ],
    "implementierung": "vare.auswertung.ansatz",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Befund 5: Lückenschwelle ≥ 0,03 s trennt bei Takes mit jedem 3. Rahmen jeden Lauf → 0 Zeilen für 140 von 241 Takes. Schritt 4 Fix 9: 1,5 × Rahmenabstand.",
+    "Befund 5 behoben (Schritt 4 Fix 9).",
     "Läufe ≥ 0,4 s verlieren kurze Anstöße (Sparks 25.10.)."
    ],
    "pruefsignal": [
     "phrase_synthetisch"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Läufe des geprüften Grundtons (Lücke ≥ 30 ms trennt, alle Rahmen mit f0_fein > 60), Dauer ≥ 0,4 s: Ansatz = 1200·log2(Median f0 in 0–60 ms / Median f0 in 150–400 ms); von oben > +50, von unten < −50 Cent; Zusammenfassung alle / tief < 140 / hoch ≥ 180 Hz (je ≥ 5 Läufe).",
+     "grund": "Befund 5: Lückenschwelle 0,03 s trennte bei jedem 3. Rahmen jeden Lauf."
+    }
+   ]
   },
   {
    "id": "pfeife_rahmen",
    "name_de": "Pfeife je Rahmen (Teiltonpegel, Kammregel)",
    "gruppe": "pfeife",
-   "formel_text": "Raster 50 ms, Fenster 80 ms, nur Rahmen mit Pegel ≥ −35 dBFS; Autokorrelation 60–450 Hz mit r ≥ 0,6 → f0, Feinlage im Spektrum ±7 %; K = ⌊4500/f0⌋ ≥ 8 Teiltöne; Teiltonpegel L_k = Spitze ±4 % um k·f0 (Hann, 8× aufgefüllt). Kammregel: Mittel(ungerade halbzahlige − gerade) < −20 dB und f/2-Linie < −30 und f/3-, 2f/3-Linien < −30 dB rel. Max. Lochsucher: lokales Minimum ≥ 6 dB unter beiden Nachbarn und unter H_{k+2}.",
+   "formel_text": "Raster 50 ms, Fenster 80 ms, nur Rahmen mit Pegel ≥ p95(Rahmenpegel) − 30 dB; Autokorrelation 60–450 Hz mit r ≥ 0,6 → f0, Feinlage im Spektrum ±7 %; K = ⌊4500/f0⌋ ≥ 8 Teiltöne; Teiltonpegel L_k = Spitze ±4 % um k·f0 (Hann, 8× aufgefüllt). Kammregel: Mittel(ungerade halbzahlige − gerade) < −20 dB und f/2-Linie < −30 und f/3-, 2f/3-Linien < −30 dB rel. Max. Lochsucher: lokales Minimum ≥ 6 dB unter beiden Nachbarn und unter H_{k+2}.",
    "einheit": "dB",
    "raster": "50 ms",
    "fenster": "80 ms Hann, 8× Zero-Padding",
@@ -1910,16 +2126,27 @@
     "normierung_48k"
    ],
    "implementierung": "vare.pfeife.rahmen",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Absolute Schwelle −35 dBFS (Befund 8).",
-    "Eigener Grundton (Autokorrelation), nicht der geprüfte Grundton."
+    "Befund 8 behoben (Schritt 4 Fix 8); der Abstand 30 dB ist eine Setzung.",
+    "Eigener Grundton (Autokorrelation), nicht der geprüfte Grundton.",
+    "N13 (Schritt 4, zweites Review): Die Autokorrelation sucht f0 nur bis 450 Hz; bei 500 Hz findet die Pfeife keinen einzigen Rahmen."
    ],
    "pruefsignal": [
-    "pfeife_h8"
+    "pfeife_h8",
+    "pfeife_h8_500hz"
    ],
-   "datum": "2026-10-20"
+   "datum": "2026-10-26",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Raster 50 ms, Fenster 80 ms, nur Rahmen mit Pegel ≥ −35 dBFS; Autokorrelation 60–450 Hz mit r ≥ 0,6 → f0, Feinlage im Spektrum ±7 %; K = ⌊4500/f0⌋ ≥ 8 Teiltöne; Teiltonpegel L_k = Spitze ±4 % um k·f0 (Hann, 8× aufgefüllt). Kammregel: Mittel(ungerade halbzahlige − gerade) < −20 dB und f/2-Linie < −30 und f/3-, 2f/3-Linien < −30 dB rel. Max. Lochsucher: lokales Minimum ≥ 6 dB unter beiden Nachbarn und unter H_{k+2}.",
+     "grund": "Befund 8: absolute Schwelle −35 dBFS."
+    }
+   ]
   },
   {
    "id": "pfeife_streng",
@@ -2314,7 +2541,7 @@
    "name_de": "Tiefband unter dem Grundton",
    "ben_wort": "Brummen",
    "gruppe": "rekon",
-   "formel_text": "Laute Rahmen (p95 − 12), jeder 2., 200-ms-Fenster Hann, FFT 65536, je Lage mit ≥ 30 Rahmen: boden_rel_h1 = Energie 20 Hz bis 0,85·f0 (45–55 und 95–105 Hz ausgespart) rel. H1 (±5 %); f0halb_rel_h1 = Energie bei f0/2 (±7 %) rel. H1; pv_anteil_pct = Anteil f0halb_rel_h1 > −15 dB; e20_60_rel_ges = Energie 20–45 und 55–60 Hz rel. 20–8000 Hz. Mediane je Lage.",
+   "formel_text": "Laute Rahmen (p95 − 12), jeder 2., 200-ms-Fenster Hann um t, FFT 65536, je Lage mit ≥ 0,6 s Kernzeit: boden_rel_h1 = Energie 20 Hz bis 0,85·f0 (45–55 und 95–105 Hz ausgespart) rel. H1 (±5 %); f0halb_rel_h1 = Energie bei f0/2 (±7 %) rel. H1; pv_anteil_pct = Anteil f0halb_rel_h1 > −15 dB; e20_60_rel_ges = Energie 20–45 und 55–60 Hz rel. 20–8000 Hz. Mediane je Lage.",
    "formel_latex": "\\text{boden} = 10\\log_{10}\\frac{E_{20\\,Hz..0{,}85 f_0}}{E_{H_1}},\\qquad \\text{PV} = 100\\cdot\\overline{[E_{f_0/2}/E_{H_1} > -15\\,\\text{dB}]}",
    "einheit": "dB, %",
    "fenster": "200 ms Hann, FFT 65536",
@@ -2326,18 +2553,26 @@
     "gate_laut"
    ],
    "implementierung": "vare.auswertung.tiefband",
-   "version": "1",
+   "version": "2",
    "status": "Vorsicht",
    "fallen": [
-    "Körperschall, Atem, Raum, Kompression nicht von der Quelle trennbar.",
-    "Feste Pfade in rekon/tiefband.py; CSV wird überschrieben (Befund 15)."
+    "Körperschall, Atem, Raum, Kompression nicht von der Quelle trennbar."
    ],
    "pruefsignal": [
     "tiefband_bekannt",
     "periodenverdopplung"
    ],
-   "datum": "2026-10-19",
-   "kanon": "pv_anteil_pct ist Variante zu periodenverdopplung_geprueft (Definition v2 A6/A7)"
+   "datum": "2026-10-26",
+   "kanon": "pv_anteil_pct ist Variante zu periodenverdopplung_geprueft (Definition v2 A6/A7)",
+   "historie": [
+    {
+     "version": "1",
+     "regelwerk": "v1",
+     "bis": "2026-10-26",
+     "formel_text": "Laute Rahmen (p95 − 12), jeder 2., 200-ms-Fenster Hann, FFT 65536, je Lage mit ≥ 30 Rahmen: boden_rel_h1 = Energie 20 Hz bis 0,85·f0 (45–55 und 95–105 Hz ausgespart) rel. H1 (±5 %); f0halb_rel_h1 = Energie bei f0/2 (±7 %) rel. H1; pv_anteil_pct = Anteil f0halb_rel_h1 > −15 dB; e20_60_rel_ges = Energie 20–45 und 55–60 Hz rel. 20–8000 Hz. Mediane je Lage.",
+     "grund": "Befund 17: mindestens 30 Rahmen statt Sekunden."
+    }
+   ]
   },
   {
    "id": "wellen_suche",
@@ -2504,13 +2739,31 @@
    "datum": "2026-10-20"
   },
   {
+   "id": "regelwerk",
+   "name_de": "Regelwerk und Zeitbezug je Lauf",
+   "gruppe": "protokoll",
+   "formel_text": "Jeder Lauf trägt in laeufe_regelwerk (nur anhängen) das Regelwerk (v1 = alter Code mit allen bekannten Fehlern, Golden Master; v2 = Schritt 4 mit den Fixes 1–10), den Zeitbezug der Rahmen (fensteranfang/fenstermitte) und alle Schalter als JSON (vare/regelwerk.py). Neue Läufe rechnen mit v2.",
+   "einheit": "—",
+   "eingaben": [
+    "lauf"
+   ],
+   "implementierung": "vare.regelwerk.eintragen",
+   "version": "1",
+   "status": "gültig",
+   "pruefsignal": [
+    "chronik_dreitakes",
+    "zeitbezug_sweep"
+   ],
+   "datum": "2026-10-26"
+  },
+  {
    "id": "vorhersage_protokoll",
    "name_de": "Vorhersage-Protokoll",
    "gruppe": "protokoll",
-   "formel_text": "Vorhersage mit Zeitstempel VOR dem Lauf, keine Wenn-dann-Punkte; Bilanz ✓/✗ angehängt; ein Punkt mit mehreren Teilen nur ✓, wenn alle Teile stimmen; nur Kennzahlen aus gesicherten Dateien gehen in eine Bilanz (Regel 25.10.). Ab Schritt 5: Tabellen vorhersage und bilanz mit text_sha256 und notiert_um.",
+   "formel_text": "Vorhersage mit Zeitstempel VOR dem Lauf, keine Wenn-dann-Punkte; Bilanz ✓/✗ angehängt; ein Punkt mit mehreren Teilen nur ✓, wenn alle Teile stimmen; nur Kennzahlen aus gesicherten Dateien gehen in eine Bilanz (Regel 25.10.). Schritt 5: Tabellen vorhersage_text (wörtlich, SHA-256, notiert_um beim Einfügen oder aus dem Text übernommen), vorhersage (Punkte mit Kennzahl und Bereich, sonst „nicht zerlegt“) und bilanz (eigene Tabelle, die Vorhersage bleibt unberührt); py -m vare vorhersage / bilanz / texte-import.",
    "einheit": "—",
    "eingaben": [],
-   "implementierung": "— (Schritt 5)",
+   "implementierung": "vare.texte.vorhersage_notieren",
    "version": "1",
    "status": "gültig",
    "pruefsignal": [
